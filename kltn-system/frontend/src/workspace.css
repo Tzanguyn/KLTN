@@ -1,0 +1,37 @@
+.workspace { max-width: 1180px; margin: 0 auto; }
+.workspace-header { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 24px; }
+.workspace-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; border-bottom: 1px solid rgba(23,34,29,.16); padding-bottom: 10px; }
+.workspace-tabs button { margin: 0; padding: 10px 14px; background: transparent; color: #17221d; border: 1px solid transparent; }
+.workspace-tabs button.active { background: #17221d; color: #fff; }
+.panel-grid, .split-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.content-stack { display: grid; gap: 14px; }
+.toolbar { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 10px; }
+.toolbar input, select { min-width: 0; border: 1px solid #9aada0; border-radius: 6px; padding: 12px; background: rgba(255,255,255,.65); font: inherit; }
+.topic-list { display: grid; gap: 10px; }
+.topic-card { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 18px 20px; background: rgba(255,255,255,.66); border: 1px solid rgba(23,34,29,.1); border-radius: 8px; }
+.topic-card h3 { margin: 10px 0 6px; }
+.topic-card p { margin: 0 0 8px; color: #617067; }
+.topic-card button, .admin-actions button { margin: 0; white-space: nowrap; }
+.topic-card small, .submission-row small, .schedule-row small { color: #617067; }
+.notice { padding: 12px 16px; margin: 0; background: #fff1cc; border-left: 4px solid #bd542d; }
+.status-line, .schedule-row, .submission-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(23,34,29,.1); padding: 12px 0; margin: 0; }
+.status-line:last-child, .schedule-row:last-child, .submission-row:last-child { border-bottom: 0; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #4e936f; display: inline-block; margin-right: 8px; }
+.chat-panel { display: grid; gap: 10px; align-content: start; }
+.chat-panel button { margin: 0; }
+.secondary { background: #bd542d; }
+.messages { min-height: 180px; max-height: 320px; overflow: auto; display: grid; align-content: start; gap: 8px; padding: 10px; background: rgba(232,239,232,.7); border-radius: 6px; }
+.messages p { margin: 0; padding: 10px; background: #fff; border-radius: 6px; }
+.messages b { display: block; color: #bd542d; }
+.messages small { display: block; color: #617067; margin-top: 4px; }
+.message-compose { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.message-compose button { margin: 0; }
+.committee-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 14px; }
+.committee { display: grid; gap: 6px; padding: 14px; background: rgba(232,239,232,.7); border-radius: 6px; }
+.committee span { color: #617067; font-size: .9rem; }
+.score-tools { display: grid; gap: 10px; }
+.score-tools button { margin: 0; width: fit-content; }
+.score-tools span { color: #617067; }
+.admin-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.empty { color: #617067; }
+@media (max-width: 760px) { main { padding: 28px 16px; } .workspace-header { align-items: start; flex-direction: column; } .panel-grid, .split-panels, .toolbar { grid-template-columns: 1fr; } .stat-grid { grid-template-columns: 1fr; } .topic-card, .schedule-row, .submission-row { align-items: start; flex-direction: column; } .workspace-tabs { overflow-x: auto; flex-wrap: nowrap; } .workspace-tabs button { white-space: nowrap; } }

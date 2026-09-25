@@ -1,0 +1,725 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleCode {
+  SINH_VIEN
+  GIANG_VIEN
+  TRUONG_BO_MON
+  QUAN_LY_BO_MON
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+enum SemesterStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum TopicStatus {
+  DRAFT
+  PENDING_APPROVAL
+  CHO_DUYET
+  CHO_TRUONG_BM_DUYET
+  APPROVED
+  REJECTED
+  ARCHIVED
+  CAN_CAP_NHAT
+}
+
+enum RegistrationStatus {
+  PENDING
+  CHO_XAC_NHAN
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  CANCELLED
+  DA_HUY
+}
+
+enum ProposalStatus {
+  CHO_GV_XAC_NHAN
+  GV_DA_DUYET
+  TU_CHOI
+}
+
+enum GroupStatus {
+  FORMING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum MidtermStatus {
+  PENDING
+  CONTINUE
+  STOPPED
+}
+
+enum ReportType {
+  PROGRESS
+  MIDTERM
+  FINAL
+  SOURCE_CODE
+  OTHER
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REVISION_REQUIRED
+  REJECTED
+  CHUA_XEM
+}
+
+enum AppointmentStatus {
+  PROPOSED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum AppointmentMode {
+  ONLINE
+  OFFLINE
+}
+
+enum AssignmentType {
+  PRIMARY
+  ADDITIONAL
+}
+
+enum DefenseStatus {
+  DRAFT
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum ScoreStatus {
+  DRAFT
+  SUBMITTED
+  LOCKED
+  OPENED
+}
+
+enum ScoreChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EvidenceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REQUEST_MORE_INFO
+}
+
+enum NotificationType {
+  SYSTEM
+  REGISTRATION
+  DEADLINE
+  FEEDBACK
+  APPOINTMENT
+  DEFENSE
+  SCORE
+  CHAT
+}
+
+model User {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  email                String                   @unique @db.VarChar(255)
+  passwordHash         String                   @map("password_hash")
+  fullName             String                   @map("full_name") @db.VarChar(150)
+  phone                String?                  @db.VarChar(30)
+  avatarUrl            String?                  @map("avatar_url")
+  status               UserStatus               @default(ACTIVE)
+  lastLoginAt          DateTime?                @map("last_login_at")
+  refreshTokenHash     String?                  @map("refresh_token_hash")
+  passwordResetToken   String?                  @unique @map("password_reset_token")
+  passwordResetUntil   DateTime?                @map("password_reset_until")
+  createdAt            DateTime                 @default(now()) @map("created_at")
+  updatedAt            DateTime                 @updatedAt @map("updated_at")
+  roles                UserRole[]
+  studentProfile       StudentProfile?
+  lecturerProfile      LecturerProfile?
+  ownedTopics          Topic[]                  @relation("TopicOwner")
+  reviewedTopics       Topic[]                  @relation("TopicReviewer")
+  topicApprovals       TopicApproval[]
+  authoredReports      ProgressReport[]
+  submissions          Submission[]
+  feedbacks            Feedback[]
+  appointmentsAsHost   Appointment[]            @relation("AppointmentHost")
+  appointmentsAsGuest  Appointment[]            @relation("AppointmentGuest")
+  committeeMemberships DefenseCommitteeMember[]
+  scores               Score[]
+  notifications        Notification[]
+  evidence             Evidence[]
+  auditLogs            AuditLog[]
+  chatMessages         ChatMessage[]
+  scoreChangeRequests  ScoreChangeRequest[]     @relation("ScoreChangeRequester")
+  reviewedScoreChanges ScoreChangeRequest[]     @relation("ScoreChangeReviewer")
+  appointmentsProposed Appointment[]            @relation("AppointmentProposedBy")
+
+  @@index([status])
+  @@map("users")
+}
+
+model Role {
+  id          String     @id @default(uuid()) @db.Uuid
+  code        RoleCode   @unique
+  name        String     @db.VarChar(100)
+  description String?
+  users       UserRole[]
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId     String   @map("user_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Department {
+  id            String             @id @default(uuid()) @db.Uuid
+  code          String             @unique @db.VarChar(30)
+  name          String             @db.VarChar(150)
+  description   String?
+  students      StudentProfile[]
+  lecturers     LecturerProfile[]
+  topics        Topic[]
+  semesters     Semester[]
+  systemConfigs SystemConfig[]
+  committees    DefenseCommittee[]
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  @@map("departments")
+}
+
+model StudentProfile {
+  id            String         @id @default(uuid()) @db.Uuid
+  userId        String         @unique @map("user_id") @db.Uuid
+  studentCode   String         @unique @map("student_code") @db.VarChar(30)
+  className     String?        @map("class_name") @db.VarChar(100)
+  cohort        Int?
+  departmentId  String         @map("department_id") @db.Uuid
+  gpa           Decimal?       @db.Decimal(4, 2)
+  creditsEarned Int            @default(0) @map("credits_earned")
+  eligible      Boolean        @default(true)
+  personalEmail String?        @map("personal_email") @db.VarChar(255)
+  address       String?        @db.VarChar(255)
+  contactInfo   String?        @map("contact_info")
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department    Department     @relation(fields: [departmentId], references: [id])
+  groupMembers   GroupMember[]
+  registrations  Registration[]
+  topicProposals TopicProposal[]
+
+  @@index([departmentId])
+  @@map("student_profiles")
+}
+
+model LecturerProfile {
+  id                  String               @id @default(uuid()) @db.Uuid
+  userId              String               @unique @map("user_id") @db.Uuid
+  lecturerCode        String               @unique @map("lecturer_code") @db.VarChar(30)
+  title               String?              @db.VarChar(100)
+  specialization      String?
+  maxGroups           Int                  @default(5) @map("max_groups")
+  departmentId        String               @map("department_id") @db.Uuid
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department          Department           @relation(fields: [departmentId], references: [id])
+  registrations       Registration[]
+  reviewerAssignments ReviewerAssignment[]
+  topicProposals      TopicProposal[]
+  quotas              LecturerQuota[]
+
+  @@index([departmentId])
+  @@map("lecturer_profiles")
+}
+
+model Semester {
+  id               String            @id @default(uuid()) @db.Uuid
+  code             String            @unique @db.VarChar(30)
+  name             String            @db.VarChar(150)
+  academicYear     String            @map("academic_year") @db.VarChar(20)
+  status           SemesterStatus    @default(DRAFT)
+  registrationFrom DateTime?         @map("registration_from")
+  registrationTo   DateTime?         @map("registration_to")
+  submissionTo     DateTime?         @map("submission_to")
+  defenseFrom      DateTime?         @map("defense_from")
+  defenseTo        DateTime?         @map("defense_to")
+  departmentId     String            @map("department_id") @db.Uuid
+  department       Department        @relation(fields: [departmentId], references: [id])
+  topics           Topic[]
+  groups           Group[]
+  registrations    Registration[]
+  reports          ProgressReport[]
+  defenses         DefenseSchedule[]
+  configs          SystemConfig[]
+  topicProposals   TopicProposal[]
+  quotas           LecturerQuota[]
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  @@index([departmentId, status])
+  @@map("semesters")
+}
+
+model Topic {
+  id              String          @id @default(uuid()) @db.Uuid
+  title           String          @db.VarChar(300)
+  summary         String?
+  objectives      String?
+  technologies    String?
+  capacity        Int             @default(2)
+  status          TopicStatus     @default(DRAFT)
+  isHidden        Boolean         @default(false) @map("is_hidden")
+  rejectionReason String?         @map("rejection_reason")
+  ownerId         String          @map("owner_id") @db.Uuid
+  reviewerId      String?         @map("reviewer_id") @db.Uuid
+  departmentId    String          @map("department_id") @db.Uuid
+  semesterId      String          @map("semester_id") @db.Uuid
+  owner           User            @relation("TopicOwner", fields: [ownerId], references: [id])
+  reviewer        User?           @relation("TopicReviewer", fields: [reviewerId], references: [id])
+  department      Department      @relation(fields: [departmentId], references: [id])
+  semester        Semester        @relation(fields: [semesterId], references: [id])
+  groups          Group[]
+  registrations   Registration[]
+  approvals       TopicApproval[]
+  chatMessages    ChatMessage[]
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@index([semesterId, status])
+  @@index([ownerId])
+  @@map("topics")
+}
+
+model TopicApproval {
+  id         String   @id @default(uuid()) @db.Uuid
+  topicId    String   @map("topic_id") @db.Uuid
+  reviewerId String   @map("reviewer_id") @db.Uuid
+  approved   Boolean
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  topic      Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  reviewer   User     @relation(fields: [reviewerId], references: [id])
+
+  @@index([topicId])
+  @@map("topic_approvals")
+}
+
+model Group {
+  id                  String               @id @default(uuid()) @db.Uuid
+  code                String               @unique @db.VarChar(30)
+  name                String               @db.VarChar(150)
+  status              GroupStatus          @default(FORMING)
+  topicId             String?              @map("topic_id") @db.Uuid
+  semesterId          String               @map("semester_id") @db.Uuid
+  topic               Topic?               @relation(fields: [topicId], references: [id])
+  semester            Semester             @relation(fields: [semesterId], references: [id])
+  members             GroupMember[]
+  registrations       Registration[]
+  reviewerAssignments ReviewerAssignment[]
+  scores              Score[]
+  reports             ProgressReport[]
+  submissions         Submission[]
+  appointments        Appointment[]
+  defenses            DefenseSchedule[]
+  chatMessages        ChatMessage[]
+  midtermStatus       MidtermStatus        @default(PENDING) @map("midterm_status")
+  midtermNote         String?              @map("midterm_note")
+  midtermAt           DateTime?            @map("midterm_at")
+  scoreChangeRequests ScoreChangeRequest[]
+
+  @@index([semesterId, status])
+  @@map("groups")
+}
+
+model GroupMember {
+  groupId   String         @map("group_id") @db.Uuid
+  studentId String         @map("student_id") @db.Uuid
+  isLeader  Boolean        @default(false) @map("is_leader")
+  joinedAt  DateTime       @default(now()) @map("joined_at")
+  group     Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  student   StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, studentId])
+  @@map("group_members")
+}
+
+model Registration {
+  id           String             @id @default(uuid()) @db.Uuid
+  studentId    String             @map("student_id") @db.Uuid
+  lecturerId   String?            @map("lecturer_id") @db.Uuid
+  topicId      String?            @map("topic_id") @db.Uuid
+  groupId      String?            @map("group_id") @db.Uuid
+  semesterId   String             @map("semester_id") @db.Uuid
+  proposal     String?
+  status       RegistrationStatus @default(PENDING)
+  decisionNote String?            @map("decision_note")
+  decidedAt    DateTime?          @map("decided_at")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+  student      StudentProfile     @relation(fields: [studentId], references: [id])
+  lecturer     LecturerProfile?   @relation(fields: [lecturerId], references: [id])
+  topic        Topic?             @relation(fields: [topicId], references: [id])
+  group        Group?             @relation(fields: [groupId], references: [id])
+  semester     Semester           @relation(fields: [semesterId], references: [id])
+
+  @@index([semesterId, status])
+  @@index([studentId])
+  @@map("registrations")
+}
+
+model ProgressReport {
+  id          String       @id @default(uuid()) @db.Uuid
+  groupId     String       @map("group_id") @db.Uuid
+  semesterId  String       @map("semester_id") @db.Uuid
+  authorId    String       @map("author_id") @db.Uuid
+  title       String       @db.VarChar(200)
+  content     String?
+  reportType  ReportType   @map("report_type")
+  dueAt       DateTime?    @map("due_at")
+  submittedAt DateTime?    @map("submitted_at")
+  group       Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  semester    Semester     @relation(fields: [semesterId], references: [id])
+  author      User         @relation(fields: [authorId], references: [id])
+  submissions Submission[]
+
+  @@index([groupId, reportType])
+  @@map("progress_reports")
+}
+
+model Submission {
+  id          String           @id @default(uuid()) @db.Uuid
+  groupId     String           @map("group_id") @db.Uuid
+  reportId    String?          @map("report_id") @db.Uuid
+  submittedBy String           @map("submitted_by") @db.Uuid
+  fileName    String?          @map("file_name")
+  fileUrl     String?          @map("file_url")
+  fileSize    Int?             @map("file_size")
+  sourceUrl   String?          @map("source_url")
+  type        String?          @default("BAO_CAO_TIEN_DO")
+  note        String?
+  version     Int              @default(1)
+  status      SubmissionStatus @default(SUBMITTED)
+  submittedAt DateTime         @default(now()) @map("submitted_at")
+  group       Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  report      ProgressReport?  @relation(fields: [reportId], references: [id])
+  submitter   User             @relation(fields: [submittedBy], references: [id])
+  feedbacks   Feedback[]
+
+  @@index([groupId, submittedAt])
+  @@map("submissions")
+}
+
+model Feedback {
+  id           String     @id @default(uuid()) @db.Uuid
+  submissionId String     @map("submission_id") @db.Uuid
+  authorId     String     @map("author_id") @db.Uuid
+  content      String
+  createdAt    DateTime   @default(now()) @map("created_at")
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  author       User       @relation(fields: [authorId], references: [id])
+
+  @@index([submissionId])
+  @@map("feedbacks")
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid()) @db.Uuid
+  topicId     String?  @map("topic_id") @db.Uuid
+  groupId     String?  @map("group_id") @db.Uuid
+  senderId    String   @map("sender_id") @db.Uuid
+  content     String
+  attachments Json?    @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  topic       Topic?   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  group       Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  sender      User     @relation(fields: [senderId], references: [id])
+
+  @@index([topicId, createdAt])
+  @@index([groupId, createdAt])
+  @@map("chat_messages")
+}
+
+model Appointment {
+  id               String            @id @default(uuid()) @db.Uuid
+  groupId          String            @map("group_id") @db.Uuid
+  hostId           String            @map("host_id") @db.Uuid
+  guestId          String?           @map("guest_id") @db.Uuid
+  title            String            @db.VarChar(200)
+  description      String?
+  mode             AppointmentMode
+  location         String?
+  meetingUrl       String?           @map("meeting_url")
+  startsAt         DateTime          @map("starts_at")
+  endsAt           DateTime          @map("ends_at")
+  status           AppointmentStatus @default(PROPOSED)
+  allowProposeTime Boolean           @default(true) @map("allow_propose_time")
+  proposedTime     DateTime?         @map("proposed_time")
+  proposeNote      String?           @map("propose_note")
+  proposedById     String?           @map("proposed_by_id") @db.Uuid
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  group            Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  host             User              @relation("AppointmentHost", fields: [hostId], references: [id])
+  guest            User?             @relation("AppointmentGuest", fields: [guestId], references: [id])
+  proposedBy       User?             @relation("AppointmentProposedBy", fields: [proposedById], references: [id])
+
+  @@index([startsAt, status])
+  @@index([groupId])
+  @@map("appointments")
+}
+
+model ReviewerAssignment {
+  id         String          @id @default(uuid()) @db.Uuid
+  groupId    String          @map("group_id") @db.Uuid
+  lecturerId String          @map("lecturer_id") @db.Uuid
+  assignedBy String          @map("assigned_by") @db.Uuid
+  type       AssignmentType  @default(PRIMARY)
+  assignedAt DateTime        @default(now()) @map("assigned_at")
+  group      Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  lecturer   LecturerProfile @relation(fields: [lecturerId], references: [id])
+
+  @@unique([groupId, lecturerId])
+  @@index([lecturerId])
+  @@map("reviewer_assignments")
+}
+
+model DefenseCommittee {
+  id           String                   @id @default(uuid()) @db.Uuid
+  name         String                   @db.VarChar(200)
+  departmentId String                   @map("department_id") @db.Uuid
+  department   Department               @relation(fields: [departmentId], references: [id])
+  members      DefenseCommitteeMember[]
+  schedules    DefenseSchedule[]
+
+  @@map("defense_committees")
+}
+
+model DefenseCommitteeMember {
+  committeeId String           @map("committee_id") @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  role        String           @db.VarChar(100)
+  committee   DefenseCommittee @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id])
+
+  @@id([committeeId, userId])
+  @@map("defense_committee_members")
+}
+
+model DefenseSchedule {
+  id          String            @id @default(uuid()) @db.Uuid
+  groupId     String            @map("group_id") @db.Uuid
+  semesterId  String            @map("semester_id") @db.Uuid
+  committeeId String?           @map("committee_id") @db.Uuid
+  room        String?
+  startsAt    DateTime          @map("starts_at")
+  endsAt      DateTime          @map("ends_at")
+  status      DefenseStatus     @default(DRAFT)
+  group       Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  semester    Semester          @relation(fields: [semesterId], references: [id])
+  committee   DefenseCommittee? @relation(fields: [committeeId], references: [id])
+
+  @@index([startsAt, status])
+  @@map("defense_schedules")
+}
+
+model ScoreCriterion {
+  id          String  @id @default(uuid()) @db.Uuid
+  code        String  @unique @db.VarChar(30)
+  name        String  @db.VarChar(150)
+  description String?
+  weight      Decimal @db.Decimal(5, 2)
+  maxScore    Decimal @default(10) @map("max_score") @db.Decimal(5, 2)
+  active      Boolean @default(true)
+  scores      Score[]
+
+  @@map("score_criteria")
+}
+
+model Score {
+  id          String         @id @default(uuid()) @db.Uuid
+  groupId     String         @map("group_id") @db.Uuid
+  criterionId String         @map("criterion_id") @db.Uuid
+  scorerId    String         @map("scorer_id") @db.Uuid
+  value       Decimal        @db.Decimal(5, 2)
+  note        String?
+  status        ScoreStatus    @default(DRAFT)
+  unlockedUntil DateTime?      @map("unlocked_until")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  group         Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  criterion     ScoreCriterion @relation(fields: [criterionId], references: [id])
+  scorer        User           @relation(fields: [scorerId], references: [id])
+  history       ScoreHistory[]
+
+  @@unique([groupId, criterionId, scorerId])
+  @@index([groupId])
+  @@map("scores")
+}
+
+model ScoreHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  scoreId   String   @map("score_id") @db.Uuid
+  oldValue  Decimal? @map("old_value") @db.Decimal(5, 2)
+  newValue  Decimal  @map("new_value") @db.Decimal(5, 2)
+  changedBy String   @map("changed_by") @db.Uuid
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+  score     Score    @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+
+  @@map("score_history")
+}
+
+model ScoreChangeRequest {
+  id           String            @id @default(uuid()) @db.Uuid
+  groupId      String            @map("group_id") @db.Uuid
+  requesterId  String            @map("requester_id") @db.Uuid
+  reason       String
+  status       ScoreChangeStatus @default(PENDING)
+  reviewedBy   String?           @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime?         @map("reviewed_at")
+  expiresAt    DateTime?         @map("expires_at")
+  rejectReason String?           @map("reject_reason")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  group       Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  requester   User              @relation("ScoreChangeRequester", fields: [requesterId], references: [id])
+  reviewer    User?             @relation("ScoreChangeReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([groupId, status])
+  @@map("score_change_requests")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(200)
+  message   String           @default("")
+  content   String           @default("")
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model Evidence {
+  id          String         @id @default(uuid()) @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  title       String         @db.VarChar(200)
+  description String?
+  fileUrl     String?        @map("file_url")
+  fileName    String?        @map("file_name")
+  points      Decimal?       @db.Decimal(5, 2)
+  status      EvidenceStatus @default(PENDING)
+  reviewedBy  String?        @map("reviewed_by") @db.Uuid
+  reviewedAt  DateTime?      @map("reviewed_at")
+  reviewNote  String?        @map("review_note")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("evidence")
+}
+
+model SystemConfig {
+  id           String      @id @default(uuid()) @db.Uuid
+  key          String      @db.VarChar(100)
+  value        Json
+  description  String?
+  semesterId   String?     @map("semester_id") @db.Uuid
+  departmentId String?     @map("department_id") @db.Uuid
+  semester     Semester?   @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id])
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@unique([key, semesterId, departmentId])
+  @@map("system_configs")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  action    String   @db.VarChar(100)
+  entity    String   @db.VarChar(100)
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  ipAddress String?  @map("ip_address") @db.VarChar(64)
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+model TopicProposal {
+  id              String          @id @default(uuid()) @db.Uuid
+  studentId       String          @map("student_id") @db.Uuid
+  lecturerId      String          @map("lecturer_id") @db.Uuid
+  semesterId      String          @map("semester_id") @db.Uuid
+  tenDeTai        String          @map("ten_de_tai") @db.VarChar(300)
+  moTa            String          @map("mo_ta")
+  yeuCau          String          @map("yeu_cau")
+  status          ProposalStatus  @default(CHO_GV_XAC_NHAN)
+  rejectionReason String?         @map("rejection_reason")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+  student         StudentProfile  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lecturer        LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  semester        Semester        @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([lecturerId])
+  @@index([semesterId, status])
+  @@map("topic_proposals")
+}
+
+model LecturerQuota {
+  id         String          @id @default(uuid()) @db.Uuid
+  lecturerId String          @map("lecturer_id") @db.Uuid
+  semesterId String          @map("semester_id") @db.Uuid
+  maxGroups  Int             @default(5) @map("max_groups")
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+
+  lecturer   LecturerProfile @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  semester   Semester        @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([lecturerId, semesterId])
+  @@index([semesterId])
+  @@map("lecturer_quotas")
+}
+

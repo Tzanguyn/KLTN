@@ -1,0 +1,13 @@
+.workflow-panels { max-width: 1180px; margin: 18px auto 0; display: grid; gap: 14px; }
+.workflow-panel { display: grid; gap: 12px; }
+.workflow-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.workflow-form input, .workflow-form select { min-width: 0; border: 1px solid #9aada0; border-radius: 6px; padding: 11px; background: rgba(255,255,255,.65); font: inherit; }
+.workflow-form button { margin: 0; }
+.notification-list { display: grid; gap: 6px; }
+.notification { display: grid; gap: 3px; text-align: left; margin: 0; padding: 11px 14px; background: #fff1cc; color: #17221d; }
+.notification.read { background: rgba(232,239,232,.7); }
+.notification span, .notification small { color: #617067; }
+.appointment-list { display: grid; gap: 6px; }
+.appointment-list article { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: center; border-bottom: 1px solid rgba(23,34,29,.1); padding: 10px 0; }
+.appointment-list button { margin: 0; padding: 8px 12px; }
+@media (max-width: 760px) { .workflow-panels { margin-top: 14px; } .workflow-form { grid-template-columns: 1fr; } .appointment-list article { grid-template-columns: 1fr; gap: 5px; } }
