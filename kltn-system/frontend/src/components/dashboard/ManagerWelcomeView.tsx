@@ -4,7 +4,6 @@ import { useAuthStore } from '../../store';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { WelcomeTimeline } from './WelcomeTimeline';
 import {
   Calendar,
   Settings,
@@ -32,18 +31,19 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
+  const fetchDashboard = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/dashboard');
+      setDashboardData(res.data?.data ?? res.data);
+    } catch {
+      // fallback
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        setLoading(true);
-        const res = await api.get('/dashboard');
-        setDashboardData(res.data?.data ?? res.data);
-      } catch {
-        // fallback
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchDashboard();
   }, []);
 
@@ -61,6 +61,8 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
   const stoppedGroupsCount = dashboardData?.summary?.stoppedGroupsCount ?? 2;
   const scheduledDefensesCount =
     dashboardData?.summary?.scheduledDefensesCount ?? workspaceData?.schedules?.length ?? 28;
+  const pendingEvidenceCount =
+    dashboardData?.summary?.pendingEvidenceCount ?? workspaceData?.pendingEvidence?.length ?? 0;
 
   const registrationBreakdown = dashboardData?.registrationBreakdown ?? {
     APPROVED: 42,
@@ -73,6 +75,9 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
     : [];
 
   if (!actionItems.length) {
+    if (pendingEvidenceCount > 0) {
+      actionItems.push(`Có ${pendingEvidenceCount} hồ sơ minh chứng NCKH sinh viên đang chờ Quản lý bộ môn thẩm định`);
+    }
     if (formingGroupsCount > 0) {
       actionItems.push(`Có ${formingGroupsCount} nhóm KLTN vẫn đang ở trạng thái lập dở dang (FORMING)`);
     }
@@ -88,7 +93,7 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
   return (
     <div className="space-y-6">
       {/* 1. HERO BANNER CHÀO MỪNG */}
-      <div className="bg-gradient-to-r from-amber-800 via-orange-800 to-amber-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-amber-800 via-orange-800 to-amber-950 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-8 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
@@ -122,7 +127,7 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
           </div>
 
           {/* Quick Operations Stat Box */}
-          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-5 rounded-2xl flex flex-col gap-2 min-w-[240px]">
+          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-4 sm:p-5 rounded-2xl flex flex-col gap-2 w-full sm:w-auto sm:min-w-[240px]">
             <span className="text-xs text-amber-200 uppercase tracking-wider font-semibold">
               Sinh viên đủ điều kiện KLTN
             </span>
@@ -171,8 +176,8 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
         </div>
       </div>
 
-      {/* 3. 5 THẺ KPI CHỈ SỐ VẬN HÀNH */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* 3. 6 THẺ KPI CHỈ SỐ VẬN HÀNH */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <Card
           className="p-4 bg-white border border-slate-200/90 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group"
           onClick={() => onNavigate('semesters')}
@@ -261,6 +266,27 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
 
         <Card
           className="p-4 bg-white border border-slate-200/90 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group"
+          onClick={() => onNavigate('evidence')}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Minh chứng NCKH
+            </span>
+            <div className="p-2 rounded-xl bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white transition-colors">
+              <Award className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-black text-slate-900">{pendingEvidenceCount} hồ sơ</div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+              <span>Thẩm định điểm thưởng</span>
+              <span className="text-rose-600 font-bold group-hover:underline">Duyệt →</span>
+            </div>
+          </div>
+        </Card>
+
+        <Card
+          className="p-4 bg-white border border-slate-200/90 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group"
           onClick={() => onNavigate('reports')}
         >
           <div className="flex items-center justify-between">
@@ -291,7 +317,7 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
           <span className="text-xs text-slate-400">1-Click chuyển tab</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           <button
             onClick={() => onNavigate('semesters')}
             className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 hover:border-amber-500 hover:bg-amber-50/50 transition-all text-center group cursor-pointer"
@@ -358,6 +384,19 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
           </button>
 
           <button
+            onClick={() => onNavigate('evidence')}
+            className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 hover:border-amber-500 hover:bg-amber-50/50 transition-all text-center group cursor-pointer"
+          >
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <Award className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-bold text-slate-800 group-hover:text-rose-600">
+              Duyệt NCKH
+            </span>
+            <span className="text-[10px] text-slate-400 mt-0.5">{pendingEvidenceCount} hồ sơ chờ</span>
+          </button>
+
+          <button
             onClick={() => onNavigate('reports')}
             className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 hover:border-amber-500 hover:bg-amber-50/50 transition-all text-center group cursor-pointer"
           >
@@ -371,9 +410,6 @@ export const ManagerWelcomeView: React.FC<ManagerWelcomeViewProps> = ({ onNaviga
           </button>
         </div>
       </div>
-
-      {/* 5. LỘ TRÌNH KLTN 5 BƯỚC */}
-      <WelcomeTimeline currentStep={2} />
     </div>
   );
 };

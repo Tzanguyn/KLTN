@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -27,6 +27,13 @@ export class CriterionScoreItemDto {
   @Min(0)
   @Max(10)
   diem?: number;
+
+  @ApiPropertyOptional({
+    description: 'Điểm chấm riêng cho từng sinh viên trong nhóm theo tiêu chí này ({ [studentId]: number })',
+  })
+  @IsOptional()
+  @IsObject()
+  studentScores?: Record<string, number>;
 
   @ApiPropertyOptional({ description: 'Ghi chú đánh giá tiêu chí' })
   @IsOptional()

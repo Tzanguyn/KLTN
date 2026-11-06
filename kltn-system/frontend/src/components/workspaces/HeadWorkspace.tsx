@@ -17,6 +17,8 @@ import {
   FileSpreadsheet,
   Download,
   Unlock,
+  Lock,
+  RefreshCw,
   AlertTriangle,
   PlusCircle,
   Clock,
@@ -33,12 +35,21 @@ import {
   ExternalLink,
   Eye,
   LayoutDashboard,
+  GraduationCap,
 } from 'lucide-react';
 import { HeadWelcomeView } from '../dashboard/HeadWelcomeView';
+import { WorkspaceSidebar } from './WorkspaceSidebar';
 
 export const HeadWorkspace: React.FC = () => {
-  const { user } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<string>('welcome');
+  const { user, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
+  const [activeTab, setActiveTab] = useState<string>(storeActiveTab || 'welcome');
+
+  useEffect(() => {
+    if (storeActiveTab) {
+      setActiveTab(storeActiveTab);
+      setStoreActiveTab(null);
+    }
+  }, [storeActiveTab]);
 
   // State
   const [currentSemester, setCurrentSemester] = useState<any>(null);
@@ -88,6 +99,14 @@ export const HeadWorkspace: React.FC = () => {
   const [committeeName, setCommitteeName] = useState('');
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [selectedCommitteeGroupIds, setSelectedCommitteeGroupIds] = useState<string[]>([]);
+
+  // Score Unlock State
+  const [showDirectUnlockModal, setShowDirectUnlockModal] = useState(false);
+  const [directUnlockGroupId, setDirectUnlockGroupId] = useState('');
+  const [directUnlockHours, setDirectUnlockHours] = useState(24);
+  const [directUnlockReason, setDirectUnlockReason] = useState('');
+  const [unlockFilterStatus, setUnlockFilterStatus] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [isUnlocking, setIsUnlocking] = useState(false);
 
   const eligibleCommitteeGroups = useMemo(() => {
     return allGroups.filter((grp: any) => grp.midtermStatus === 'CONTINUE' || grp.midtermStatus === 'CHO_LAM_TIEP');
@@ -142,6 +161,20 @@ export const HeadWorkspace: React.FC = () => {
   const [selectedEvidence, setSelectedEvidence] = useState<any>(null);
   const [evidencePoints, setEvidencePoints] = useState('0.5');
   const [evidenceNote, setEvidenceNote] = useState('');
+  const [approvalSourceFilter, setApprovalSourceFilter] = useState<'ALL' | 'GIANG_VIEN' | 'SINH_VIEN'>('ALL');
+  const [catalogSourceFilter, setCatalogSourceFilter] = useState<'ALL' | 'GIANG_VIEN' | 'SINH_VIEN'>('ALL');
+  const [hasSemesterDefaultQuota, setHasSemesterDefaultQuota] = useState(false);
+  const [semesterDefaultQuota, setSemesterDefaultQuota] = useState<number>(5);
+  const [bulkQuotaInput, setBulkQuotaInput] = useState<number>(5);
+  const [savingBulkQuota, setSavingBulkQuota] = useState(false);
+  const [scoreGvhdFilter, setScoreGvhdFilter] = useState<string>('');
+
+  const isStudentTopic = (t: any) =>
+    Boolean(
+      t?.isStudentProposed ||
+        t?.sourceType === 'SINH_VIEN' ||
+        t?.technologies?.toLowerCase()?.includes('đề xuất sinh viên'),
+    );
 
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
@@ -152,7 +185,7 @@ export const HeadWorkspace: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [pendingTopRes, topRes, quotaRes, lecRes, comRes, schRes, scrRes, eviRes] = await Promise.all([
+      const [pendingTopRes, topRes, quotaRes, lecRes, comRes, schRes, scrRes, eviRes, dashRes] = await Promise.all([
         api.get('/topics?status=CHO_DUYET').catch(() => null),
         api.get('/topics?limit=100'),
         api.get('/quotas').catch(() => null),
@@ -161,6 +194,7 @@ export const HeadWorkspace: React.FC = () => {
         api.get('/defense-schedules').catch(() => api.get('/defense/schedules')),
         api.get('/score-unlock-requests').catch(() => api.get('/scores/change-requests')),
         api.get('/evidences?status=PENDING').catch(() => api.get('/evidence/pending')),
+        api.get('/dashboard?role=TRUONG_BO_MON').catch(() => null),
       ]);
 
       const tList = topRes.data.data.items ?? [];
@@ -182,9 +216,21 @@ export const HeadWorkspace: React.FC = () => {
         );
       }
 
+      const officialSem = dashRes?.data?.data?.semester || quotaRes?.data?.data?.semester || null;
+      if (officialSem) {
+        setCurrentSemester(officialSem);
+      }
+
       if (quotaRes?.data?.data) {
-        setCurrentSemester(quotaRes.data.data.semester);
-        setWorkload(quotaRes.data.data.items ?? quotaRes.data.data);
+        const qData = quotaRes.data.data;
+        setWorkload(qData.items ?? qData);
+        const hasDef = Boolean(qData.hasSemesterDefaultQuota ?? qData.semester?.hasSemesterDefaultQuota);
+        const defVal = qData.semesterDefaultQuota ?? qData.semester?.semesterDefaultQuota;
+        setHasSemesterDefaultQuota(hasDef);
+        if (defVal !== undefined && defVal !== null) {
+          setSemesterDefaultQuota(Number(defVal));
+          setBulkQuotaInput(Number(defVal));
+        }
       } else {
         const wlRes = await api.get('/reports/workload').catch(() => null);
         setWorkload(wlRes?.data?.data ?? []);
@@ -226,13 +272,18 @@ export const HeadWorkspace: React.FC = () => {
     }
   };
 
-  const fetchSemesterScores = async (incompleteOnly = scoreIncompleteOnly, search = scoreSearch) => {
+  const fetchSemesterScores = async (
+    incompleteOnly = scoreIncompleteOnly,
+    search = scoreSearch,
+    gvhdId = scoreGvhdFilter,
+  ) => {
     setLoadingScores(true);
     try {
       const params: any = {};
       if (currentSemester?.id) params.semesterId = currentSemester.id;
       if (incompleteOnly) params.incompleteOnly = 'true';
       if (search.trim()) params.search = search.trim();
+      if (gvhdId) params.lecturerId = gvhdId;
       const res = await api.get('/scores', { params });
       const sData = res.data?.data;
       setSemesterScores(Array.isArray(sData) ? sData : (sData?.items ?? []));
@@ -319,7 +370,30 @@ export const HeadWorkspace: React.FC = () => {
     }
   };
 
-  // Update lecturer quota
+  // Step 1: Set default quota for ALL lecturers in the semester
+  const handleSetBulkQuota = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBulkQuota(true);
+    try {
+      const res = await api.put('/quotas/bulk', {
+        semesterId: currentSemester?.id,
+        maxGroups: Number(bulkQuotaInput),
+      });
+      notify(
+        res.data?.data?.message ||
+          `Đã áp dụng hạn mức chung (${bulkQuotaInput} nhóm) cho toàn bộ giảng viên trong học kỳ!`,
+      );
+      setHasSemesterDefaultQuota(true);
+      setSemesterDefaultQuota(Number(bulkQuotaInput));
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi thiết lập hạn mức chung cho toàn kỳ', 'error');
+    } finally {
+      setSavingBulkQuota(false);
+    }
+  };
+
+  // Step 2: Update individual lecturer quota
   const handleUpdateQuota = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedLecturer) return;
@@ -542,6 +616,69 @@ export const HeadWorkspace: React.FC = () => {
     }
   };
 
+  // Direct unlock for a group
+  const handleDirectUnlockGroup = (groupId?: string) => {
+    setDirectUnlockGroupId(groupId || '');
+    setDirectUnlockHours(24);
+    setDirectUnlockReason('');
+    setShowDirectUnlockModal(true);
+  };
+
+  const handleConfirmDirectUnlock = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!directUnlockGroupId) {
+      notify('Vui lòng chọn nhóm cần mở khóa điểm!', 'error');
+      return;
+    }
+    try {
+      setIsUnlocking(true);
+      await api.patch(`/scores/groups/${directUnlockGroupId}/unlock`, {
+        hours: directUnlockHours || 24,
+        reason: directUnlockReason || 'Trưởng bộ môn trực tiếp mở khóa điểm',
+      });
+      notify(`Đã mở khóa điểm cho nhóm thành công (thời hạn ${directUnlockHours} giờ)!`);
+      setShowDirectUnlockModal(false);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi khi mở khóa điểm', 'error');
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
+
+  const handleRelockGroup = async (groupId: string, groupCode?: string) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn khóa lại điểm ngay lập tức cho nhóm ${groupCode || ''}?`)) {
+      return;
+    }
+    try {
+      await api.patch(`/scores/groups/${groupId}/lock`);
+      notify(`Đã khóa lại điểm cho nhóm ${groupCode || ''}!`);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi khi khóa lại điểm', 'error');
+    }
+  };
+
+  const handleExtendScoreUnlock = async (req: any) => {
+    const hoursStr = window.prompt(
+      `Gia hạn / Mở khóa lại điểm cho nhóm ${req.group?.code || req.group?.name || ''}.\nNhập số giờ cho phép sửa điểm tính từ thời điểm này (mặc định 24h):`,
+      '24'
+    );
+    if (hoursStr === null) return;
+    const hours = Number(hoursStr) || 24;
+    try {
+      if (req.id) {
+        await api.post(`/score-unlock-requests/${req.id}/approve`, { thoiHanChoPhepSua: hours });
+      } else if (req.groupId || req.group?.id) {
+        await api.patch(`/scores/groups/${req.groupId || req.group?.id}/unlock`, { hours });
+      }
+      notify(`Đã gia hạn mở khóa điểm thành công thêm ${hours} giờ!`);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi khi gia hạn mở khóa điểm', 'error');
+    }
+  };
+
   // Review Evidence
   const handleReviewEvidence = async (action: 'approve' | 'reject' | 'request_more_info') => {
     if (!selectedEvidence) return;
@@ -625,7 +762,6 @@ export const HeadWorkspace: React.FC = () => {
     { id: 'committees', label: 'Hội đồng & Lịch bảo vệ', icon: Calendar },
     { id: 'scores', label: 'Quản lý điểm KLTN', icon: Award, count: incompleteScoresCount },
     { id: 'score-locks', label: 'Mở khóa điểm', icon: Unlock, count: scoreRequests.filter((r) => r.status === 'PENDING').length },
-    { id: 'evidence', label: 'Duyệt NCKH', icon: Award, count: pendingEvidence.length },
     { id: 'reports', label: 'Báo cáo & Xuất dữ liệu', icon: FileSpreadsheet },
   ];
 
@@ -644,73 +780,34 @@ export const HeadWorkspace: React.FC = () => {
 
       {/* Main 2-Column Layout: Left Sidebar + Right Content */}
       <div className="flex flex-col lg:flex-row gap-6 items-start">
-        {/* THANH CHỨC NĂNG BÊN TRÁI (LEFT SIDEBAR) */}
-        <aside className="w-full lg:w-64 xl:w-72 shrink-0 lg:sticky lg:top-20 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-3 space-y-1">
-            <div className="px-3 py-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between">
-              <span>Điều hành Chuyên môn</span>
-              <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded font-bold">
-                {navItems.length} mục
-              </span>
-            </div>
-            <nav className="space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
-                      isActive
-                        ? 'bg-purple-700 text-white shadow-sm shadow-purple-200 font-bold'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                      <span className="truncate">{item.label}</span>
-                    </div>
-                    {item.count !== undefined && item.count > 0 && (
-                      <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-1.5 shrink-0 ${
-                          isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}
-                      >
-                        {item.count}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          </div>
-
-          {/* Mini Tasks Summary Card */}
-          <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50/70 to-indigo-50/50 border border-purple-100/80 text-xs text-purple-950 space-y-2">
-            <div className="font-bold flex items-center gap-1.5 text-purple-800">
-              <ShieldCheck className="w-4 h-4 text-purple-600" />
-              <span>Chờ xử lý chuyên môn</span>
-            </div>
-            <div className="space-y-1 text-[11px] text-slate-600">
-              <div className="flex justify-between">
-                <span>Đề tài chờ duyệt:</span>
-                <strong className="text-purple-700 font-bold">{pendingTopics.length}</strong>
+        <WorkspaceSidebar
+          title="Điều hành Chuyên môn"
+          navItems={navItems}
+          activeTab={activeTab}
+          onTabChange={(tabId) => setActiveTab(tabId)}
+          themeColor="purple"
+          infoCard={
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50/70 to-indigo-50/50 border border-purple-100/80 text-xs text-purple-950 space-y-2">
+              <div className="font-bold flex items-center gap-1.5 text-purple-800">
+                <ShieldCheck className="w-4 h-4 text-purple-600" />
+                <span>Chờ xử lý chuyên môn</span>
               </div>
-              <div className="flex justify-between">
-                <span>Yêu cầu sửa điểm:</span>
-                <strong className="text-purple-700 font-bold">{scoreRequests.filter((r) => r.status === 'PENDING').length}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span>Minh chứng NCKH:</span>
-                <strong className="text-purple-700 font-bold">{pendingEvidence.length}</strong>
+              <div className="space-y-1 text-[11px] text-slate-600">
+                <div className="flex justify-between">
+                  <span>Đề tài chờ duyệt:</span>
+                  <strong className="text-purple-700 font-bold">{pendingTopics.length}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>Yêu cầu sửa điểm:</span>
+                  <strong className="text-purple-700 font-bold">{scoreRequests.filter((r) => r.status === 'PENDING').length}</strong>
+                </div>
               </div>
             </div>
-          </div>
-        </aside>
+          }
+        />
 
         {/* NỘI DUNG CHÍNH BÊN PHẢI (MAIN CONTENT AREA) */}
-        <div className="flex-1 min-w-0 space-y-6">
+        <div className="flex-1 min-w-0 w-full space-y-6">
           {/* Tab 0: Welcome Dashboard */}
           {activeTab === 'welcome' && (
             <HeadWelcomeView
@@ -725,7 +822,6 @@ export const HeadWorkspace: React.FC = () => {
                 committees,
                 schedules,
                 scoreRequests,
-                pendingEvidence,
               }}
             />
           )}
@@ -733,7 +829,7 @@ export const HeadWorkspace: React.FC = () => {
           {activeTab !== 'welcome' && (
             <>
               {/* Header */}
-              <div className="bg-gradient-to-r from-purple-800 via-indigo-900 to-purple-950 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+              <div className="bg-gradient-to-r from-purple-800 via-indigo-900 to-purple-950 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 text-purple-200 text-xs font-semibold uppercase tracking-wider">
@@ -741,24 +837,20 @@ export const HeadWorkspace: React.FC = () => {
                       <span>•</span>
                       <span>Điều hành chuyên môn KLTN</span>
                     </div>
-                    <h2 className="text-2xl font-bold mt-1 text-white">{user?.fullName}</h2>
-                    <p className="text-purple-100 text-sm mt-1">
+                    <h2 className="text-xl sm:text-2xl font-bold mt-1 text-white">{user?.fullName}</h2>
+                    <p className="text-purple-100 text-xs sm:text-sm mt-1">
                       Quản lý đề tài, phân công phản biện, thành lập hội đồng và giám sát chất lượng khóa luận
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-3 bg-white/10 backdrop-blur border border-white/20 p-3 rounded-xl text-xs">
-                    <div className="text-center px-2">
-                      <div className="text-purple-200">Đề tài chờ duyệt</div>
-                      <div className="text-lg font-bold text-white">{pendingTopics.length}</div>
+                  <div className="grid grid-cols-2 gap-2 w-full md:w-auto bg-white/10 backdrop-blur border border-white/20 p-2.5 sm:p-3 rounded-xl text-xs">
+                    <div className="text-center px-2 sm:px-3">
+                      <div className="text-purple-200 text-[10px] sm:text-xs">Đề tài chờ duyệt</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{pendingTopics.length}</div>
                     </div>
-                    <div className="text-center px-2 border-l border-white/20">
-                      <div className="text-purple-200">Yêu cầu sửa điểm</div>
-                      <div className="text-lg font-bold text-white">{scoreRequests.filter((r) => r.status === 'PENDING').length}</div>
-                    </div>
-                    <div className="text-center px-2 border-l border-white/20">
-                      <div className="text-purple-200">Minh chứng NCKH</div>
-                      <div className="text-lg font-bold text-white">{pendingEvidence.length}</div>
+                    <div className="text-center px-2 sm:px-3 border-l border-white/20">
+                      <div className="text-purple-200 text-[10px] sm:text-xs">Yêu cầu sửa điểm</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{scoreRequests.filter((r) => r.status === 'PENDING').length}</div>
                     </div>
                   </div>
                 </div>
@@ -767,135 +859,490 @@ export const HeadWorkspace: React.FC = () => {
           )}
 
       {/* TAB 1: Topic Approvals */}
-      {activeTab === 'approvals' && (
-        <Card>
-          <CardHeader>
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-purple-600" />
-              Hàng đợi phê duyệt đề tài KLTN ({pendingTopics.length} chờ duyệt)
-            </h3>
-          </CardHeader>
-          <CardContent>
-            <div className="divide-y divide-slate-100">
-              {pendingTopics.map((topic) => (
-                <div key={topic.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1.5 max-w-2xl">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={topic.status === 'CAN_CAP_NHAT' ? 'warning' : 'primary'}>
-                        {topic.status === 'CAN_CAP_NHAT' ? 'Cần cập nhật' : 'Chờ duyệt'}
-                      </Badge>
-                      <span className="text-xs font-semibold text-slate-700">
-                        Đề xuất bởi: {topic.owner?.fullName ?? 'Giảng viên/Sinh viên'} ({topic.owner?.email})
-                      </span>
-                    </div>
-                    <h4 className="text-base font-bold text-slate-900">{topic.title}</h4>
-                    <p className="text-xs text-slate-600 leading-relaxed">{topic.summary || 'Chưa có tóm tắt'}</p>
-                    <div className="flex items-center gap-4 text-xs text-slate-500 pt-1">
-                      <span>Mục tiêu: {topic.objectives || 'Chưa cập nhật'}</span>
-                      <span>•</span>
-                      <span>Công nghệ: <b className="text-indigo-600">{topic.technologies || 'Tùy chọn'}</b></span>
-                      <span>•</span>
-                      <span>Chỉ tiêu: {topic.capacity} sinh viên</span>
-                    </div>
-                  </div>
+      {activeTab === 'approvals' && (() => {
+        const lecturerPendingTopics = pendingTopics.filter((t) => !isStudentTopic(t));
+        const studentPendingTopics = pendingTopics.filter((t) => isStudentTopic(t));
+        const filteredPendingTopics = pendingTopics.filter((t) => {
+          if (approvalSourceFilter === 'GIANG_VIEN') return !isStudentTopic(t);
+          if (approvalSourceFilter === 'SINH_VIEN') return isStudentTopic(t);
+          return true;
+        });
 
-                  <div className="flex items-center gap-2 self-start sm:self-center">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      className="bg-purple-700 hover:bg-purple-800"
-                      onClick={async () => {
-                        try {
-                          const res = await api.get(`/topics/${topic.id}`);
-                          setSelectedTopic(res.data.data ?? topic);
-                        } catch {
-                          setSelectedTopic(topic);
-                        }
-                        setShowReviewTopicModal(true);
-                      }}
-                    >
-                      Xét duyệt
-                    </Button>
-                  </div>
-                </div>
-              ))}
+        const approvedTopicsList = allTopics.filter((t) => t.status === 'APPROVED');
+        const lecturerApprovedCount = approvedTopicsList.filter((t) => !isStudentTopic(t)).length;
+        const studentApprovedCount = approvedTopicsList.filter((t) => isStudentTopic(t)).length;
+        const filteredApprovedTopics = approvedTopicsList.filter((t) => {
+          if (catalogSourceFilter === 'GIANG_VIEN') return !isStudentTopic(t);
+          if (catalogSourceFilter === 'SINH_VIEN') return isStudentTopic(t);
+          return true;
+        });
 
-              {pendingTopics.length === 0 && (
-                <div className="p-8 text-center text-xs text-slate-400">
-                  Tất cả các đề tài đã được xử lý. Không có đề tài nào đang chờ duyệt.
+        return (
+          <div className="space-y-6">
+            {/* Hàng đợi phê duyệt đề tài (chia rõ GV đề xuất vs SV đề xuất) */}
+            <Card>
+              <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-purple-600" />
+                    Hàng đợi Trưởng bộ môn phê duyệt đề tài KLTN ({pendingTopics.length} chờ duyệt)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Phân loại rõ đề tài do Giảng viên đề xuất và đề tài do Sinh viên đề xuất để Trưởng bộ môn xét duyệt chính thức.
+                  </p>
                 </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
+                {/* Bộ lọc chia tab: Tất cả / Do GV đề xuất / Do SV đề xuất */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setApprovalSourceFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      approvalSourceFilter === 'ALL'
+                        ? 'bg-purple-700 text-white shadow-xs font-bold'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>Tất cả chờ duyệt</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      approvalSourceFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'
+                    }`}>
+                      {pendingTopics.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setApprovalSourceFilter('GIANG_VIEN')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      approvalSourceFilter === 'GIANG_VIEN'
+                        ? 'bg-indigo-600 text-white shadow-xs font-bold'
+                        : 'bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100'
+                    }`}
+                  >
+                    <span>Đề tài do GV đề xuất</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      approvalSourceFilter === 'GIANG_VIEN' ? 'bg-white/20 text-white' : 'bg-indigo-200 text-indigo-900'
+                    }`}>
+                      {lecturerPendingTopics.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setApprovalSourceFilter('SINH_VIEN')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      approvalSourceFilter === 'SINH_VIEN'
+                        ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                        : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <span>Đề tài do SV đề xuất</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      approvalSourceFilter === 'SINH_VIEN' ? 'bg-white/20 text-white' : 'bg-emerald-200 text-emerald-900'
+                    }`}>
+                      {studentPendingTopics.length}
+                    </span>
+                  </button>
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                <div className="divide-y divide-slate-100">
+                  {filteredPendingTopics.map((topic) => {
+                    const isSv = isStudentTopic(topic);
+                    const proposer = topic.studentProposer;
+                    return (
+                      <div key={topic.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1.5 max-w-3xl">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={topic.status === 'CAN_CAP_NHAT' ? 'warning' : 'primary'}>
+                              {topic.status === 'CAN_CAP_NHAT' ? 'Cần cập nhật' : 'Chờ Trưởng BM duyệt'}
+                            </Badge>
+                            {isSv ? (
+                              <Badge variant="success" className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
+                                Đề tài do Sinh viên đề xuất
+                              </Badge>
+                            ) : (
+                              <Badge variant="purple" className="bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold">
+                                Đề tài do Giảng viên đề xuất
+                              </Badge>
+                            )}
+                            {isSv && (
+                              <Badge
+                                size="sm"
+                                variant={proposer?.gvConfirmed ? 'success' : 'warning'}
+                              >
+                                {proposer?.gvConfirmed
+                                  ? 'GVHD đã đồng ý hướng dẫn'
+                                  : 'Đang chờ GVHD xác nhận'}
+                              </Badge>
+                            )}
+                          </div>
+
+                          <h4 className="text-base font-bold text-slate-900">{topic.title}</h4>
+
+                          {isSv ? (
+                            <div className="p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs text-slate-700 space-y-1">
+                              <div>
+                                <span className="font-bold text-emerald-900">Sinh viên đề xuất: </span>
+                                <span className="font-semibold text-slate-900">
+                                  {proposer
+                                    ? `${proposer.fullName} (${proposer.studentCode}${proposer.className ? ` - ${proposer.className}` : ''})`
+                                    : 'Sinh viên đăng ký đề xuất'}
+                                </span>
+                                {proposer?.email && (
+                                  <span className="text-slate-500 ml-1">({proposer.email})</span>
+                                )}
+                              </div>
+                              <div>
+                                <span className="font-bold text-indigo-900">GVHD dự kiến / xác nhận: </span>
+                                <span className="font-semibold text-slate-800">
+                                  {topic.owner?.fullName ?? topic.gvhd?.hoTen ?? 'Chưa phân công'} ({topic.owner?.email ?? topic.gvhd?.email})
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-xs font-semibold text-slate-700">
+                              Giảng viên đề xuất:{' '}
+                              <span className="text-indigo-700 font-bold">
+                                {topic.owner?.fullName ?? topic.gvhd?.hoTen ?? 'Giảng viên'}
+                              </span>{' '}
+                              ({topic.owner?.email ?? topic.gvhd?.email})
+                            </div>
+                          )}
+
+                          <p className="text-xs text-slate-600 leading-relaxed">{topic.summary || 'Chưa có tóm tắt'}</p>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 pt-1">
+                            <span>Mục tiêu / Yêu cầu: {topic.objectives || 'Chưa cập nhật'}</span>
+                            <span>•</span>
+                            <span>Công nghệ: <b className="text-indigo-600">{topic.technologies || 'Tùy chọn'}</b></span>
+                            <span>•</span>
+                            <span>Chỉ tiêu: {topic.capacity} sinh viên</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            className="bg-purple-700 hover:bg-purple-800"
+                            disabled={isSv && proposer?.gvConfirmed === false}
+                            title={
+                              isSv && proposer?.gvConfirmed === false
+                                ? 'Cần GVHD xác nhận đồng ý hướng dẫn trước khi Trưởng bộ môn phê duyệt'
+                                : 'Xét duyệt đề tài'
+                            }
+                            onClick={async () => {
+                              try {
+                                const res = await api.get(`/topics/${topic.id}`);
+                                setSelectedTopic(res.data.data ?? topic);
+                              } catch {
+                                setSelectedTopic(topic);
+                              }
+                              setShowReviewTopicModal(true);
+                            }}
+                          >
+                            Xét duyệt đề tài
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {filteredPendingTopics.length === 0 && (
+                    <div className="p-8 text-center text-xs text-slate-400">
+                      {approvalSourceFilter === 'SINH_VIEN'
+                        ? 'Hiện không có đề tài nào do Sinh viên đề xuất đang chờ Trưởng bộ môn duyệt.'
+                        : approvalSourceFilter === 'GIANG_VIEN'
+                        ? 'Hiện không có đề tài nào do Giảng viên đề xuất đang chờ Trưởng bộ môn duyệt.'
+                        : 'Tất cả các đề tài đã được xử lý. Không có đề tài nào đang chờ duyệt.'}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Danh mục đề tài đã duyệt trong học kỳ (chia rõ GV đề xuất vs SV đề xuất) */}
+            <Card>
+              <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-indigo-600" />
+                    Danh mục đề tài đã duyệt trong học kỳ ({approvedTopicsList.length} đề tài)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Tra cứu nhanh các đề tài đã được Trưởng bộ môn phê duyệt theo nguồn đề xuất (Giảng viên / Sinh viên).
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCatalogSourceFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      catalogSourceFilter === 'ALL'
+                        ? 'bg-slate-800 text-white font-bold'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    Tất cả ({approvedTopicsList.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogSourceFilter('GIANG_VIEN')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      catalogSourceFilter === 'GIANG_VIEN'
+                        ? 'bg-indigo-600 text-white font-bold'
+                        : 'bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100'
+                    }`}
+                  >
+                    Do GV đề xuất ({lecturerApprovedCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogSourceFilter('SINH_VIEN')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      catalogSourceFilter === 'SINH_VIEN'
+                        ? 'bg-emerald-600 text-white font-bold'
+                        : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    Do SV đề xuất ({studentApprovedCount})
+                  </button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[700px] text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                      <tr>
+                        <th className="p-3">Tên đề tài</th>
+                        <th className="p-3">Nguồn đề xuất</th>
+                        <th className="p-3">Giảng viên hướng dẫn</th>
+                        <th className="p-3">Sinh viên đề xuất / Đăng ký</th>
+                        <th className="p-3 text-center">Chỉ tiêu</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredApprovedTopics.slice(0, 30).map((t) => {
+                        const isSv = isStudentTopic(t);
+                        const proposer = t.studentProposer;
+                        return (
+                          <tr key={t.id} className="hover:bg-slate-50/70">
+                            <td className="p-3 font-semibold text-slate-900 max-w-md">
+                              <div className="line-clamp-2">{t.title}</div>
+                            </td>
+                            <td className="p-3">
+                              {isSv ? (
+                                <Badge variant="success" size="sm">SV đề xuất</Badge>
+                              ) : (
+                                <Badge variant="purple" size="sm">GV đề xuất</Badge>
+                              )}
+                            </td>
+                            <td className="p-3 text-slate-700 font-medium">
+                              {t.owner?.fullName ?? t.gvhd?.hoTen}
+                            </td>
+                            <td className="p-3 text-slate-600">
+                              {proposer ? (
+                                <span className="font-semibold text-emerald-800">
+                                  {proposer.fullName} ({proposer.studentCode})
+                                </span>
+                              ) : (
+                                <span>{t.soLuongDaDangKy ?? 0} SV đăng ký</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-center font-bold text-indigo-700">
+                              {t.soLuongDaDangKy ?? 0}/{t.capacity ?? 2}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {filteredApprovedTopics.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="p-6 text-center text-slate-400">
+                            Không có đề tài nào trong danh mục này.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        );
+      })()}
 
       {/* TAB 2: Lecturer Quota & Workload */}
       {activeTab === 'workload' && (
-        <Card>
-          <CardHeader>
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-indigo-600" />
-              Thống kê khối lượng & Quản lý hạn mức hướng dẫn giảng viên {currentSemester ? `(${currentSemester.name})` : ''}
-            </h3>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="p-3">Giảng viên</th>
-                    <th className="p-3">Học vị / Mã GV</th>
-                    <th className="p-3">Số nhóm HD</th>
-                    <th className="p-3">Hạn mức (Max)</th>
-                    <th className="p-3">Số nhóm PB</th>
-                    <th className="p-3">Hội đồng</th>
-                    <th className="p-3">Tình trạng</th>
-                    <th className="p-3 text-right">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {workload.map((lec) => (
-                    <tr key={lec.id}>
-                      <td className="p-3 font-semibold text-slate-900">
-                        {lec.fullName}
-                        <div className="text-[11px] text-slate-400 font-normal">{lec.email}</div>
-                      </td>
-                      <td className="p-3">
-                        <span className="font-medium text-slate-700">{lec.title}</span>
-                        <div className="text-[10px] text-slate-400">{lec.lecturerCode}</div>
-                      </td>
-                      <td className="p-3 font-bold text-indigo-600 text-sm">{lec.guidedGroupsCount}</td>
-                      <td className="p-3 font-bold text-slate-800 text-sm">{lec.maxGroups}</td>
-                      <td className="p-3 text-slate-600">{lec.reviewedGroupsCount}</td>
-                      <td className="p-3 text-slate-600">{lec.committeesCount}</td>
-                      <td className="p-3">
-                        {lec.isOverloaded ? (
-                          <Badge variant="danger" size="sm">Đã đạt tối đa</Badge>
-                        ) : (
-                          <Badge variant="success" size="sm">Còn {lec.remainingSlots} chỗ</Badge>
-                        )}
-                      </td>
-                      <td className="p-3 text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setSelectedLecturer(lec);
-                            setNewQuota(lec.maxGroups);
-                            setShowQuotaModal(true);
-                          }}
-                        >
-                          Chỉnh hạn mức
-                        </Button>
-                      </td>
+        <div className="space-y-6">
+          {/* BƯỚC 1: Chỉnh hạn mức chung cho TOÀN BỘ giảng viên trong học kỳ */}
+          <Card className="border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/50 via-white to-purple-50/40">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-[11px] font-bold uppercase tracking-wider">
+                    Bước 1
+                  </span>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Thiết lập hạn mức chung cho TOÀN BỘ Giảng viên trong học kỳ {currentSemester ? `(${currentSemester.name})` : ''}
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Áp dụng đồng loạt hạn mức số nhóm hướng dẫn tối đa cho toàn bộ giảng viên trong kỳ trước, sau đó mới điều chỉnh riêng cho từng giảng viên ở Bước 2 nếu có nhu cầu.
+                </p>
+              </div>
+              <div>
+                {hasSemesterDefaultQuota ? (
+                  <Badge variant="success" className="font-bold">
+                    Đã áp dụng toàn kỳ: {semesterDefaultQuota} nhóm / GV
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" className="font-bold">
+                    Chưa thiết lập hạn mức toàn kỳ
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <form onSubmit={handleSetBulkQuota} className="flex flex-col sm:flex-row sm:items-end gap-4">
+                <div className="w-full sm:w-64">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Hạn mức chung toàn bộ GV (số nhóm / kỳ)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={bulkQuotaInput}
+                    onChange={(e) => setBulkQuotaInput(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-sm font-bold text-indigo-900 bg-white border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    required
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={savingBulkQuota}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2"
+                >
+                  {savingBulkQuota
+                    ? 'Đang áp dụng...'
+                    : `Áp dụng đồng loạt (${workload.length} Giảng viên)`}
+                </Button>
+              </form>
+              {!hasSemesterDefaultQuota && (
+                <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    <b>Lưu ý:</b> Bạn cần bấm <b>"Áp dụng đồng loạt"</b> ở Bước 1 để chốt hạn mức chung cho toàn bộ giảng viên trong học kỳ trước khi chỉnh riêng cho từng giảng viên ở bảng dưới.
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* BƯỚC 2: Danh sách Giảng viên & Chỉnh hạn mức riêng cho từng GV nếu có nhu cầu */}
+          <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider ${
+                    hasSemesterDefaultQuota ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    Bước 2
+                  </span>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-indigo-600" />
+                    Điều chỉnh hạn mức riêng cho từng Giảng viên (nếu có nhu cầu)
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  {hasSemesterDefaultQuota
+                    ? `Hạn mức chuẩn toàn kỳ đang là ${semesterDefaultQuota} nhóm/GV. Bạn có thể bấm "Chỉnh hạn mức riêng" ở từng giảng viên nếu muốn tăng/giảm cá biệt.`
+                    : 'Vui lòng hoàn tất Bước 1 (Áp dụng hạn mức chung cho toàn bộ GV trong kỳ) để mở khóa chỉnh riêng từng giảng viên.'}
+                </p>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[700px] text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="p-3">Giảng viên</th>
+                      <th className="p-3">Học vị / Mã GV</th>
+                      <th className="p-3">Số nhóm HD / Đề tài</th>
+                      <th className="p-3">Hạn mức (Max)</th>
+                      <th className="p-3">Số nhóm PB</th>
+                      <th className="p-3">Hội đồng</th>
+                      <th className="p-3">Tình trạng</th>
+                      <th className="p-3 text-right">Thao tác (Bước 2)</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {workload.map((lec) => {
+                      const isCustom = hasSemesterDefaultQuota && lec.maxGroups !== semesterDefaultQuota;
+                      return (
+                        <tr key={lec.id} className={isCustom ? 'bg-purple-50/40' : ''}>
+                          <td className="p-3 font-semibold text-slate-900">
+                            {lec.fullName}
+                            <div className="text-[11px] text-slate-400 font-normal">{lec.email}</div>
+                          </td>
+                          <td className="p-3">
+                            <span className="font-medium text-slate-700">{lec.title}</span>
+                            <div className="text-[10px] text-slate-400">{lec.lecturerCode}</div>
+                          </td>
+                          <td className="p-3 font-bold text-indigo-600 text-sm">
+                            {lec.currentGroups ?? lec.guidedGroupsCount ?? 0}
+                          </td>
+                          <td className="p-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-slate-900 text-sm">{lec.maxGroups}</span>
+                              {hasSemesterDefaultQuota && (
+                                isCustom ? (
+                                  <Badge variant="purple" size="sm">Chỉnh riêng</Badge>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400">(Theo kỳ)</span>
+                                )
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3 text-slate-600">{lec.reviewedGroupsCount ?? 0}</td>
+                          <td className="p-3 text-slate-600">{lec.committeesCount ?? 0}</td>
+                          <td className="p-3">
+                            {lec.isOverloaded ? (
+                              <Badge variant="danger" size="sm">Đã đạt tối đa</Badge>
+                            ) : (
+                              <Badge variant="success" size="sm">Còn {lec.remainingSlots} chỗ</Badge>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!hasSemesterDefaultQuota}
+                              title={
+                                hasSemesterDefaultQuota
+                                  ? 'Điều chỉnh hạn mức riêng cho giảng viên này'
+                                  : 'Cần thiết lập hạn mức chung cho toàn bộ GV ở Bước 1 trước'
+                              }
+                              onClick={() => {
+                                setSelectedLecturer(lec);
+                                setNewQuota(lec.maxGroups);
+                                setShowQuotaModal(true);
+                              }}
+                            >
+                              {hasSemesterDefaultQuota ? 'Chỉnh hạn mức riêng' : 'Khóa (Chờ Bước 1)'}
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* TAB 3: Assign Reviewers */}
@@ -925,7 +1372,7 @@ export const HeadWorkspace: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[700px] text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
                   <tr>
                     <th className="p-3">Mã nhóm</th>
@@ -1261,7 +1708,7 @@ export const HeadWorkspace: React.FC = () => {
 
                 {/* Table */}
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full min-w-[700px] text-left text-xs">
                     <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200 text-[11px]">
                       <tr>
                         <th className="p-3">Mã nhóm / Đề tài</th>
@@ -1397,7 +1844,7 @@ export const HeadWorkspace: React.FC = () => {
                   Quản lý Điểm & Bảng Điểm Tổng kết KLTN
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Điểm tổng kết = (GVHD × 30%) + (GVPB × 30%) + (Hội đồng × 40%) + Thưởng NCKH (tối đa 2.0đ). Cảnh báo kịp thời khi điểm thành phần chưa đầy đủ.
+                  Điểm tổng kết = Trung bình cộng các điểm đánh giá (GVHD, GVPB, Hội đồng) + Thưởng NCKH (tối đa 2.0đ). Cảnh báo kịp thời khi điểm thành phần chưa đầy đủ.
                 </p>
               </div>
 
@@ -1408,15 +1855,38 @@ export const HeadWorkspace: React.FC = () => {
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Tìm kiếm nhóm, đề tài, sinh viên..."
+                    placeholder="Tìm nhóm, đề tài, tên GVHD, SV..."
                     value={scoreSearch}
                     onChange={(e) => {
                       setScoreSearch(e.target.value);
-                      fetchSemesterScores(scoreIncompleteOnly, e.target.value);
+                      fetchSemesterScores(scoreIncompleteOnly, e.target.value, scoreGvhdFilter);
                     }}
-                    className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg w-56 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
+                    className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg w-60 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
                   />
                 </div>
+
+                {/* Filter by GVHD */}
+                <select
+                  value={scoreGvhdFilter}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setScoreGvhdFilter(val);
+                    fetchSemesterScores(scoreIncompleteOnly, scoreSearch, val);
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
+                >
+                  <option value="">Tất cả Giảng viên hướng dẫn (GVHD)</option>
+                  {lecturers.map((lec: any) => {
+                    const lecUserId = lec.user?.id || lec.userId || lec.id;
+                    const lecName = lec.user?.fullName || lec.fullName;
+                    const lecTitle = lec.title || lec.lecturerProfile?.title;
+                    return (
+                      <option key={lecUserId} value={lecUserId}>
+                        {lecTitle ? `${lecTitle}. ` : ''}{lecName}
+                      </option>
+                    );
+                  })}
+                </select>
 
                 {/* Filter Incomplete Only */}
                 <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200 cursor-pointer select-none">
@@ -1426,7 +1896,7 @@ export const HeadWorkspace: React.FC = () => {
                     onChange={(e) => {
                       const checked = e.target.checked;
                       setScoreIncompleteOnly(checked);
-                      fetchSemesterScores(checked, scoreSearch);
+                      fetchSemesterScores(checked, scoreSearch, scoreGvhdFilter);
                     }}
                     className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
                   />
@@ -1440,7 +1910,7 @@ export const HeadWorkspace: React.FC = () => {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => fetchSemesterScores(scoreIncompleteOnly, scoreSearch)}
+                  onClick={() => fetchSemesterScores(scoreIncompleteOnly, scoreSearch, scoreGvhdFilter)}
                   disabled={loadingScores}
                 >
                   <RotateCw className={`w-3.5 h-3.5 mr-1 ${loadingScores ? 'animate-spin' : ''}`} />
@@ -1509,13 +1979,13 @@ export const HeadWorkspace: React.FC = () => {
 
               {/* Table */}
               <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[700px] text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200 text-[11px]">
                     <tr>
                       <th className="p-3">Nhóm / Đề tài</th>
-                      <th className="p-3 text-center">Điểm GVHD (30%)</th>
-                      <th className="p-3 text-center">Điểm GVPB (30%)</th>
-                      <th className="p-3 text-center">Điểm Hội đồng (40%)</th>
+                      <th className="p-3 text-center">Điểm GVHD</th>
+                      <th className="p-3 text-center">Điểm GVPB</th>
+                      <th className="p-3 text-center">Điểm Hội đồng</th>
                       <th className="p-3 text-center">Thưởng NCKH</th>
                       <th className="p-3 text-center">Điểm Tổng kết</th>
                       <th className="p-3">Tình trạng & Cảnh báo</th>
@@ -1527,53 +1997,108 @@ export const HeadWorkspace: React.FC = () => {
                       const sc = item.scoreCompleteness || {};
                       const isComplete = sc.isComplete;
                       const hasWarning = sc.hasWarning;
-                      const warnings = sc.warnings || [];
-                      const students = item.members || item.students || [];
+                       const warnings = sc.warnings || [];
+                       const students = item.members || item.students || [];
+                       const groupMidterm = item.midtermStatus || item.group?.midtermStatus || 'PENDING';
+                       const isGroupMidtermPassed = groupMidterm === 'CONTINUE' || groupMidterm === 'CHO_LAM_TIEP';
 
-                      return (
-                        <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                          {/* Nhóm / Đề tài */}
-                          <td className="p-3 min-w-[220px]">
-                            <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded text-[11px]">
-                              {item.code}
-                            </span>
-                            <div className="font-semibold text-slate-800 mt-1 line-clamp-2">
-                              {item.topic?.title || item.name}
-                            </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              GVHD: <span className="font-medium text-purple-700">{item.topic?.owner?.fullName || 'Chưa cập nhật'}</span>
-                            </div>
-                            {students.length > 0 && (
-                              <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
-                                SV: {students.map((st: any) => st.fullName || st.user?.fullName).join(', ')}
-                              </div>
-                            )}
-                          </td>
+                       return (
+                         <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                           {/* Nhóm / Đề tài */}
+                           <td className="p-3 min-w-[220px]">
+                             <div className="flex items-center gap-1.5 flex-wrap">
+                               <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded text-[11px]">
+                                 {item.code}
+                               </span>
+                               <Badge
+                                 size="sm"
+                                 variant={
+                                   isGroupMidtermPassed
+                                     ? 'success'
+                                     : groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                     ? 'danger'
+                                     : 'warning'
+                                 }
+                               >
+                                 {isGroupMidtermPassed
+                                   ? 'Qua GK'
+                                   : groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                   ? 'Đã dừng GK'
+                                   : 'Chờ xác nhận GK'}
+                               </Badge>
+                             </div>
+                             <div className="font-semibold text-slate-800 mt-1 line-clamp-2">
+                               {item.topic?.title || item.name}
+                             </div>
+                             <div className="text-[11px] text-slate-500 mt-0.5">
+                               GVHD: <span className="font-medium text-purple-700">{item.topic?.owner?.fullName || 'Chưa cập nhật'}</span>
+                             </div>
+                             {students.length > 0 && (
+                               <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                                 SV: {students.map((st: any) => st.fullName || st.user?.fullName).join(', ')}
+                               </div>
+                             )}
+                           </td>
 
-                          {/* GVHD Score */}
-                          <td className="p-3 text-center min-w-[130px]">
-                            {item.scores?.gvhd !== null && item.scores?.gvhd !== undefined ? (
-                              <div className="space-y-0.5">
-                                <span className="text-sm font-bold text-slate-900">{item.scores.gvhd} / 10</span>
-                                <div>
-                                  {item.scoreBreakdown?.gvhd?.isDraft ? (
-                                    <Badge variant="warning" size="sm">Bản nháp</Badge>
-                                  ) : (
-                                    <Badge variant="success" size="sm">Đã khóa</Badge>
-                                  )}
-                                </div>
-                              </div>
-                            ) : (
-                              <Badge variant="danger" size="sm">Chưa có điểm</Badge>
-                            )}
-                          </td>
+                           {/* GVHD Score */}
+                           <td className="p-3 text-center min-w-[140px]">
+                             {!isGroupMidtermPassed ? (
+                               <Badge
+                                 variant={groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI' ? 'danger' : 'warning'}
+                                 size="sm"
+                               >
+                                 {groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                   ? 'Đã dừng GK'
+                                   : 'Chờ qua GK'}
+                               </Badge>
+                             ) : item.scores?.gvhd !== null && item.scores?.gvhd !== undefined ? (
+                               <div className="space-y-1">
+                                 {students.length > 0 && students.some((st: any) => st.gvhd !== null && st.gvhd !== undefined) ? (
+                                   <div className="space-y-0.5 text-[11px] text-left bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+                                     {students.map((st: any, sIdx: number) => (
+                                       <div key={st.studentId || sIdx} className="flex items-center justify-between gap-2">
+                                         <span className="text-slate-600 truncate max-w-[90px]" title={st.fullName}>
+                                           {st.fullName || `SV${sIdx + 1}`}:
+                                         </span>
+                                         <b className="text-slate-900">{st.gvhd ?? item.scores.gvhd}</b>
+                                       </div>
+                                     ))}
+                                   </div>
+                                 ) : (
+                                   <span className="text-sm font-bold text-slate-900">{item.scores.gvhd} / 10</span>
+                                 )}
+                                 <div>
+                                   {item.scoreBreakdown?.gvhd?.isDraft ? (
+                                     <Badge variant="warning" size="sm">Bản nháp</Badge>
+                                   ) : (
+                                     <Badge variant="success" size="sm">Đã khóa</Badge>
+                                   )}
+                                 </div>
+                               </div>
+                             ) : (
+                               <Badge variant="danger" size="sm">Chưa có điểm</Badge>
+                             )}
+                           </td>
 
                           {/* GVPB Score */}
-                          <td className="p-3 text-center min-w-[130px]">
+                          <td className="p-3 text-center min-w-[140px]">
                             {item.reviewer ? (
                               item.scores?.gvpb !== null && item.scores?.gvpb !== undefined ? (
-                                <div className="space-y-0.5">
-                                  <span className="text-sm font-bold text-slate-900">{item.scores.gvpb} / 10</span>
+                                <div className="space-y-1">
+                                  {students.length > 0 && students.some((st: any) => st.gvpb !== null && st.gvpb !== undefined) ? (
+                                    <div className="space-y-0.5 text-[11px] text-left bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+                                      {students.map((st: any, sIdx: number) => (
+                                        <div key={st.studentId || sIdx} className="flex items-center justify-between gap-2">
+                                          <span className="text-slate-600 truncate max-w-[90px]" title={st.fullName}>
+                                            {st.fullName || `SV${sIdx + 1}`}:
+                                          </span>
+                                          <b className="text-slate-900">{st.gvpb ?? item.scores.gvpb}</b>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-sm font-bold text-slate-900">{item.scores.gvpb} / 10</span>
+                                  )}
                                   <div>
                                     {item.scoreBreakdown?.gvpb?.isDraft ? (
                                       <Badge variant="warning" size="sm">Bản nháp</Badge>
@@ -1601,8 +2126,21 @@ export const HeadWorkspace: React.FC = () => {
                           {/* Hội đồng Score */}
                           <td className="p-3 text-center min-w-[140px]">
                             {item.scores?.council !== null && item.scores?.council !== undefined ? (
-                              <div className="space-y-0.5">
-                                <span className="text-sm font-bold text-slate-900">{item.scores.council} / 10</span>
+                              <div className="space-y-1">
+                                {students.length > 0 && students.some((st: any) => st.council !== null && st.council !== undefined) ? (
+                                  <div className="space-y-0.5 text-[11px] text-left bg-slate-50 px-2 py-1 rounded border border-slate-200/70">
+                                    {students.map((st: any, sIdx: number) => (
+                                      <div key={st.studentId || sIdx} className="flex items-center justify-between gap-2">
+                                        <span className="text-slate-600 truncate max-w-[90px]" title={st.fullName}>
+                                          {st.fullName || `SV${sIdx + 1}`}:
+                                        </span>
+                                        <b className="text-slate-900">{st.council ?? item.scores.council}</b>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-sm font-bold text-slate-900">{item.scores.council} / 10</span>
+                                )}
                                 <div>
                                   <Badge variant="primary" size="sm">
                                     {item.scores.councilEvaluationsCount || 0}/{item.scores.councilMembersCount || 0} thành viên
@@ -1635,12 +2173,27 @@ export const HeadWorkspace: React.FC = () => {
                           </td>
 
                           {/* Điểm tổng kết */}
-                          <td className="p-3 text-center min-w-[120px]">
+                          <td className="p-3 text-center min-w-[150px]">
                             {item.finalScore !== null && item.finalScore !== undefined ? (
                               <div className="space-y-1">
-                                <div className="text-base font-extrabold text-indigo-900">
-                                  {item.finalScore} / 10
-                                </div>
+                                {students.length > 0 && students.some((st: any) => st.finalScore !== null && st.finalScore !== undefined) ? (
+                                  <div className="space-y-1 text-[11px] text-left bg-indigo-50/60 px-2 py-1.5 rounded-lg border border-indigo-200/70">
+                                    {students.map((st: any, sIdx: number) => (
+                                      <div key={st.studentId || sIdx} className="flex items-center justify-between gap-2">
+                                        <span className="text-slate-700 font-medium truncate max-w-[90px]" title={st.fullName}>
+                                          {st.fullName || `SV${sIdx + 1}`}:
+                                        </span>
+                                        <span className="font-extrabold text-indigo-900">
+                                          {st.finalScore ?? item.finalScore}đ
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-base font-extrabold text-indigo-900">
+                                    {item.finalScore} / 10
+                                  </div>
+                                )}
                                 <div className="flex items-center justify-center gap-1">
                                   <Badge
                                     size="sm"
@@ -1687,29 +2240,43 @@ export const HeadWorkspace: React.FC = () => {
                             )}
                           </td>
 
-                          {/* Thao tác */}
-                          <td className="p-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleExportScoreSheetPdf(item.id)}
-                                title="Xuất phiếu điểm PDF chính thức cho nhóm này"
-                                className="text-rose-700 border-rose-200 hover:bg-rose-50 px-2"
-                              >
-                                <Download className="w-3.5 h-3.5 mr-1 text-rose-600" />
-                                PDF
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => setSelectedScoreDetails(item)}
-                              >
-                                <Eye className="w-3.5 h-3.5 mr-1" />
-                                Chi tiết
-                              </Button>
-                            </div>
-                          </td>
+                           {/* Thao tác */}
+                           <td className="p-3 text-right">
+                             <div className="flex items-center justify-end gap-1.5">
+                               {isGroupMidtermPassed && (
+                                 <>
+                                   <Button
+                                     size="sm"
+                                     variant="outline"
+                                     onClick={() => handleExportScoreSheetPdf(item.id)}
+                                     title="Xuất phiếu điểm PDF chính thức cho nhóm này"
+                                     className="text-rose-700 border-rose-200 hover:bg-rose-50 px-2"
+                                   >
+                                     <Download className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                                     PDF
+                                   </Button>
+                                   <Button
+                                     size="sm"
+                                     variant="outline"
+                                     onClick={() => handleDirectUnlockGroup(item.id)}
+                                     title="Mở khóa chỉnh sửa điểm cho nhóm này"
+                                     className="text-amber-700 border-amber-300 hover:bg-amber-50 px-2 font-medium"
+                                   >
+                                     <Unlock className="w-3.5 h-3.5 mr-1 text-amber-600" />
+                                     Mở khóa
+                                   </Button>
+                                 </>
+                               )}
+                               <Button
+                                 size="sm"
+                                 variant="outline"
+                                 onClick={() => setSelectedScoreDetails(item)}
+                               >
+                                 <Eye className="w-3.5 h-3.5 mr-1" />
+                                 Chi tiết
+                               </Button>
+                             </div>
+                           </td>
                         </tr>
                       );
                     })}
@@ -1731,118 +2298,229 @@ export const HeadWorkspace: React.FC = () => {
       {/* TAB 5: Score Unlocking Requests */}
       {activeTab === 'score-locks' && (
         <Card>
-          <CardHeader>
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Unlock className="w-5 h-5 text-amber-600" />
-              Yêu cầu mở khóa chỉnh sửa điểm từ Giảng viên ({scoreRequests.length})
-            </h3>
-          </CardHeader>
-          <CardContent>
-            <div className="divide-y divide-slate-100">
-              {scoreRequests.map((req) => (
-                <div key={req.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant={
-                          req.status === 'APPROVED' ? 'success' : req.status === 'REJECTED' ? 'danger' : 'warning'
-                        }
-                      >
-                        {req.status}
-                      </Badge>
-                      <span className="text-xs font-semibold text-slate-700">
-                        Giảng viên: {req.requester?.fullName}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-800">
-                      Nhóm: <b>{req.group?.name ?? req.group?.code}</b>
-                      {req.group?.topic?.title && (
-                        <span className="text-slate-500 block text-[11px] mt-0.5 font-medium">
-                          Đề tài: {req.group.topic.title}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                      Lý do giải trình: {req.reason}
-                    </p>
-                    {req.expiresAt && (
-                      <p className="text-xs text-emerald-700 bg-emerald-50 p-2 rounded border border-emerald-100 mt-1.5 font-medium">
-                        Thời hạn cho phép sửa: {new Date(req.expiresAt).toLocaleString('vi-VN')}
-                      </p>
-                    )}
-                    {req.rejectReason && (
-                      <p className="text-xs text-rose-700 bg-rose-50 p-2 rounded border border-rose-100 mt-1.5 font-medium">
-                        Lý do từ chối: {req.rejectReason}
-                      </p>
-                    )}
-                  </div>
-
-                  {req.status === 'PENDING' && (
-                    <div className="flex items-center gap-2">
-                      <Button size="sm" variant="success" onClick={() => handleReviewScoreRequest(req.id, true)}>
-                        Duyệt mở khóa
-                      </Button>
-                      <Button size="sm" variant="danger" onClick={() => handleReviewScoreRequest(req.id, false)}>
-                        Từ chối
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
-              {scoreRequests.length === 0 && (
-                <div className="p-8 text-center text-xs text-slate-400">Không có yêu cầu sửa điểm nào.</div>
-              )}
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Unlock className="w-5 h-5 text-amber-600" />
+                Quản lý & Mở khóa Chỉnh sửa Điểm KLTN ({scoreRequests.length})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Xem xét đề xuất mở khóa của giảng viên hoặc chủ động mở khóa điểm trực tiếp cho nhóm
+              </p>
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* TAB 6: Review NCKH Evidence */}
-      {activeTab === 'evidence' && (
-        <Card>
-          <CardHeader>
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Award className="w-5 h-5 text-purple-600" />
-              Xét duyệt Minh chứng NCKH & Cộng điểm thưởng ({pendingEvidence.length})
-            </h3>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center gap-1.5 shadow-sm shadow-indigo-200"
+                onClick={() => handleDirectUnlockGroup()}
+              >
+                <Unlock className="w-4 h-4" />
+                <span>+ Trực tiếp mở khóa điểm</span>
+              </Button>
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="divide-y divide-slate-100">
-              {pendingEvidence.map((ev) => (
-                <div key={ev.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="warning">{ev.status}</Badge>
-                      <span className="text-xs font-semibold text-slate-700">
-                        Sinh viên: {ev.user?.fullName} ({ev.user?.email})
-                      </span>
-                    </div>
-                    <h4 className="text-sm font-bold text-slate-900">{ev.title}</h4>
-                    <p className="text-xs text-slate-600">{ev.description || 'Không có mô tả'}</p>
-                    {ev.fileName && (
-                      <span className="text-xs text-indigo-600 font-medium">Tệp đính kèm: {ev.fileName}</span>
-                    )}
-                    {ev.reviewNote && (
-                      <span className="text-xs text-amber-800 bg-amber-50 px-2 py-0.5 rounded block mt-1 font-medium">
-                        Phản hồi: {ev.reviewNote}
-                      </span>
-                    )}
-                  </div>
 
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => {
-                      setSelectedEvidence(ev);
-                      setShowEvidenceReviewModal(true);
-                    }}
-                  >
-                    Duyệt & Cộng điểm
-                  </Button>
+          {/* Status Filter Tabs */}
+          <div className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 border-b border-slate-100 overflow-x-auto bg-slate-50/50">
+            <button
+              onClick={() => setUnlockFilterStatus('ALL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                unlockFilterStatus === 'ALL'
+                  ? 'bg-indigo-600 text-white shadow-xs font-bold'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Tất cả ({scoreRequests.length})
+            </button>
+            <button
+              onClick={() => setUnlockFilterStatus('PENDING')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                unlockFilterStatus === 'PENDING'
+                  ? 'bg-amber-600 text-white shadow-xs font-bold'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <span>Chờ duyệt</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                unlockFilterStatus === 'PENDING' ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'
+              }`}>
+                {scoreRequests.filter((r) => r.status === 'PENDING').length}
+              </span>
+            </button>
+            <button
+              onClick={() => setUnlockFilterStatus('APPROVED')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                unlockFilterStatus === 'APPROVED'
+                  ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <span>Đã phê duyệt / Đang mở</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                unlockFilterStatus === 'APPROVED' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'
+              }`}>
+                {scoreRequests.filter((r) => r.status === 'APPROVED').length}
+              </span>
+            </button>
+            <button
+              onClick={() => setUnlockFilterStatus('REJECTED')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                unlockFilterStatus === 'REJECTED'
+                  ? 'bg-rose-600 text-white shadow-xs font-bold'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <span>Đã từ chối</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                unlockFilterStatus === 'REJECTED' ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-800'
+              }`}>
+                {scoreRequests.filter((r) => r.status === 'REJECTED').length}
+              </span>
+            </button>
+          </div>
+
+          <CardContent className="pt-4">
+            <div className="divide-y divide-slate-100">
+              {scoreRequests
+                .filter((req) => {
+                  if (unlockFilterStatus === 'ALL') return true;
+                  return req.status === unlockFilterStatus;
+                })
+                .map((req) => {
+                  const isExpired = req.expiresAt ? new Date(req.expiresAt) < new Date() : false;
+                  return (
+                    <div key={req.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant={
+                              req.status === 'APPROVED'
+                                ? isExpired
+                                  ? 'warning'
+                                  : 'success'
+                                : req.status === 'REJECTED'
+                                ? 'danger'
+                                : 'warning'
+                            }
+                          >
+                            {req.status === 'APPROVED' && isExpired ? 'ĐÃ HẾT HẠN MỞ' : req.status}
+                          </Badge>
+                          <span className="text-xs font-semibold text-slate-700">
+                            Giảng viên: <strong>{req.requester?.fullName || 'Chưa cập nhật'}</strong>
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-800">
+                          Nhóm: <b className="text-indigo-900 font-mono font-bold bg-indigo-50 px-2 py-0.5 rounded text-[11px]">{req.group?.code || req.group?.name}</b>
+                          {req.group?.topic?.title && (
+                            <span className="text-slate-600 block text-xs mt-1 font-medium">
+                              Đề tài: {req.group.topic.title}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100 leading-relaxed">
+                          <b>Lý do giải trình:</b> {req.reason}
+                        </p>
+                        {req.expiresAt && (
+                          <div className={`text-xs p-2 rounded border mt-1.5 font-medium flex items-center gap-1.5 ${
+                            isExpired
+                              ? 'text-amber-800 bg-amber-50 border-amber-200'
+                              : 'text-emerald-800 bg-emerald-50 border-emerald-200'
+                          }`}>
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>
+                              {isExpired ? 'Đã hết hạn lúc: ' : 'Thời hạn cho phép sửa: '}
+                              <strong>{new Date(req.expiresAt).toLocaleString('vi-VN')}</strong>
+                            </span>
+                          </div>
+                        )}
+                        {req.rejectReason && (
+                          <p className="text-xs text-rose-700 bg-rose-50 p-2 rounded border border-rose-100 mt-1.5 font-medium">
+                            <b>Lý do từ chối:</b> {req.rejectReason}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 md:self-center">
+                        {req.status === 'PENDING' && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="success"
+                              className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                              onClick={() => handleReviewScoreRequest(req.id, true)}
+                            >
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>Duyệt mở khóa</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              className="flex items-center gap-1"
+                              onClick={() => handleReviewScoreRequest(req.id, false)}
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Từ chối</span>
+                            </Button>
+                          </>
+                        )}
+
+                        {req.status === 'APPROVED' && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-indigo-600 border-indigo-200 hover:bg-indigo-50 font-semibold flex items-center gap-1"
+                              onClick={() => handleExtendScoreUnlock(req)}
+                              title="Gia hạn thời gian hoặc mở khóa lại cho nhóm này"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>Gia hạn / Mở khóa lại</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-rose-600 border-rose-200 hover:bg-rose-50 font-semibold flex items-center gap-1"
+                              onClick={() => handleRelockGroup(req.groupId || req.group?.id, req.group?.code)}
+                              title="Khóa lại điểm ngay lập tức cho nhóm này"
+                            >
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>Khóa lại ngay</span>
+                            </Button>
+                          </>
+                        )}
+
+                        {req.status === 'REJECTED' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-emerald-700 border-emerald-300 hover:bg-emerald-50 font-semibold flex items-center gap-1"
+                            onClick={() => handleDirectUnlockGroup(req.groupId || req.group?.id)}
+                            title="Xem xét lại và mở khóa điểm cho nhóm này"
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                            <span>Mở khóa cho nhóm</span>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {scoreRequests.filter((req) => {
+                if (unlockFilterStatus === 'ALL') return true;
+                return req.status === unlockFilterStatus;
+              }).length === 0 && (
+                <div className="p-8 text-center text-xs text-slate-400">
+                  {unlockFilterStatus === 'PENDING'
+                    ? 'Không có yêu cầu mở khóa điểm nào đang chờ duyệt.'
+                    : unlockFilterStatus === 'APPROVED'
+                    ? 'Không có yêu cầu mở khóa nào đã phê duyệt.'
+                    : unlockFilterStatus === 'REJECTED'
+                    ? 'Không có yêu cầu mở khóa nào bị từ chối.'
+                    : 'Không có yêu cầu sửa điểm nào.'}
                 </div>
-              ))}
-              {pendingEvidence.length === 0 && (
-                <div className="p-8 text-center text-xs text-slate-400">Không có hồ sơ NCKH nào đang chờ duyệt.</div>
               )}
             </div>
           </CardContent>
@@ -1873,7 +2551,7 @@ export const HeadWorkspace: React.FC = () => {
                       Điểm Khóa Luận Tốt Nghiệp
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
-                      Bảng điểm tổng hợp 10 tiêu chí (GVHD 30%, GVPB 30%, HĐ 40%, thưởng NCKH) và phiếu điểm chính thức chuẩn mẫu.
+                      Bảng điểm tổng hợp 10 tiêu chí (Trung bình cộng GVHD, GVPB, Hội đồng, thưởng NCKH) và phiếu điểm chính thức chuẩn mẫu.
                     </p>
                   </div>
                   <div className="flex items-center gap-2 pt-1">
@@ -1967,18 +2645,53 @@ export const HeadWorkspace: React.FC = () => {
       </div>
 
       {/* MODAL: Review Topic */}
-      <Modal isOpen={showReviewTopicModal} onClose={() => setShowReviewTopicModal(false)} title="Xét duyệt Đề tài KLTN">
+      <Modal isOpen={showReviewTopicModal} onClose={() => setShowReviewTopicModal(false)} title="Trưởng Bộ Môn Xét Duyệt Đề Tài KLTN">
         <div className="space-y-4 text-sm">
           <div className="bg-slate-50 p-3 rounded-lg space-y-2 border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2 pb-1">
+              {isStudentTopic(selectedTopic) ? (
+                <Badge variant="success" className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
+                  Đề tài do Sinh viên đề xuất
+                </Badge>
+              ) : (
+                <Badge variant="purple" className="bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold">
+                  Đề tài do Giảng viên đề xuất
+                </Badge>
+              )}
+              {isStudentTopic(selectedTopic) && (
+                <Badge
+                  size="sm"
+                  variant={selectedTopic?.studentProposer?.gvConfirmed ? 'success' : 'warning'}
+                >
+                  {selectedTopic?.studentProposer?.gvConfirmed
+                    ? 'GVHD đã đồng ý hướng dẫn'
+                    : 'Đang chờ GVHD xác nhận'}
+                </Badge>
+              )}
+            </div>
             <div>
               <div className="font-bold text-slate-900 text-base">{selectedTopic?.title}</div>
               {selectedTopic?.titleEn && (
                 <div className="text-xs text-slate-500 italic mt-0.5">{selectedTopic.titleEn}</div>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 pt-1">
+            {isStudentTopic(selectedTopic) && selectedTopic?.studentProposer && (
+              <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-slate-700 space-y-1">
+                <div className="font-bold text-emerald-900">Thông tin Sinh viên đề xuất:</div>
+                <div>
+                  Họ tên: <strong>{selectedTopic.studentProposer.fullName}</strong> • MSSV: <strong>{selectedTopic.studentProposer.studentCode}</strong>
+                  {selectedTopic.studentProposer.className ? ` • Lớp: ${selectedTopic.studentProposer.className}` : ''}
+                </div>
+                {selectedTopic.studentProposer.email && (
+                  <div className="text-slate-500">Email: {selectedTopic.studentProposer.email}</div>
+                )}
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-600 pt-1">
               <div>
-                <span className="font-semibold text-slate-700">GV đề xuất:</span>{' '}
+                <span className="font-semibold text-slate-700">
+                  {isStudentTopic(selectedTopic) ? 'GVHD hướng dẫn:' : 'GV đề xuất:'}
+                </span>{' '}
                 {selectedTopic?.owner?.fullName ?? selectedTopic?.gvhd?.hoTen ?? 'Chưa cập nhật'}
                 <div className="text-[11px] text-slate-400">{selectedTopic?.owner?.email ?? selectedTopic?.gvhd?.email}</div>
               </div>
@@ -2056,9 +2769,9 @@ export const HeadWorkspace: React.FC = () => {
           </div>
           <Input
             type="number"
-            min={1}
-            max={20}
-            label="Số nhóm hướng dẫn tối đa trong học kỳ"
+            min={0}
+            max={50}
+            label="Số nhóm hướng dẫn tối đa riêng cho giảng viên này (0 - 50)"
             value={newQuota}
             onChange={(e) => setNewQuota(Number(e.target.value))}
             required
@@ -2181,7 +2894,7 @@ export const HeadWorkspace: React.FC = () => {
 
                   {/* Hiển thị chi tiết 2 giảng viên của cặp đã chọn */}
                   {selectedPairId && (
-                    <div className="grid grid-cols-2 gap-3 p-3 bg-purple-50/60 rounded-lg border border-purple-100 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-purple-50/60 rounded-lg border border-purple-100 text-xs">
                       <div>
                         <span className="font-semibold text-purple-900">GVPB 1 (Chính):</span>
                         <div className="font-medium text-slate-800 mt-0.5">
@@ -2633,46 +3346,6 @@ export const HeadWorkspace: React.FC = () => {
         </form>
       </Modal>
 
-      {/* MODAL: Evidence Review */}
-      <Modal isOpen={showEvidenceReviewModal} onClose={() => setShowEvidenceReviewModal(false)} title="Xét duyệt Minh chứng NCKH">
-        <div className="space-y-4 text-sm">
-          <div>
-            <div className="font-bold text-slate-900">{selectedEvidence?.title}</div>
-            <div className="text-xs text-slate-500">Sinh viên: {selectedEvidence?.user?.fullName}</div>
-            <p className="text-xs text-slate-600 mt-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-              {selectedEvidence?.description || 'Không có mô tả'}
-            </p>
-          </div>
-
-          <Input
-            type="number"
-            step="0.1"
-            min="0"
-            max="2"
-            label="Điểm thưởng NCKH cộng thêm (Tối đa 2.0)"
-            value={evidencePoints}
-            onChange={(e) => setEvidencePoints(e.target.value)}
-          />
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Ghi chú duyệt</label>
-            <textarea
-              rows={2}
-              placeholder="Ghi chú đánh giá bài báo/giải thưởng..."
-              value={evidenceNote}
-              onChange={(e) => setEvidenceNote(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3">
-            <Button variant="outline" onClick={() => handleReviewEvidence('request_more_info')}>Yêu cầu bổ sung</Button>
-            <Button variant="danger" onClick={() => handleReviewEvidence('reject')}>Từ chối</Button>
-            <Button variant="success" onClick={() => handleReviewEvidence('approve')}>Phê duyệt & Cộng điểm</Button>
-          </div>
-        </div>
-      </Modal>
-
       {/* MODAL: Score Details & Breakdown */}
       <Modal
         isOpen={!!selectedScoreDetails}
@@ -2686,7 +3359,7 @@ export const HeadWorkspace: React.FC = () => {
               <div className="text-sm font-bold text-slate-900">
                 {selectedScoreDetails.topic?.title || selectedScoreDetails.name}
               </div>
-              <div className="grid grid-cols-2 gap-2 text-slate-600 pt-1 border-t border-slate-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 pt-1 border-t border-slate-200">
                 <div>
                   <span className="font-semibold text-slate-700">GVHD:</span>{' '}
                   {selectedScoreDetails.topic?.owner?.fullName || 'Chưa cập nhật'}
@@ -2701,17 +3374,59 @@ export const HeadWorkspace: React.FC = () => {
             {/* Formula */}
             <div className="bg-purple-50/70 p-3 rounded-xl border border-purple-200 space-y-1">
               <div className="text-[11px] font-bold uppercase tracking-wider text-purple-900">
-                Công thức & Trọng số tính điểm
+                Công thức tính điểm tổng kết từng Sinh viên
               </div>
               <p className="text-xs text-purple-950 font-mono">
                 {selectedScoreDetails.congThucTinh || 'Chưa có công thức'}
               </p>
-              <div className="flex items-center gap-3 pt-1 text-[11px] font-semibold text-purple-800">
-                <span>Điểm tổng kết: <b className="text-sm">{selectedScoreDetails.finalScore ?? '—'} / 10</b></span>
-                <span>• Xếp loại: <b>{selectedScoreDetails.xepLoai || '—'}</b></span>
-                <span>• Kết quả: <b>{selectedScoreDetails.ketQua || '—'}</b></span>
-              </div>
             </div>
+
+            {/* Per-student score breakdown table */}
+            {Array.isArray(selectedScoreDetails.students) && selectedScoreDetails.students.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                  Bảng điểm chi tiết từng Sinh viên trong nhóm
+                </div>
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full min-w-[520px] text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="p-2">Sinh viên</th>
+                        <th className="p-2 text-center">MSSV</th>
+                        <th className="p-2 text-center">GVHD</th>
+                        <th className="p-2 text-center">GVPB</th>
+                        <th className="p-2 text-center">Hội đồng</th>
+                        <th className="p-2 text-center">Tổng kết</th>
+                        <th className="p-2 text-center">Kết quả</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedScoreDetails.students.map((st: any, idx: number) => (
+                        <tr key={st.studentId || idx}>
+                          <td className="p-2 font-semibold text-slate-800">
+                            {st.fullName} {st.isLeader && <span className="text-[10px] text-indigo-600">(NT)</span>}
+                          </td>
+                          <td className="p-2 text-center font-mono text-slate-600">{st.studentCode}</td>
+                          <td className="p-2 text-center font-bold text-slate-800">{st.gvhd ?? '—'}</td>
+                          <td className="p-2 text-center font-bold text-slate-800">{st.gvpb ?? '—'}</td>
+                          <td className="p-2 text-center font-bold text-slate-800">{st.council ?? '—'}</td>
+                          <td className="p-2 text-center font-extrabold text-indigo-900">{st.finalScore ?? '—'}</td>
+                          <td className="p-2 text-center">
+                            {st.finalScore !== null && st.finalScore !== undefined ? (
+                              <Badge variant={st.ketQua === 'DAT' ? 'success' : 'danger'} size="sm">
+                                {st.ketQua === 'DAT' ? 'Đạt' : 'Không đạt'} ({st.xepLoai})
+                              </Badge>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Council breakdown */}
             {selectedScoreDetails.scoreBreakdown?.council?.evaluations?.length > 0 && (
@@ -2719,8 +3434,8 @@ export const HeadWorkspace: React.FC = () => {
                 <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
                   Điểm từng Thành viên Hội đồng bảo vệ
                 </div>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-left text-xs">
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full min-w-[500px] text-left text-xs">
                     <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                       <tr>
                         <th className="p-2">Thành viên</th>
@@ -2768,6 +3483,21 @@ export const HeadWorkspace: React.FC = () => {
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              {(selectedScoreDetails.midtermStatus === 'CONTINUE' ||
+                selectedScoreDetails.group?.midtermStatus === 'CONTINUE') && (
+                <Button
+                  variant="outline"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50 font-semibold flex items-center gap-1.5"
+                  onClick={() => {
+                    const gId = selectedScoreDetails.id;
+                    setSelectedScoreDetails(null);
+                    handleDirectUnlockGroup(gId);
+                  }}
+                >
+                  <Unlock className="w-4 h-4 text-amber-600" />
+                  <span>Mở khóa điểm cho nhóm</span>
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => setSelectedScoreDetails(null)}
@@ -2777,6 +3507,115 @@ export const HeadWorkspace: React.FC = () => {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* MODAL: Direct Unlock Score for Group */}
+      <Modal
+        isOpen={showDirectUnlockModal}
+        onClose={() => setShowDirectUnlockModal(false)}
+        title="Trực tiếp Mở khóa Điểm KLTN cho Nhóm"
+      >
+        <form onSubmit={handleConfirmDirectUnlock} className="space-y-4 text-sm">
+          <div className="p-3.5 bg-amber-50/80 border border-amber-200/80 rounded-xl text-xs text-amber-900 leading-relaxed">
+            <div className="font-bold flex items-center gap-1.5 text-amber-800 mb-1">
+              <Unlock className="w-4 h-4 text-amber-600" />
+              <span>Chính sách mở khóa điểm</span>
+            </div>
+            Sau khi mở khóa, Giảng viên hướng dẫn / phản biện của nhóm có quyền cập nhật và lưu lại điểm đánh giá tiêu chí. Sau khi hết thời hạn, điểm sẽ tự động khóa lại.
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Chọn nhóm KLTN cần mở khóa <span className="text-rose-500">*</span>
+            </label>
+            <select
+              value={directUnlockGroupId}
+              onChange={(e) => setDirectUnlockGroupId(e.target.value)}
+              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+              required
+            >
+              <option value="">-- Chọn nhóm KLTN (Đã xác nhận qua giữa kỳ) --</option>
+              {allGroups
+                .filter((grp: any) => grp.midtermStatus === 'CONTINUE' || grp.midtermStatus === 'CHO_LAM_TIEP')
+                .map((grp: any) => (
+                  <option key={grp.id} value={grp.id}>
+                    {grp.code} - {grp.name || grp.topic?.title || 'Đề tài'} ({grp.topic?.owner?.fullName ? `GVHD: ${grp.topic.owner.fullName}` : ''})
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Thời hạn cho phép chỉnh sửa điểm <span className="text-rose-500">*</span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { label: '12 giờ', val: 12 },
+                { label: '24 giờ (1 ngày)', val: 24 },
+                { label: '48 giờ (2 ngày)', val: 48 },
+                { label: '72 giờ (3 ngày)', val: 72 },
+              ].map((opt) => (
+                <button
+                  key={opt.val}
+                  type="button"
+                  onClick={() => setDirectUnlockHours(opt.val)}
+                  className={`p-2.5 rounded-xl border text-xs font-bold text-center transition-all cursor-pointer ${
+                    directUnlockHours === opt.val
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-200'
+                      : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-slate-500">Hoặc tùy chỉnh (giờ):</span>
+              <input
+                type="number"
+                min="1"
+                max="720"
+                value={directUnlockHours}
+                onChange={(e) => setDirectUnlockHours(Number(e.target.value) || 24)}
+                className="w-24 px-2 py-1 text-xs border border-slate-300 rounded-lg text-center font-bold"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Ghi chú / Lý do mở khóa điểm (Tùy chọn)
+            </label>
+            <textarea
+              rows={3}
+              value={directUnlockReason}
+              onChange={(e) => setDirectUnlockReason(e.target.value)}
+              placeholder="VD: Trưởng bộ môn cho phép bổ sung điểm tiêu chí theo quyết định..."
+              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowDirectUnlockModal(false)}
+              disabled={isUnlocking}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center gap-1.5"
+              disabled={isUnlocking}
+            >
+              <Unlock className="w-4 h-4" />
+              <span>{isUnlocking ? 'Đang mở khóa...' : 'Xác nhận mở khóa điểm'}</span>
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

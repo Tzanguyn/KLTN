@@ -2,9 +2,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
-import { Prisma, Semester, SemesterStatus } from '@prisma/client';
+import { Prisma, RoleCode, Semester, SemesterStatus, UserStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateSemesterDto } from './dto/create-semester.dto';
 import { SemesterQueryDto } from './dto/semester-query.dto';
@@ -13,8 +16,33 @@ import { SetRegistrationPeriodDto } from './dto/set-registration-period.dto';
 import { SetRegistrationConditionsDto } from './dto/set-registration-conditions.dto';
 
 @Injectable()
-export class SemestersService {
+export class SemestersService implements OnModuleInit {
+  private readonly logger = new Logger(SemestersService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  async onModuleInit() {
+    try {
+      const resetMarkerKey = 'AUTO_RESET_NEW_SEMESTER_2026_V2';
+      const existingMarker = await this.prisma.systemConfig.findFirst({
+        where: { key: resetMarkerKey },
+      });
+      if (!existingMarker) {
+        this.logger.log('Đang đặt lại dữ liệu về trạng thái Mới mở học kỳ (Bước 1: Đăng ký đề tài)...');
+        await this.resetToNewSemesterState();
+        await this.prisma.systemConfig.create({
+          data: {
+            key: resetMarkerKey,
+            value: new Date().toISOString(),
+            description: 'Đã tự động đặt lại dữ liệu về trạng thái mới mở học kỳ để test từ đầu',
+          },
+        });
+        this.logger.log('Đã đặt lại dữ liệu về trạng thái Mới mở học kỳ thành công!');
+      }
+    } catch (err: any) {
+      this.logger.warn(`Không thể tự động reset dữ liệu lúc khởi động: ${err?.message}`);
+    }
+  }
 
   /**
    * Helper định dạng ngày theo DD/MM/YYYY cho thông báo lỗi
@@ -28,10 +56,104 @@ export class SemestersService {
   }
 
   /**
-   * Bổ sung các alias tiếng Việt vào response để frontend/client dễ dàng sử dụng
+   * Bổ sung các alias tiếng Việt và lộ trình 5 giai đoạn vào response để frontend/client dễ dàng sử dụng
    */
-  private formatSemester(semester: any) {
+  private formatSemester(semester: any, customStep?: number) {
     if (!semester) return null;
+
+    const now = new Date();
+    const regFrom = semester.registrationFrom ? new Date(semester.registrationFrom) : null;
+    const regTo = semester.registrationTo ? new Date(semester.registrationTo) : null;
+    const subTo = semester.submissionTo ? new Date(semester.submissionTo) : null;
+    const defFrom = semester.defenseFrom ? new Date(semester.defenseFrom) : null;
+    const defTo = semester.defenseTo ? new Date(semester.defenseTo) : null;
+
+    let midFrom: Date | null = null;
+    let midTo: Date | null = null;
+    if (regTo && subTo) {
+      midFrom = new Date(regTo.getTime() + 7 * 86400000);
+      midTo = new Date((regTo.getTime() + subTo.getTime()) / 2);
+    }
+
+    let currentStep = customStep && customStep >= 1 && customStep <= 5 ? customStep : 0;
+    if (!currentStep) {
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        currentStep = 5;
+      } else if (defFrom && now >= defFrom) {
+        currentStep = 5;
+      } else if (subTo && now >= subTo) {
+        currentStep = 4;
+      } else if (midTo && now >= midTo) {
+        currentStep = 3;
+      } else if (regTo && now > regTo) {
+        currentStep = 2;
+      } else {
+        // Fallback dựa trên counts nếu có
+        if (semester._count?.defenses > 0) {
+          currentStep = 5;
+        } else if (semester._count?.reports > 0 || (semester._count?.groups > 0 && regTo && now >= regTo)) {
+          currentStep = 4;
+        } else if (semester._count?.groups > 0) {
+          currentStep = 3;
+        } else if (semester._count?.registrations > 0) {
+          currentStep = 2;
+        } else {
+          currentStep = 1;
+        }
+      }
+    }
+
+    const stageTitles = [
+      'Đăng ký đề tài',
+      'Duyệt & Ghép nhóm',
+      'Thực hiện & Giữa kỳ',
+      'Báo cáo & Phản biện',
+      'Bảo vệ & Tổng kết',
+    ];
+
+    const timelineSteps = [
+      {
+        number: 1,
+        title: 'Đăng ký đề tài',
+        subtitle: 'Mở đợt, chọn hoặc đề xuất đề tài mới',
+        phase: 'Tuần 1 - 3',
+        startDate: regFrom ? regFrom.toISOString() : null,
+        endDate: regTo ? regTo.toISOString() : null,
+      },
+      {
+        number: 2,
+        title: 'Duyệt & Ghép nhóm',
+        subtitle: 'GVHD duyệt, thành lập nhóm KLTN',
+        phase: 'Tuần 3 - 4',
+        startDate: regTo ? regTo.toISOString() : null,
+        endDate: midFrom ? midFrom.toISOString() : null,
+      },
+      {
+        number: 3,
+        title: 'Thực hiện & Giữa kỳ',
+        subtitle: 'Báo cáo tiến độ, đánh giá giữa kỳ',
+        phase: 'Tuần 5 - 10',
+        startDate: midFrom ? midFrom.toISOString() : null,
+        endDate: subTo ? subTo.toISOString() : null,
+      },
+      {
+        number: 4,
+        title: 'Báo cáo & Phản biện',
+        subtitle: 'Nộp báo cáo hoàn chỉnh, GV phản biện',
+        phase: 'Tuần 11 - 13',
+        startDate: subTo ? subTo.toISOString() : null,
+        endDate: defFrom ? defFrom.toISOString() : null,
+      },
+      {
+        number: 5,
+        title: 'Bảo vệ & Tổng kết',
+        subtitle: 'Hội đồng chấm điểm 10 tiêu chí, NCKH',
+        phase: 'Tuần 14 - 15',
+        startDate: defFrom ? defFrom.toISOString() : null,
+        endDate: defTo ? defTo.toISOString() : null,
+      },
+    ];
+
     return {
       ...semester,
       tenHocKy: semester.name,
@@ -46,6 +168,9 @@ export class SemestersService {
       thoiGianNopBaoCao: semester.submissionTo,
       thoiGianBatDauBaoVe: semester.defenseFrom,
       thoiGianKetThucBaoVe: semester.defenseTo,
+      currentStep,
+      currentStage: stageTitles[currentStep - 1] || 'Đăng ký đề tài',
+      timelineSteps,
     };
   }
 
@@ -170,49 +295,69 @@ export class SemestersService {
       where.departmentId = departmentId;
     }
 
-    const semesters = await this.prisma.semester.findMany({
-      where,
-      include: {
-        department: true,
-        _count: {
-          select: {
-            topics: true,
-            groups: true,
-            registrations: true,
+    const [configs, semesters] = await Promise.all([
+      this.prisma.systemConfig.findMany({
+        where: { key: 'SEMESTER_TIMELINE_STEP' },
+      }),
+      this.prisma.semester.findMany({
+        where,
+        include: {
+          department: true,
+          _count: {
+            select: {
+              topics: true,
+              groups: true,
+              registrations: true,
+              reports: true,
+              defenses: true,
+            },
           },
         },
-      },
-      orderBy: [{ createdAt: 'desc' }],
-    });
+        orderBy: [{ createdAt: 'desc' }],
+      }),
+    ]);
 
-    return semesters.map((sem) => this.formatSemester(sem));
+    const stepMap = new Map<string, number>();
+    for (const c of configs) {
+      if (c.semesterId && c.value) {
+        stepMap.set(c.semesterId, Number(c.value));
+      }
+    }
+
+    return semesters.map((sem) => this.formatSemester(sem, stepMap.get(sem.id)));
   }
 
   /**
    * Lấy chi tiết đợt KLTN theo ID (GET /semesters/:id)
    */
   async findById(id: string) {
-    const semester = await this.prisma.semester.findUnique({
-      where: { id },
-      include: {
-        department: true,
-        _count: {
-          select: {
-            topics: true,
-            groups: true,
-            registrations: true,
-            reports: true,
-            defenses: true,
+    const [semester, stepConfig] = await Promise.all([
+      this.prisma.semester.findUnique({
+        where: { id },
+        include: {
+          department: true,
+          _count: {
+            select: {
+              topics: true,
+              groups: true,
+              registrations: true,
+              reports: true,
+              defenses: true,
+            },
           },
         },
-      },
-    });
+      }),
+      this.prisma.systemConfig.findFirst({
+        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+      }),
+    ]);
 
     if (!semester) {
       throw new NotFoundException(`Không tìm thấy đợt KLTN với ID: ${id}`);
     }
 
-    return this.formatSemester(semester);
+    const customStep = stepConfig?.value ? Number(stepConfig.value) : undefined;
+    return this.formatSemester(semester, customStep);
   }
 
   /**
@@ -445,7 +590,86 @@ export class SemestersService {
       include: { department: true },
     });
 
-    return this.formatSemester(updated);
+    // Cập nhật cấu hình bước lộ trình nếu có truyền vào
+    const targetStep = (dto as any).currentStep ?? (dto as any).giaiDoanHienTai;
+    let savedStep: number | undefined;
+    if (targetStep !== undefined && targetStep !== null) {
+      const stepVal = Number(targetStep);
+      if (stepVal >= 1 && stepVal <= 5) {
+        savedStep = stepVal;
+        const existingConfig = await this.prisma.systemConfig.findFirst({
+          where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+        });
+        if (existingConfig) {
+          await this.prisma.systemConfig.update({
+            where: { id: existingConfig.id },
+            data: { value: String(stepVal) },
+          });
+        } else {
+          await this.prisma.systemConfig.create({
+            data: {
+              key: 'SEMESTER_TIMELINE_STEP',
+              semesterId: id,
+              value: String(stepVal),
+              description: 'Giai đoạn lộ trình hiện tại của đợt KLTN',
+            },
+          });
+        }
+      } else if (stepVal === 0) {
+        // 0 nghĩa là xóa ghi đè thủ công để hệ thống tự động tính theo tiến độ
+        await this.prisma.systemConfig.deleteMany({
+          where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+        });
+      }
+    } else {
+      const stepConfig = await this.prisma.systemConfig.findFirst({
+        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+      });
+      if (stepConfig?.value) savedStep = Number(stepConfig.value);
+    }
+
+    return this.formatSemester(updated, savedStep);
+  }
+
+  /**
+   * Cập nhật / Đồng bộ giai đoạn lộ trình đợt KLTN (1 - 5 hoặc tự động)
+   */
+  async setTimelineStep(id: string, step?: number, autoSync?: boolean) {
+    const semester = await this.prisma.semester.findUnique({ where: { id } });
+    if (!semester) {
+      throw new NotFoundException(`Không tìm thấy đợt KLTN với ID: ${id}`);
+    }
+
+    if (autoSync || step === 0 || step === undefined) {
+      await this.prisma.systemConfig.deleteMany({
+        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+      });
+    } else {
+      const stepVal = Number(step);
+      if (stepVal < 1 || stepVal > 5) {
+        throw new BadRequestException('Bước lộ trình phải nằm trong khoảng từ 1 đến 5');
+      }
+      const existingConfig = await this.prisma.systemConfig.findFirst({
+        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+      });
+      if (existingConfig) {
+        await this.prisma.systemConfig.update({
+          where: { id: existingConfig.id },
+          data: { value: String(stepVal) },
+        });
+      } else {
+        await this.prisma.systemConfig.create({
+          data: {
+            key: 'SEMESTER_TIMELINE_STEP',
+            semesterId: id,
+            value: String(stepVal),
+            description: 'Giai đoạn lộ trình hiện tại của đợt KLTN',
+          },
+        });
+      }
+    }
+
+    return this.findById(id);
   }
 
   /**
@@ -787,6 +1011,207 @@ export class SemestersService {
         );
       }
     }
+  }
+
+  /**
+   * Đặt lại toàn bộ dữ liệu về trạng thái "Mới mở học kỳ" (Bước 1/5: Đăng ký đề tài)
+   * Xóa sạch các nhóm, đăng ký, bài nộp, đánh giá giữa kỳ, phản biện, hội đồng và điểm số cũ.
+   */
+  async resetToNewSemesterState(targetSemesterId?: string) {
+    const now = new Date();
+    const regFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Mở từ hôm qua
+    const regTo = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // Hạn đăng ký: +30 ngày
+    const subTo = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // Hạn nộp báo cáo: +60 ngày
+    const defFrom = new Date(now.getTime() + 75 * 24 * 60 * 60 * 1000); // Bảo vệ từ: +75 ngày
+    const defTo = new Date(now.getTime() + 85 * 24 * 60 * 60 * 1000); // Bảo vệ đến: +85 ngày
+
+    // 1. Xóa sạch dữ liệu giao dịch phát sinh theo đúng thứ tự khóa ngoại
+    await this.prisma.$transaction([
+      this.prisma.score.deleteMany({}),
+      this.prisma.defenseSchedule.deleteMany({}),
+      this.prisma.defenseCommitteeMember.deleteMany({}),
+      this.prisma.defenseCommittee.deleteMany({}),
+      this.prisma.reviewerAssignment.deleteMany({}),
+      this.prisma.feedback.deleteMany({}),
+      this.prisma.submission.deleteMany({}),
+      this.prisma.progressReport.deleteMany({}),
+      this.prisma.appointment.deleteMany({}),
+      this.prisma.chatMessage.deleteMany({}),
+      this.prisma.groupMember.deleteMany({}),
+      this.prisma.registration.deleteMany({}),
+      this.prisma.topicProposal.deleteMany({}),
+      this.prisma.group.deleteMany({}),
+      this.prisma.notification.deleteMany({}),
+      this.prisma.auditLog.deleteMany({}),
+    ]);
+
+    // 2. Xác định hoặc khởi tạo học kỳ chính thức đang mở
+    let semester = targetSemesterId
+      ? await this.prisma.semester.findUnique({ where: { id: targetSemesterId } })
+      : await this.prisma.semester.findFirst({
+          where: { NOT: { code: { startsWith: 'SEM_DEF_' } } },
+          orderBy: { createdAt: 'desc' },
+        });
+
+    const dept = await this.prisma.department.findFirst({
+      where: { code: { in: ['CNTT', 'IS'] } },
+    });
+
+    if (semester) {
+      semester = await this.prisma.semester.update({
+        where: { id: semester.id },
+        data: {
+          status: SemesterStatus.OPEN,
+          registrationFrom: regFrom,
+          registrationTo: regTo,
+          submissionTo: subTo,
+          defenseFrom: defFrom,
+          defenseTo: defTo,
+        },
+      });
+    } else if (dept) {
+      semester = await this.prisma.semester.create({
+        data: {
+          code: '2026-KLTN-1',
+          name: 'Đợt KLTN học kỳ 1 năm 2026',
+          academicYear: '2026-2027',
+          departmentId: dept.id,
+          status: SemesterStatus.OPEN,
+          registrationFrom: regFrom,
+          registrationTo: regTo,
+          submissionTo: subTo,
+          defenseFrom: defFrom,
+          defenseTo: defTo,
+        },
+      });
+    }
+
+    if (semester) {
+      // Đóng các học kỳ phụ khác nếu có
+      await this.prisma.semester.updateMany({
+        where: { id: { not: semester.id } },
+        data: { status: SemesterStatus.CLOSED },
+      });
+
+      // 3. Xóa các đề tài rác sinh ra từ quá trình chạy test tự động (nếu có) và đặt lại 88 đề tài chuẩn về ngành IS
+      const isDept = await this.prisma.department.findUnique({ where: { code: 'IS' } });
+      await this.prisma.topic.deleteMany({
+        where: {
+          OR: [
+            { title: { contains: 'Chuỗi cung ứng' } },
+            { owner: { email: { startsWith: 'gv.' } } },
+          ],
+        },
+      });
+      await this.prisma.topic.updateMany({
+        data: {
+          semesterId: semester.id,
+          ...(isDept ? { departmentId: isDept.id } : {}),
+          status: 'APPROVED',
+          isHidden: false,
+          reviewerId: null,
+          rejectionReason: null,
+        },
+      });
+
+      // 4. Đặt lại hạn mức hướng dẫn của tất cả Giảng viên về mặc định 5 nhóm (đã nhận 0/5)
+      await this.prisma.lecturerProfile.updateMany({
+        data: { maxGroups: 5 },
+      });
+      const allLecturers = await this.prisma.lecturerProfile.findMany();
+      for (const lec of allLecturers) {
+        await this.prisma.lecturerQuota.upsert({
+          where: {
+            lecturerId_semesterId: {
+              lecturerId: lec.id,
+              semesterId: semester.id,
+            },
+          },
+          update: { maxGroups: 5 },
+          create: {
+            lecturerId: lec.id,
+            semesterId: semester.id,
+            maxGroups: 5,
+          },
+        });
+      }
+
+      // 5. Đặt lại bước lộ trình học kỳ về Bước 1 (Đăng ký đề tài) & xóa cấu hình hạn mức chung để test từ đầu
+      await this.prisma.systemConfig.deleteMany({
+        where: {
+          OR: [
+            { key: 'SEMESTER_TIMELINE_STEP' },
+            { key: { startsWith: 'SEMESTER_TIMELINE_STEP_' } },
+            { key: 'SEMESTER_DEFAULT_QUOTA' },
+            { key: { startsWith: 'SEMESTER_DEFAULT_QUOTA_' } },
+          ],
+        },
+      });
+      await this.prisma.systemConfig.create({
+        data: {
+          key: `SEMESTER_TIMELINE_STEP_${semester.id}`,
+          value: 1,
+          semesterId: semester.id,
+          departmentId: semester.departmentId,
+          description: 'Bước lộ trình hiện tại của đợt KLTN (Bước 1: Đăng ký đề tài)',
+        },
+      });
+    }
+
+    // 6. Đảm bảo có sẵn các tài khoản Sinh viên test (4 SV đủ điều kiện, 1 SV chưa đủ điều kiện)
+    const studentRole = await this.prisma.role.findUnique({ where: { code: RoleCode.SINH_VIEN } });
+    if (studentRole && dept) {
+      const passwordHash = await bcrypt.hash('Password@123', 12);
+      const testStudents = [
+        { email: 'sinhvien@kltn.edu.vn', fullName: 'Nguyễn Minh Sinh', code: 'SV2026001', eligible: true, credits: 125, gpa: 3.45 },
+        { email: 'sinhvien2@kltn.edu.vn', fullName: 'Trần Thị Mai', code: 'SV2026002', eligible: true, credits: 120, gpa: 3.20 },
+        { email: 'sinhvien3@kltn.edu.vn', fullName: 'Lê Hoàng Nam', code: 'SV2026003', eligible: true, credits: 118, gpa: 3.10 },
+        { email: 'sinhvien4@kltn.edu.vn', fullName: 'Phạm Ngọc Lan', code: 'SV2026004', eligible: true, credits: 115, gpa: 2.95 },
+        { email: 'svchuadk@kltn.edu.vn', fullName: 'Vũ Văn Chưa Đủ ĐK', code: 'SV2026005', eligible: false, credits: 90, gpa: 2.10 },
+      ];
+
+      for (const st of testStudents) {
+        const u = await this.prisma.user.upsert({
+          where: { email: st.email },
+          update: { fullName: st.fullName, status: UserStatus.ACTIVE, passwordHash },
+          create: {
+            email: st.email,
+            fullName: st.fullName,
+            passwordHash,
+            status: UserStatus.ACTIVE,
+          },
+        });
+        await this.prisma.userRole.upsert({
+          where: { userId_roleId: { userId: u.id, roleId: studentRole.id } },
+          update: {},
+          create: { userId: u.id, roleId: studentRole.id },
+        });
+        await this.prisma.studentProfile.upsert({
+          where: { userId: u.id },
+          update: {
+            studentCode: st.code,
+            eligible: st.eligible,
+            creditsEarned: st.credits,
+            gpa: st.gpa,
+          },
+          create: {
+            userId: u.id,
+            studentCode: st.code,
+            className: 'CNTT K2026',
+            cohort: 2026,
+            departmentId: dept.id,
+            creditsEarned: st.credits,
+            gpa: st.gpa,
+            eligible: st.eligible,
+          },
+        });
+      }
+    }
+
+    return {
+      message: 'Đã đặt lại toàn bộ dữ liệu về trạng thái Mới mở học kỳ (Bước 1/5: Đăng ký đề tài) thành công!',
+      semester: semester ? this.formatSemester(semester, 1) : null,
+    };
   }
 }
 

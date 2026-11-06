@@ -102,7 +102,7 @@ export class TopicsController {
 
   @ApiOperation({ summary: 'Xem danh sách sinh viên đăng ký đề tài kèm thông tin liên lạc' })
   @Get(':id/registrations')
-  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.SINH_VIEN)
   getRegistrations(@Param('id') id: string, @CurrentUser() user: { id: string }) {
     return this.service.getRegistrations(user.id, id);
   }

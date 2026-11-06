@@ -116,7 +116,7 @@ export class EvidenceService {
 
     if (requestedPoints !== undefined && requestedPoints !== null && !isNaN(Number(requestedPoints))) {
       points = Math.min(Number(requestedPoints), maxAllowed);
-      matchedRule = 'Chỉ định trực tiếp bởi Trưởng bộ môn';
+      matchedRule = 'Chỉ định trực tiếp bởi Quản lý bộ môn';
     } else {
       // Tự động phân tích tiêu đề và mô tả minh chứng theo các từ khóa quy định
       const textToAnalyze = stripVietnameseDiacritics(
@@ -261,7 +261,7 @@ export class EvidenceService {
       await this.notifications.create({
         userId: evidence.userId,
         title: 'Minh chứng NCKH đã được DUYỆT',
-        content: `Trưởng bộ môn đã duyệt minh chứng NCKH "${evidence.title}". Bạn được cộng +${bonusCalc.points} điểm thưởng vào kết quả KLTN.`,
+        content: `Quản lý bộ môn đã duyệt minh chứng NCKH "${evidence.title}". Bạn được cộng +${bonusCalc.points} điểm thưởng vào kết quả KLTN.`,
         type: 'SCORE',
         data: {
           evidenceId: id,
@@ -407,7 +407,7 @@ export class EvidenceService {
       await this.notifications.create({
         userId: evidence.userId,
         title: 'Yêu cầu bổ sung minh chứng NCKH',
-        content: `Trưởng bộ môn yêu cầu bổ sung thông tin cho minh chứng NCKH "${evidence.title}". Nội dung: ${note}`,
+        content: `Quản lý bộ môn yêu cầu bổ sung thông tin cho minh chứng NCKH "${evidence.title}". Nội dung: ${note}`,
         type: 'SCORE',
         data: {
           evidenceId: id,

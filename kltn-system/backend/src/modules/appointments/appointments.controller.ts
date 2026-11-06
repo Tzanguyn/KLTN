@@ -58,7 +58,7 @@ export class AppointmentsController {
   })
   @ApiResponse({ status: 201, description: 'Tạo lịch hẹn thành công' })
   @Post()
-  @Roles(RoleCode.SINH_VIEN, RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
   create(@CurrentUser() user: { id: string }, @Body() dto: CreateAppointmentDto) {
     return this.service.create(user.id, dto);
   }

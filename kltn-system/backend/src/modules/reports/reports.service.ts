@@ -173,10 +173,10 @@ export class ReportsService {
         { header: 'Tên đề tài KLTN', key: 'title', width: 42 },
         { header: 'Sinh viên thực hiện', key: 'students', width: 32 },
         { header: 'Cán bộ Hướng dẫn', key: 'gvhd', width: 24 },
-        { header: 'Điểm GVHD (30%)', key: 'scoreGvhd', width: 18 },
+        { header: 'Điểm GVHD', key: 'scoreGvhd', width: 18 },
         { header: 'Cán bộ Phản biện', key: 'gvpb', width: 24 },
-        { header: 'Điểm GVPB (30%)', key: 'scoreGvpb', width: 18 },
-        { header: 'Điểm Hội đồng (40%)', key: 'scoreCouncil', width: 20 },
+        { header: 'Điểm GVPB', key: 'scoreGvpb', width: 18 },
+        { header: 'Điểm Hội đồng', key: 'scoreCouncil', width: 20 },
         { header: 'Thưởng NCKH', key: 'bonus', width: 16 },
         { header: 'Điểm Tổng kết', key: 'finalScore', width: 18 },
         { header: 'Xếp loại', key: 'rating', width: 16 },
@@ -554,12 +554,12 @@ export class ReportsService {
           const bonusScore = scoreItem?.scores?.bonusPoints > 0 ? `+${scoreItem.scores.bonusPoints}đ` : '0.0';
 
           const rows = [
-            { stt: '1', name: 'Điểm Cán bộ Hướng dẫn (GVHD)', weight: '30%', scorer: advisorName, score: gvhdScore },
-            { stt: '2', name: 'Điểm Cán bộ Phản biện (GVPB)', weight: '30%', scorer: reviewerName, score: gvpbScore },
+            { stt: '1', name: 'Điểm Cán bộ Hướng dẫn (GVHD)', weight: 'Trung bình', scorer: advisorName, score: gvhdScore },
+            { stt: '2', name: 'Điểm Cán bộ Phản biện (GVPB)', weight: 'Trung bình', scorer: reviewerName, score: gvpbScore },
             {
               stt: '3',
               name: 'Điểm Hội đồng Bảo vệ KLTN',
-              weight: '40%',
+              weight: 'Trung bình',
               scorer: scoreItem?.defenseSchedule?.committee?.name || 'Hội đồng chấm',
               score: councilScore,
             },

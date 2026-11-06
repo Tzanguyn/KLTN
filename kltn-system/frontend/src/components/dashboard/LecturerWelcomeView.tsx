@@ -30,21 +30,39 @@ interface LecturerWelcomeViewProps {
 
 export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavigate, workspaceData }) => {
   const { user } = useAuthStore();
-  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [dashboardData, setDashboardData] = useState<any>(workspaceData?.dashboardData || null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        setLoading(true);
-        const res = await api.get('/dashboard');
-        setDashboardData(res.data?.data ?? res.data);
-      } catch {
-        // fallback to workspaceData
-      } finally {
-        setLoading(false);
+    if (workspaceData?.dashboardData) {
+      setDashboardData((prev: any) => ({
+        ...(prev || {}),
+        ...workspaceData.dashboardData,
+        semester: workspaceData.dashboardData.semester || prev?.semester,
+      }));
+    }
+  }, [workspaceData?.dashboardData]);
+
+  const fetchDashboard = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/dashboard?role=GIANG_VIEN');
+      const d = res.data?.data ?? res.data;
+      if (d) {
+        setDashboardData((prev: any) => ({
+          ...(prev || {}),
+          ...d,
+          semester: d.semester || prev?.semester,
+        }));
       }
-    };
+    } catch {
+      // fallback to workspaceData
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchDashboard();
   }, []);
 
@@ -56,6 +74,7 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
   const title = user?.lecturerProfile?.title || 'ThS.';
   const fullName = user?.fullName || dashboardData?.user?.fullName || 'Giảng viên';
   const specialization = user?.lecturerProfile?.specialization || 'Công nghệ thông tin';
+  const isHeadUser = user?.roles?.includes('TRUONG_BO_MON') || user?.role === 'TRUONG_BO_MON';
 
   const maxGroups = dashboardData?.summary?.maxGuidingGroups ?? user?.lecturerProfile?.maxGroups ?? 5;
   const guidedCount =
@@ -91,7 +110,7 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
   return (
     <div className="space-y-6">
       {/* 1. HERO BANNER CHÀO MỪNG */}
-      <div className="bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-8 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
@@ -99,7 +118,11 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
               <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
               <span>Cổng Giảng dạy & Hướng dẫn Khóa luận Tốt nghiệp</span>
               <span>•</span>
-              <span>Học kỳ 1 (2026-2027)</span>
+              <span>
+                {dashboardData?.semester?.name
+                  ? `${dashboardData.semester.name}${dashboardData.semester.academicYear ? ` (${dashboardData.semester.academicYear})` : ''}`
+                  : 'Học kỳ 1 (2026-2027)'}
+              </span>
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
@@ -122,7 +145,7 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
           </div>
 
           {/* Quota Tracker Box */}
-          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-5 rounded-2xl flex flex-col gap-2 min-w-[240px]">
+          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-4 sm:p-5 rounded-2xl flex flex-col gap-2 w-full sm:w-auto sm:min-w-[240px]">
             <span className="text-xs text-emerald-200 uppercase tracking-wider font-semibold">
               Hạn mức nhóm hướng dẫn
             </span>
@@ -368,7 +391,14 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
       </div>
 
       {/* 5. LỘ TRÌNH KLTN 5 BƯỚC */}
-      <WelcomeTimeline currentStep={3} />
+      <WelcomeTimeline
+        currentStep={dashboardData?.semester?.currentStep}
+        semesterInfo={dashboardData?.semester}
+        role="GIANG_VIEN"
+        canManageTimeline={isHeadUser}
+        onTimelineStepChange={fetchDashboard}
+        onNavigate={onNavigate}
+      />
     </div>
   );
 };

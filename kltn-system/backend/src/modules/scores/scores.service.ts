@@ -16,73 +16,73 @@ const PDFDocument = require('pdfkit');
 export const DEFAULT_TEN_CRITERIA = [
   {
     code: 'TC01',
-    name: 'Tính cấp thiết và mục tiêu của đề tài',
+    name: 'Phân tích vấn đề và mô hình hóa được yêu cầu của đề tài.',
     weight: 10,
     maxScore: 10,
-    description: 'Xác định rõ ràng bối cảnh, tính thời sự, mục tiêu nghiên cứu và phạm vi giải quyết của đề tài.',
+    description: 'LO 01: Phân tích vấn đề thực tế và mô hình hóa đầy đủ các yêu cầu của đề tài.',
   },
   {
     code: 'TC02',
-    name: 'Khảo sát tài liệu và tổng quan nghiên cứu liên quan',
+    name: 'Áp dụng các nguyên tắc, phương pháp chuyên môn để xác định được giải pháp cho đề tài.',
     weight: 10,
     maxScore: 10,
-    description: 'Thu thập, tổng hợp, phân tích và so sánh các nghiên cứu, giải pháp công nghệ hiện hữu.',
+    description: 'LO 02: Vận dụng cơ sở lý thuyết, nguyên tắc và phương pháp chuyên ngành để đề xuất giải pháp phù hợp.',
   },
   {
     code: 'TC03',
-    name: 'Cơ sở lý thuyết và phương pháp nghiên cứu',
+    name: 'Thiết kế được một hệ thống hoặc quy trình đáp ứng được yêu cầu của đề tài.',
     weight: 10,
     maxScore: 10,
-    description: 'Nắm vững lý thuyết chuyên ngành nền tảng, lựa chọn và áp dụng phương pháp khoa học phù hợp.',
+    description: 'LO 03: Thiết kế kiến trúc hệ thống, cơ sở dữ liệu hoặc quy trình nghiệp vụ đáp ứng yêu cầu.',
   },
   {
     code: 'TC04',
-    name: 'Phân tích yêu cầu và thiết kế kiến trúc hệ thống',
+    name: 'Hiện thực được một hệ thống hoặc quy trình đáp ứng được yêu cầu của đề tài.',
     weight: 10,
     maxScore: 10,
-    description: 'Mô hình hóa yêu cầu, thiết kế cơ sở dữ liệu và cấu trúc giải pháp/kiến trúc phần mềm tối ưu.',
+    description: 'LO 04: Xây dựng, lập trình và hoàn thiện hệ thống hoặc quy trình theo đúng thiết kế.',
   },
   {
     code: 'TC05',
-    name: 'Hiện thực hóa sản phẩm và mức độ hoàn thiện giải pháp',
-    weight: 15,
+    name: 'Đánh giá được một hệ thống, quy trình đáp ứng yêu cầu của đề tài.',
+    weight: 10,
     maxScore: 10,
-    description: 'Mã nguồn được tổ chức tốt, hệ thống vận hành ổn định và hoàn thành đầy đủ tính năng cam kết.',
+    description: 'LO 05: Kiểm thử, thực nghiệm và đánh giá mức độ đáp ứng yêu cầu của hệ thống/quy trình.',
   },
   {
     code: 'TC06',
-    name: 'Thử nghiệm, kiểm thử và đánh giá kết quả',
+    name: 'Thuyết trình hiệu quả trong các lĩnh vực chuyên môn của đề tài.',
     weight: 10,
     maxScore: 10,
-    description: 'Thực hiện kiểm thử chức năng, hiệu năng, phân tích dữ liệu thực nghiệm và đo lường định lượng.',
+    description: 'LO 06: Trình bày rõ ràng, tự tin, hiệu quả nội dung chuyên môn và trả lời câu hỏi phản biện.',
   },
   {
     code: 'TC07',
-    name: 'Tính thực tiễn, tính sáng tạo và khả năng ứng dụng',
+    name: 'Thu thập yêu cầu từ các bên liên quan bằng các kỹ thuật phù hợp.',
     weight: 10,
     maxScore: 10,
-    description: 'Giải quyết được bài toán thực tế, có điểm sáng tạo hoặc tiềm năng phát triển, ứng dụng cao.',
+    description: 'LO 07: Khảo sát, phỏng vấn và thu thập yêu cầu từ các bên liên quan bằng kỹ thuật phù hợp.',
   },
   {
     code: 'TC08',
-    name: 'Bố cục và quy cách trình bày báo cáo khóa luận',
+    name: 'Viết được báo cáo khóa luận tốt nghiệp.',
     weight: 10,
     maxScore: 10,
-    description: 'Báo cáo đúng chuẩn thể thức, văn phong khoa học mạch lạc, sơ đồ bảng biểu và trích dẫn chuẩn.',
+    description: 'LO 08: Soạn thảo quyển báo cáo khóa luận tốt nghiệp đúng chuẩn quy cách, mạch lạc và khoa học.',
   },
   {
     code: 'TC09',
-    name: 'Kỹ năng thuyết trình và tác phong báo cáo',
+    name: 'Chứng tỏ được khả năng làm việc hiệu quả với các thành viên trong nhóm và phối hợp với các bên liên quan.',
     weight: 10,
     maxScore: 10,
-    description: 'Phong thái tự tin, diễn đạt truyền cảm, phân bổ thời gian hợp lý và slide trực quan sinh động.',
+    description: 'LO 09: Phối hợp làm việc nhóm hiệu quả và trao đổi tích cực với GVHD cùng các bên liên quan.',
   },
   {
     code: 'TC10',
-    name: 'Khả năng tranh luận phản biện và trả lời câu hỏi',
-    weight: 5,
+    name: 'Khả năng hỗ trợ triển khai và vận hành hệ thống thông tin.',
+    weight: 10,
     maxScore: 10,
-    description: 'Hiểu sâu bản chất vấn đề, trả lời chính xác, thuyết phục các câu hỏi của hội đồng/người chấm.',
+    description: 'LO 10: Đóng gói, hướng dẫn cài đặt, hỗ trợ triển khai và vận hành hệ thống thông tin.',
   },
 ];
 
@@ -123,6 +123,82 @@ function stripVietnameseDiacritics(str: string): string {
     .replace(/Đ/g, 'D');
 }
 
+export interface ParsedScoreNote {
+  note: string;
+  studentScores: Record<string, number>;
+}
+
+export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
+  if (!rawNote) return { note: '', studentScores: {} };
+  const trimmed = rawNote.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        ('studentScores' in parsed || '__perStudent' in parsed)
+      ) {
+        return {
+          note: typeof parsed.note === 'string' ? parsed.note : '',
+          studentScores:
+            parsed.studentScores && typeof parsed.studentScores === 'object'
+              ? parsed.studentScores
+              : {},
+        };
+      }
+    } catch {
+      // fall through to plain text
+    }
+  }
+  return { note: rawNote, studentScores: {} };
+}
+
+export function serializeScoreNote(
+  note?: string | null,
+  studentScores?: Record<string, number> | null,
+): string | null {
+  const cleanNote = note ? String(note).trim() : '';
+  if (studentScores && Object.keys(studentScores).length > 0) {
+    return JSON.stringify({
+      __perStudent: true,
+      note: cleanNote,
+      studentScores,
+    });
+  }
+  return cleanNote || null;
+}
+
+export function resolveStudentCriterionScore(
+  scoreRow: { value: any; note?: string | null },
+  studentKeys: Array<string | undefined | null>,
+): number {
+  const { studentScores } = parseScoreNote(scoreRow.note);
+  for (const key of studentKeys) {
+    if (
+      key &&
+      studentScores[key] !== undefined &&
+      studentScores[key] !== null &&
+      !isNaN(Number(studentScores[key]))
+    ) {
+      return Number(studentScores[key]);
+    }
+  }
+  return Number(scoreRow.value) || 0;
+}
+
+export function calculateStudentWeightedTotal(
+  scores: Array<{ value: any; note?: string | null }>,
+  studentKeys: Array<string | undefined | null>,
+): number {
+  if (!scores || scores.length === 0) return 0;
+  const total = scores.reduce(
+    (sum, score) => sum + resolveStudentCriterionScore(score, studentKeys),
+    0,
+  );
+  return Number((total / scores.length).toFixed(2));
+}
+
 export function parseAllowedUntil(thoiHan?: string | number | Date): Date {
   const defaultHours = 24;
   if (!thoiHan) {
@@ -157,6 +233,11 @@ export class ScoresService {
    * Tự động khởi tạo / đồng bộ 10 tiêu chí chuẩn KLTN
    */
   async ensureTenCriteria() {
+    await this.prisma.scoreCriterion.updateMany({
+      where: { code: { in: ['CONTENT', 'IMPLEMENTATION', 'PRESENTATION'] } },
+      data: { active: false },
+    });
+
     for (const tc of DEFAULT_TEN_CRITERIA) {
       await this.prisma.scoreCriterion.upsert({
         where: { code: tc.code },
@@ -182,7 +263,7 @@ export class ScoresService {
   async criteria() {
     await this.ensureTenCriteria();
     return this.prisma.scoreCriterion.findMany({
-      where: { active: true },
+      where: { active: true, code: { startsWith: 'TC' } },
       orderBy: { code: 'asc' },
     });
   }
@@ -314,9 +395,9 @@ export class ScoresService {
       }
     }
 
-    // 3. Lấy 10 tiêu chí
+    // 3. Lấy 10 tiêu chí chuẩn (TC01 - TC10)
     const criteriaList = await this.prisma.scoreCriterion.findMany({
-      where: { active: true },
+      where: { active: true, code: { startsWith: 'TC' } },
       orderBy: { code: 'asc' },
     });
 
@@ -351,11 +432,14 @@ export class ScoresService {
       }
     }
 
+    const midtermStatus = group?.midtermStatus ?? 'PENDING';
+    const isMidtermPassed = midtermStatus === 'CONTINUE';
+
     const hasScores = existingScores.length > 0;
     const isOpened = existingScores.some((s) => s.status === 'OPENED' && (!s.unlockedUntil || s.unlockedUntil >= now));
     const isLocked = hasScores && !isOpened && existingScores.some((s) => s.status === 'LOCKED' || s.status === 'SUBMITTED');
     const isDraft = !hasScores || existingScores.some((s) => s.status === 'DRAFT');
-    const canEdit = !isLocked || isOpened || isDraft;
+    const canEdit = isMidtermPassed && (!isLocked || isOpened || isDraft);
 
     // Tính điểm tổng theo trọng số
     const totalScore = this.calculateWeightedTotal(existingScores);
@@ -368,14 +452,39 @@ export class ScoresService {
         })
       : null;
 
-    // Danh sách sinh viên thực hiện
+    // Danh sách sinh viên thực hiện (chấm riêng cho từng sinh viên)
     const students =
-      group?.members?.map((m: any) => ({
-        id: m.student?.user?.id,
-        fullName: m.student?.user?.fullName,
+      group?.members?.map((m: any, idx: number) => ({
+        id: m.student?.user?.id || m.studentId,
+        studentId: m.studentId,
+        userId: m.student?.user?.id,
+        studentCode: m.student?.studentCode || `SV${idx + 1}`,
+        fullName: m.student?.user?.fullName || `Sinh viên ${idx + 1}`,
         email: m.student?.user?.email,
         isLeader: m.isLeader,
       })) ?? [];
+
+    const studentTotals = students.map((st: any) => {
+      const stTotal = hasScores
+        ? calculateStudentWeightedTotal(existingScores, [
+            st.id,
+            st.studentId,
+            st.userId,
+            st.studentCode,
+          ])
+        : 0;
+      return {
+        id: st.id,
+        studentId: st.studentId,
+        userId: st.userId,
+        studentCode: st.studentCode,
+        fullName: st.fullName,
+        isLeader: st.isLeader,
+        totalScore: stTotal,
+        rating: getRatingClassification(stTotal),
+        result: stTotal >= 5.0 ? 'DAT' : 'KHONG_DAT',
+      };
+    });
 
     return {
       topic: {
@@ -387,11 +496,16 @@ export class ScoresService {
               id: group.id,
               code: group.code,
               name: group.name,
+              midtermStatus: group.midtermStatus,
+              midtermNote: group.midtermNote,
+              midtermAt: group.midtermAt,
             }
           : null,
         students,
       },
       role,
+      midtermStatus,
+      isMidtermPassed,
       criteria: criteriaList.map((c, index) => ({
         id: c.id,
         order: index + 1,
@@ -401,16 +515,34 @@ export class ScoresService {
         weight: Number(c.weight),
         maxScore: Number(c.maxScore),
       })),
-      existingScores: existingScores.map((s) => ({
-        id: s.id,
-        criterionId: s.criterionId,
-        criterionCode: s.criterion.code,
-        criterionName: s.criterion.name,
-        value: Number(s.value),
-        note: s.note,
-        status: s.status,
-        unlockedUntil: s.unlockedUntil,
-      })),
+      existingScores: existingScores.map((s) => {
+        const parsed = parseScoreNote(s.note);
+        const resolvedStudentScores: Record<string, number> = { ...parsed.studentScores };
+        for (const st of students) {
+          const val = resolveStudentCriterionScore(s, [
+            st.id,
+            st.studentId,
+            st.userId,
+            st.studentCode,
+          ]);
+          if (st.id) resolvedStudentScores[st.id] = val;
+          if (st.studentId) resolvedStudentScores[st.studentId] = val;
+          if (st.userId) resolvedStudentScores[st.userId] = val;
+          if (st.studentCode) resolvedStudentScores[st.studentCode] = val;
+        }
+        return {
+          id: s.id,
+          criterionId: s.criterionId,
+          criterionCode: s.criterion.code,
+          criterionName: s.criterion.name,
+          value: Number(s.value),
+          note: parsed.note,
+          studentScores: resolvedStudentScores,
+          status: s.status,
+          unlockedUntil: s.unlockedUntil,
+        };
+      }),
+      studentTotals,
       totalScore,
       rating: getRatingClassification(totalScore),
       isDraft,
@@ -428,21 +560,17 @@ export class ScoresService {
             isExpired: unlockRequest.expiresAt ? unlockRequest.expiresAt < now : false,
           }
         : null,
-      formula: 'sum(score_i * weight_i / 100)',
+      formula: 'avg(scores) = sum(score_i) / n',
     };
   }
 
   /**
-   * Tính điểm tổng theo trọng số
+   * Tính điểm tổng (Trung bình cộng các tiêu chí đã chấm)
    */
   calculateWeightedTotal(scores: Array<{ value: any; criterion?: { weight: any } }>): number {
     if (!scores || scores.length === 0) return 0;
-    const total = scores.reduce((sum, score) => {
-      const val = Number(score.value) || 0;
-      const weight = Number(score.criterion?.weight) || 0;
-      return sum + (val * weight) / 100;
-    }, 0);
-    return Number(total.toFixed(2));
+    const total = scores.reduce((sum, score) => sum + (Number(score.value) || 0), 0);
+    return Number((total / scores.length).toFixed(2));
   }
 
   /**
@@ -487,6 +615,35 @@ export class ScoresService {
         throw new NotFoundException('Không tìm thấy nhóm sinh viên thực hiện đề tài này.');
       }
       groupId = group.id;
+    }
+
+    // Kiểm tra bắt buộc: Nhóm phải được GVHD xác nhận CHO LÀM TIẾP (CONTINUE) ở đánh giá giữa kỳ mới được nhập điểm
+    const targetGroup = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: {
+        topic: true,
+        members: {
+          include: {
+            student: {
+              include: { user: true },
+            },
+          },
+          orderBy: { isLeader: 'desc' },
+        },
+      },
+    });
+    if (!targetGroup) {
+      throw new NotFoundException('Không tìm thấy nhóm sinh viên thực hiện đề tài này.');
+    }
+    if (targetGroup.midtermStatus !== 'CONTINUE') {
+      if (targetGroup.midtermStatus === 'STOPPED') {
+        throw new BadRequestException(
+          `Nhóm ${targetGroup.code} đã dừng thực hiện đề tài ở đánh giá giữa kỳ (DỪNG ĐỀ TÀI), không thể tiến hành nhập điểm.`,
+        );
+      }
+      throw new BadRequestException(
+        `Nhóm ${targetGroup.code} chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP). Vui lòng xác nhận đánh giá giữa kỳ trước khi tiến hành nhập điểm.`,
+      );
     }
 
     // 2. Ràng buộc khóa điểm & thời hạn mở khóa: Nếu điểm đã khóa và chưa được mở khóa thì cấm sửa
@@ -539,8 +696,9 @@ export class ScoresService {
 
     const isDraft = dto.isDraft ?? false;
     const targetStatus = isDraft ? 'DRAFT' : 'LOCKED';
+    const groupMembers = targetGroup.members || [];
 
-    // 4. Lưu từng tiêu chí
+    // 4. Lưu từng tiêu chí (hỗ trợ chấm riêng cho từng sinh viên trong nhóm)
     const updatedScores: any[] = [];
 
     for (const item of dto.scores) {
@@ -558,9 +716,57 @@ export class ScoresService {
 
       if (!criterion) continue;
 
-      const rawVal = item.score ?? item.value ?? item.diem ?? 0;
-      const numVal = Math.min(Math.max(Number(rawVal) || 0, 0), Number(criterion.maxScore));
-      const note = item.note || dto.generalComment || undefined;
+      const maxVal = Number(criterion.maxScore) || 10;
+      const clampScore = (v: any) => Math.min(Math.max(Number(v) || 0, 0), maxVal);
+
+      const studentScoresMap: Record<string, number> = {};
+      const memberScoreValues: number[] = [];
+
+      if (item.studentScores && typeof item.studentScores === 'object' && Object.keys(item.studentScores).length > 0) {
+        // Lưu toàn bộ key do client gửi lên
+        for (const [k, v] of Object.entries(item.studentScores)) {
+          if (v !== undefined && v !== null && String(v).trim() !== '') {
+            studentScoresMap[k] = Number(clampScore(v).toFixed(2));
+          }
+        }
+        // Đồng bộ tất cả định danh (userId, studentId, studentCode) cho từng thành viên trong nhóm
+        for (const m of groupMembers) {
+          const uId = m.student?.user?.id;
+          const sId = m.studentId;
+          const sCode = m.student?.studentCode;
+          const matchedVal =
+            (uId && studentScoresMap[uId] !== undefined ? studentScoresMap[uId] : undefined) ??
+            (sId && studentScoresMap[sId] !== undefined ? studentScoresMap[sId] : undefined) ??
+            (sCode && studentScoresMap[sCode] !== undefined ? studentScoresMap[sCode] : undefined);
+
+          if (matchedVal !== undefined) {
+            if (uId) studentScoresMap[uId] = matchedVal;
+            if (sId) studentScoresMap[sId] = matchedVal;
+            if (sCode) studentScoresMap[sCode] = matchedVal;
+            memberScoreValues.push(matchedVal);
+          }
+        }
+      }
+
+      const rawVal = item.score ?? item.value ?? item.diem;
+      let numVal = 0;
+      if (memberScoreValues.length > 0) {
+        const sumMemberScores = memberScoreValues.reduce((acc, v) => acc + v, 0);
+        numVal = Number((sumMemberScores / memberScoreValues.length).toFixed(2));
+      } else if (Object.keys(studentScoresMap).length > 0) {
+        const vals = Object.values(studentScoresMap);
+        numVal = Number((vals.reduce((acc, v) => acc + v, 0) / vals.length).toFixed(2));
+      } else {
+        numVal = Number(clampScore(rawVal ?? 0).toFixed(2));
+        for (const m of groupMembers) {
+          if (m.student?.user?.id) studentScoresMap[m.student.user.id] = numVal;
+          if (m.studentId) studentScoresMap[m.studentId] = numVal;
+          if (m.student?.studentCode) studentScoresMap[m.student.studentCode] = numVal;
+        }
+      }
+
+      const cleanNote = item.note || dto.generalComment || '';
+      const serializedNote = serializeScoreNote(cleanNote, studentScoresMap);
 
       const existingOne = existingScores.find((s) => s.criterionId === criterion.id);
 
@@ -574,14 +780,14 @@ export class ScoresService {
         },
         update: {
           value: numVal,
-          note,
+          note: serializedNote,
           status: targetStatus,
           history: {
             create: {
               oldValue: existingOne?.value,
               newValue: numVal,
               changedBy: userId,
-              reason: note || (isDraft ? 'Cập nhật bản nháp' : 'Chấm điểm chính thức'),
+              reason: cleanNote || (isDraft ? 'Cập nhật bản nháp' : 'Chấm điểm chính thức'),
             },
           },
         },
@@ -590,7 +796,7 @@ export class ScoresService {
           criterionId: criterion.id,
           scorerId: userId,
           value: numVal,
-          note,
+          note: serializedNote,
           status: targetStatus,
         },
         include: { criterion: true },
@@ -599,7 +805,7 @@ export class ScoresService {
       updatedScores.push(saved);
     }
 
-    // 5. Tính điểm tổng theo trọng số
+    // 5. Tính điểm tổng theo từng sinh viên & điểm trung bình nhóm
     const allScorerScores = await this.prisma.score.findMany({
       where: { groupId, scorerId: userId },
       include: { criterion: true },
@@ -608,56 +814,71 @@ export class ScoresService {
     const scoresToCalculate = tcScores.length > 0 ? tcScores : allScorerScores;
     const totalScore = this.calculateWeightedTotal(scoresToCalculate);
 
-    // 6. Nếu điểm chính thức (không phải nháp): thông báo cho sinh viên trong nhóm
-    if (!isDraft) {
-      const groupInfo = await this.prisma.group.findUnique({
-        where: { id: groupId },
-        include: {
-          topic: true,
-          members: { include: { student: { include: { user: true } } } },
-        },
-      });
+    const studentTotals = groupMembers.map((m, idx) => {
+      const uId = m.student?.user?.id;
+      const sId = m.studentId;
+      const sCode = m.student?.studentCode || `SV${idx + 1}`;
+      const stTotal = calculateStudentWeightedTotal(scoresToCalculate, [uId, sId, sCode]);
+      return {
+        id: uId || sId,
+        studentId: sId,
+        userId: uId,
+        studentCode: sCode,
+        fullName: m.student?.user?.fullName || `Sinh viên ${idx + 1}`,
+        isLeader: m.isLeader,
+        totalScore: stTotal,
+        rating: getRatingClassification(stTotal),
+        result: stTotal >= 5.0 ? 'DAT' : 'KHONG_DAT',
+      };
+    });
 
-      if (groupInfo?.members) {
-        const topicTitle = groupInfo.topic?.title || groupInfo.name;
-        for (const member of groupInfo.members) {
-          const studentUserId = member.student?.user?.id;
-          if (studentUserId) {
-            await this.notifications.create({
-              userId: studentUserId,
-              title: 'Kết quả đánh giá KLTN đã được hoàn tất & khóa điểm',
-              content: `Đề tài "${topicTitle}" đã được cán bộ đánh giá (${dto.role || 'Giảng viên'}) nhập điểm chính thức. Tổng điểm: ${totalScore}/10 (${getRatingClassification(totalScore)}).`,
-              type: 'SCORE',
-              data: {
-                groupId,
-                topicId: groupInfo.topicId,
-                totalScore,
-                role: dto.role,
-              },
-              sendEmail: true,
-            });
-          }
+    // 6. Nếu điểm chính thức (không phải nháp): thông báo riêng điểm cho từng sinh viên trong nhóm
+    if (!isDraft) {
+      const topicTitle = targetGroup.topic?.title || targetGroup.name;
+      for (const st of studentTotals) {
+        if (st.userId) {
+          await this.notifications.create({
+            userId: st.userId,
+            title: 'Kết quả đánh giá KLTN đã được hoàn tất & khóa điểm',
+            content: `Đề tài "${topicTitle}" đã được cán bộ đánh giá (${dto.role || 'Giảng viên'}) nhập điểm chính thức cho sinh viên ${st.fullName} (${st.studentCode}). Điểm trung bình: ${st.totalScore}/10 (${st.rating} - ${st.result === 'DAT' ? 'Đạt' : 'Không đạt'}).`,
+            type: 'SCORE',
+            data: {
+              groupId,
+              topicId: targetGroup.topicId,
+              totalScore: st.totalScore,
+              rating: st.rating,
+              result: st.result,
+              role: dto.role,
+            },
+            sendEmail: true,
+          });
         }
       }
     }
 
     return {
       message: isDraft
-        ? 'Đã lưu bản nháp điểm thành công. Bạn có thể tiếp tục chỉnh sửa.'
-        : 'Đã hoàn tất nhập điểm và khóa điểm chính thức.',
+        ? 'Đã lưu bản nháp điểm cho từng sinh viên thành công. Bạn có thể tiếp tục chỉnh sửa.'
+        : 'Đã hoàn tất nhập điểm từng sinh viên và khóa điểm chính thức.',
       totalScore,
       rating: getRatingClassification(totalScore),
+      studentTotals,
       isDraft,
       isLocked: !isDraft,
       scoresCount: updatedScores.length,
-      scores: updatedScores.map((s) => ({
-        criterionId: s.criterionId,
-        criterionCode: s.criterion.code,
-        name: s.criterion.name,
-        weight: Number(s.criterion.weight),
-        value: Number(s.value),
-        status: s.status,
-      })),
+      scores: updatedScores.map((s) => {
+        const parsed = parseScoreNote(s.note);
+        return {
+          criterionId: s.criterionId,
+          criterionCode: s.criterion.code,
+          name: s.criterion.name,
+          weight: Number(s.criterion.weight),
+          value: Number(s.value),
+          note: parsed.note,
+          studentScores: parsed.studentScores,
+          status: s.status,
+        };
+      }),
     };
   }
 
@@ -683,6 +904,13 @@ export class ScoresService {
       include: { topic: true },
     });
     if (!group) throw new NotFoundException('Không tìm thấy nhóm đề tài');
+    if (group.midtermStatus !== 'CONTINUE') {
+      throw new BadRequestException(
+        group.midtermStatus === 'STOPPED'
+          ? 'Nhóm đã dừng thực hiện đề tài ở giữa kỳ, không thể yêu cầu mở khóa điểm.'
+          : 'Nhóm chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP), chưa mở giai đoạn chấm điểm.',
+      );
+    }
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
 
@@ -769,6 +997,19 @@ export class ScoresService {
   async upsert(userId: string, dto: ScoreDto) {
     const criterion = await this.prisma.scoreCriterion.findUnique({ where: { id: dto.criterionId } });
     if (!criterion) throw new NotFoundException('Không tìm thấy tiêu chí');
+
+    const targetGroup = await this.prisma.group.findUnique({
+      where: { id: dto.groupId },
+      select: { id: true, code: true, midtermStatus: true },
+    });
+    if (!targetGroup) throw new NotFoundException('Không tìm thấy nhóm đề tài');
+    if (targetGroup.midtermStatus !== 'CONTINUE') {
+      throw new BadRequestException(
+        targetGroup.midtermStatus === 'STOPPED'
+          ? `Nhóm ${targetGroup.code} đã dừng đề tài ở giữa kỳ, không thể nhập điểm.`
+          : `Nhóm ${targetGroup.code} chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP). Vui lòng xác nhận giữa kỳ trước khi nhập điểm.`,
+      );
+    }
 
     const existing = await this.prisma.score.findUnique({
       where: {
@@ -883,7 +1124,7 @@ export class ScoresService {
       },
     });
     if (!request) throw new NotFoundException('Không tìm thấy yêu cầu mở khóa điểm');
-    if (request.status !== 'PENDING') {
+    if (request.status !== 'PENDING' && request.status !== 'APPROVED') {
       throw new BadRequestException(`Yêu cầu này đã được xử lý trước đó với trạng thái: ${request.status}`);
     }
 
@@ -906,7 +1147,7 @@ export class ScoresService {
         where: {
           groupId: request.groupId,
           scorerId: request.requesterId,
-          status: { in: ['LOCKED', 'SUBMITTED'] },
+          status: { in: ['LOCKED', 'SUBMITTED', 'OPENED'] },
         },
         data: {
           status: 'OPENED',
@@ -919,7 +1160,7 @@ export class ScoresService {
         updatedScores = await tx.score.updateMany({
           where: {
             groupId: request.groupId,
-            status: { in: ['LOCKED', 'SUBMITTED'] },
+            status: { in: ['LOCKED', 'SUBMITTED', 'OPENED'] },
           },
           data: {
             status: 'OPENED',
@@ -1068,8 +1309,64 @@ export class ScoresService {
     }
   }
 
-  unlock(groupId: string) {
-    return this.prisma.score.updateMany({ where: { groupId, status: 'LOCKED' }, data: { status: 'OPENED' } });
+  async unlock(groupId: string, hours?: number, reason?: string, reviewerId?: string) {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      select: { id: true, code: true, midtermStatus: true },
+    });
+    if (!group) throw new NotFoundException('Không tìm thấy nhóm đề tài');
+    if (group.midtermStatus !== 'CONTINUE') {
+      throw new BadRequestException(
+        group.midtermStatus === 'STOPPED'
+          ? `Nhóm ${group.code} đã dừng đề tài ở giữa kỳ, không thể mở khóa điểm.`
+          : `Nhóm ${group.code} chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP), chưa mở giai đoạn nhập điểm.`,
+      );
+    }
+
+    const expiresAt = hours && hours > 0
+      ? new Date(Date.now() + hours * 3600 * 1000)
+      : new Date(Date.now() + 24 * 3600 * 1000); // Mặc định 24h
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.score.updateMany({
+        where: { groupId, status: { in: ['LOCKED', 'SUBMITTED', 'OPENED'] } },
+        data: {
+          status: 'OPENED',
+          unlockedUntil: expiresAt,
+        },
+      });
+
+      // Nếu có yêu cầu mở khóa PENDING nào cho nhóm này, cũng tự động APPROVE luôn
+      await tx.scoreChangeRequest.updateMany({
+        where: { groupId, status: 'PENDING' },
+        data: {
+          status: 'APPROVED',
+          reviewedBy: reviewerId,
+          reviewedAt: new Date(),
+          expiresAt,
+        },
+      });
+
+      return {
+        message: 'Đã mở khóa điểm thành công',
+        unlockedCount: updated.count,
+        expiresAt,
+      };
+    });
+  }
+
+  async lock(groupId: string) {
+    const updated = await this.prisma.score.updateMany({
+      where: { groupId, status: 'OPENED' },
+      data: {
+        status: 'LOCKED',
+        unlockedUntil: null,
+      },
+    });
+    return {
+      message: 'Đã khóa điểm thành công',
+      lockedCount: updated.count,
+    };
   }
 
   /**
@@ -1183,91 +1480,167 @@ export class ScoresService {
         doc.font(fontItalic).fontSize(10).text(safeText(`(Dành cho: ${roleLabel})`), 40, 106, { align: 'center' });
 
         // --- PHẦN I: THÔNG TIN CHUNG ---
-        const startY = 125;
+        const startY = 122;
         doc.font(fontBold).fontSize(10).text(safeText('I. THÔNG TIN CHUNG:'), 40, startY);
 
         doc.font(fontRegular).fontSize(9.5);
-        doc.text(safeText(`1. Tên đề tài: ${group.topic?.title || group.name}`), 50, startY + 16, { width: 505 });
-        doc.text(safeText(`2. Mã nhóm / Mã đề tài: ${group.code}`), 50, startY + 34);
+        doc.text(safeText(`1. Tên đề tài: ${group.topic?.title || group.name}`), 50, startY + 15, { width: 505 });
+        doc.text(safeText(`2. Cán bộ hướng dẫn: ${group.topic?.owner?.fullName || 'N/A'}   |   Cán bộ đánh giá: ${scorer?.fullName || '................................'}`), 50, startY + 30);
 
-        const studentList = group.members
-          .map((m, idx) => `${idx + 1}. ${m.student.user.fullName} (MSSV: ${m.student.studentCode || 'N/A'}${m.isLeader ? ' - Trưởng nhóm' : ''})`)
-          .join('   |   ');
-        doc.text(safeText(`3. Sinh viên thực hiện: ${studentList}`), 50, startY + 48, { width: 505 });
+        const groupMembers = group.members || [];
+        const sv1 = groupMembers[0];
+        const sv2 = groupMembers[1];
 
-        doc.text(safeText(`4. Cán bộ hướng dẫn: ${group.topic?.owner?.fullName || 'N/A'}`), 50, startY + 66);
-        doc.text(safeText(`5. Cán bộ đánh giá: ${scorer?.fullName || '................................................'}`), 50, startY + 80);
+        doc.text(
+          safeText(
+            `Họ tên sinh viên 1: ${sv1?.student?.user?.fullName || '........................................'}     Mã số sinh viên: ${sv1?.student?.studentCode || '........................'}`,
+          ),
+          50,
+          startY + 46,
+        );
+        doc.text(
+          safeText(
+            `Họ tên sinh viên 2: ${sv2?.student?.user?.fullName || '........................................'}     Mã số sinh viên: ${sv2?.student?.studentCode || '........................'}`,
+          ),
+          50,
+          startY + 61,
+        );
 
-        // --- PHẦN II: BẢNG 10 TIÊU CHÍ ĐÁNH GIÁ ---
-        const tableTop = startY + 102;
-        doc.font(fontBold).fontSize(10).text(safeText('II. BẢNG ĐIỂM CHI TIẾT 10 TIÊU CHÍ:'), 40, tableTop);
+        // --- PHẦN II: BẢNG 10 TIÊU CHÍ ĐÁNH GIÁ (CHẤM RIÊNG TỪNG SINH VIÊN) ---
+        const tableTop = startY + 80;
+        doc.font(fontBold).fontSize(10).text(safeText('II. BẢNG ĐÁNH GIÁ KẾT QUẢ THỰC HIỆN (LO 01 - LO 10):'), 40, tableTop);
 
         // Kích thước các cột bảng (Tổng chiều rộng: 515)
-        // STT (30) | Nội dung tiêu chí (235) | Trọng số (50) | Điểm TĐ (50) | Điểm chấm (60) | Ghi chú (90)
-        const colX = [40, 70, 305, 355, 405, 465, 555];
-        const rowHeaderY = tableTop + 16;
+        // STT (35) | LO (270) | Sinh viên 1 (70) | Sinh viên 2 (70) | Ghi chú (70)
+        const colX = [40, 75, 345, 415, 485, 555];
+        const rowHeaderY = tableTop + 15;
         const rowHeight = 22;
 
         // Vẽ Header bảng
         doc.rect(colX[0], rowHeaderY, 515, rowHeight).fillAndStroke('#f1f5f9', '#94a3b8');
         doc.fillColor('#0f172a').font(fontBold).fontSize(8.5);
 
-        doc.text(safeText('STT'), colX[0], rowHeaderY + 6, { width: 30, align: 'center' });
-        doc.text(safeText('Nội dung tiêu chí đánh giá'), colX[1] + 5, rowHeaderY + 6, { width: 230, align: 'left' });
-        doc.text(safeText('Trọng số'), colX[2], rowHeaderY + 6, { width: 50, align: 'center' });
-        doc.text(safeText('Điểm TĐ'), colX[3], rowHeaderY + 6, { width: 50, align: 'center' });
-        doc.text(safeText('Điểm chấm'), colX[4], rowHeaderY + 6, { width: 60, align: 'center' });
-        doc.text(safeText('Ghi chú'), colX[5] + 5, rowHeaderY + 6, { width: 85, align: 'left' });
+        doc.text(safeText('STT'), colX[0], rowHeaderY + 6, { width: 35, align: 'center' });
+        doc.text(safeText('LO'), colX[1] + 5, rowHeaderY + 6, { width: 260, align: 'center' });
+        doc.text(safeText('Sinh viên 1'), colX[2], rowHeaderY + 6, { width: 70, align: 'center' });
+        doc.text(safeText('Sinh viên 2'), colX[3], rowHeaderY + 6, { width: 70, align: 'center' });
+        doc.text(safeText('Ghi chú'), colX[4] + 4, rowHeaderY + 6, { width: 65, align: 'center' });
 
         let currentY = rowHeaderY + rowHeight;
         doc.font(fontRegular).fontSize(8);
 
         allCriteria.forEach((tc, idx) => {
           const scoreItem = scores.find((s) => s.criterionId === tc.id || s.criterion?.code === tc.code);
-          const scoreVal = scoreItem ? Number(scoreItem.value).toFixed(1) : '-';
-          const noteText = scoreItem?.note ? safeText(scoreItem.note.substring(0, 30)) : '';
+          const parsedNote = parseScoreNote(scoreItem?.note);
+          const sv1Val =
+            scoreItem && sv1
+              ? resolveStudentCriterionScore(scoreItem, [
+                  sv1.student?.user?.id,
+                  sv1.studentId,
+                  sv1.student?.studentCode,
+                ]).toFixed(1)
+              : scoreItem
+              ? Number(scoreItem.value).toFixed(1)
+              : '-';
+          const sv2Val =
+            scoreItem && sv2
+              ? resolveStudentCriterionScore(scoreItem, [
+                  sv2.student?.user?.id,
+                  sv2.studentId,
+                  sv2.student?.studentCode,
+                ]).toFixed(1)
+              : '-';
+          const noteText = parsedNote.note ? safeText(parsedNote.note.substring(0, 22)) : '';
+          const rowH = tc.name.length > 65 ? 27 : rowHeight;
 
           // Alternate row background
           if (idx % 2 === 1) {
-            doc.rect(colX[0], currentY, 515, rowHeight).fill('#fafafa');
+            doc.rect(colX[0], currentY, 515, rowH).fill('#fafafa');
           }
-          doc.rect(colX[0], currentY, 515, rowHeight).stroke('#cbd5e1');
+          doc.rect(colX[0], currentY, 515, rowH).stroke('#cbd5e1');
 
           doc.fillColor('#1e293b');
           doc.font(fontRegular);
-          doc.text(String(idx + 1), colX[0], currentY + 6, { width: 30, align: 'center' });
-          doc.text(safeText(`${tc.code}: ${tc.name}`), colX[1] + 5, currentY + 6, { width: 230, align: 'left' });
-          doc.text(`${Number(tc.weight)}%`, colX[2], currentY + 6, { width: 50, align: 'center' });
-          doc.text(`${Number(tc.maxScore)}`, colX[3], currentY + 6, { width: 50, align: 'center' });
+          doc.text(String(idx + 1).padStart(2, '0'), colX[0], currentY + 6, { width: 35, align: 'center' });
+          doc.text(safeText(tc.name), colX[1] + 5, currentY + 4, { width: 260, align: 'left' });
 
           doc.font(fontBold).fillColor(scoreItem ? '#047857' : '#94a3b8');
-          doc.text(scoreVal, colX[4], currentY + 6, { width: 60, align: 'center' });
+          doc.text(sv1Val, colX[2], currentY + 6, { width: 70, align: 'center' });
+          doc.text(sv2Val, colX[3], currentY + 6, { width: 70, align: 'center' });
 
           doc.font(fontRegular).fillColor('#475569');
-          doc.text(noteText, colX[5] + 5, currentY + 6, { width: 85, align: 'left' });
+          doc.text(noteText, colX[4] + 4, currentY + 6, { width: 65, align: 'left' });
 
-          currentY += rowHeight;
+          currentY += rowH;
         });
 
+        // Dòng ĐIỂM TRUNG BÌNH trong bảng
+        const sv1Avg = sv1
+          ? calculateStudentWeightedTotal(scores, [
+              sv1.student?.user?.id,
+              sv1.studentId,
+              sv1.student?.studentCode,
+            ])
+          : totalScore;
+        const sv2Avg = sv2
+          ? calculateStudentWeightedTotal(scores, [
+              sv2.student?.user?.id,
+              sv2.studentId,
+              sv2.student?.studentCode,
+            ])
+          : null;
+
+        doc.rect(colX[0], currentY, 515, 22).fillAndStroke('#f8fafc', '#94a3b8');
+        doc.fillColor('#0f172a').font(fontBold).fontSize(9);
+        doc.text(safeText('ĐIỂM TRUNG BÌNH'), colX[0], currentY + 6, { width: 305, align: 'center' });
+        doc.fillColor('#047857').text(scores.length > 0 ? sv1Avg.toFixed(2) : '-', colX[2], currentY + 6, { width: 70, align: 'center' });
+        doc.text(sv2 && scores.length > 0 && sv2Avg !== null ? sv2Avg.toFixed(2) : '-', colX[3], currentY + 6, { width: 70, align: 'center' });
+        currentY += 22;
+
+        // Dòng KẾT QUẢ trong bảng
+        const sv1Pass = sv1Avg >= 5.0;
+        const sv2Pass = sv2Avg !== null && sv2Avg >= 5.0;
+        doc.rect(colX[0], currentY, 515, 26).fillAndStroke('#f8fafc', '#94a3b8');
+        doc.fillColor('#0f172a').font(fontBold).fontSize(9);
+        doc.text(safeText('KẾT QUẢ'), colX[0], currentY + 8, { width: 305, align: 'center' });
+        doc.fontSize(7.5);
+        doc.text(
+          safeText(`[${scores.length > 0 && sv1Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv1Pass ? 'x' : ' '}] Không đạt`),
+          colX[2] + 6,
+          currentY + 4,
+          { width: 60, align: 'left' },
+        );
+        if (sv2) {
+          doc.text(
+            safeText(`[${scores.length > 0 && sv2Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv2Pass ? 'x' : ' '}] Không đạt`),
+            colX[3] + 6,
+            currentY + 4,
+            { width: 60, align: 'left' },
+          );
+        }
+        currentY += 26;
+
         // Vẽ các đường kẻ dọc ngăn cột
-        for (let i = 1; i < colX.length - 1; i++) {
+        doc.moveTo(colX[1], rowHeaderY).lineTo(colX[1], currentY - 48).stroke('#cbd5e1');
+        for (let i = 2; i < colX.length - 1; i++) {
           doc.moveTo(colX[i], rowHeaderY).lineTo(colX[i], currentY).stroke('#cbd5e1');
         }
 
-        // --- PHẦN III: KẾT QUẢ TỔNG HỢP ---
-        const resultY = currentY + 12;
-        doc.rect(40, resultY, 515, 52).fillAndStroke('#f8fafc', '#94a3b8');
-
-        doc.fillColor('#0f172a').font(fontBold).fontSize(9.5);
-        doc.text(safeText('III. KẾT QUẢ ĐÁNH GIÁ TỔNG HỢP:'), 50, resultY + 8);
-
-        doc.font(fontBold).fontSize(10);
-        doc.text(safeText(`TỔNG ĐIỂM (Thang 10):   ${totalScore} / 10`), 50, resultY + 22);
-        doc.font(fontItalic).fontSize(9);
-        doc.text(safeText(`(Bằng chữ: ${totalWords} điểm)`), 230, resultY + 23);
-
-        doc.font(fontBold).fontSize(9.5);
-        doc.text(safeText(`XẾP LOẠI: ${classification.toUpperCase()}`), 50, resultY + 36);
+        // --- PHẦN III: NHẬN XÉT ---
+        const resultY = currentY + 8;
+        const firstCleanComment = scores.map((s) => parseScoreNote(s.note).note).find((n) => n && n.trim().length > 0) || '';
+        doc.fillColor('#0f172a').font(fontRegular).fontSize(9);
+        doc.text(
+          safeText(
+            `Nhận xét: ${
+              firstCleanComment ||
+              '..................................................................................................................................................'
+            }`,
+          ),
+          50,
+          resultY,
+          { width: 495 },
+        );
 
         // --- PHẦN IV: KÝ TÊN XÁC NHẬN ---
         const signY = resultY + 64;
@@ -1328,12 +1701,25 @@ export class ScoresService {
     if (query.groupId) {
       groupWhere.id = query.groupId;
     }
+    const targetLecturerId = query.lecturerId || query.gvhdId;
+    if (targetLecturerId) {
+      groupWhere.topic = {
+        OR: [
+          { ownerId: targetLecturerId },
+          { owner: { lecturerProfile: { id: targetLecturerId } } },
+        ],
+      };
+    }
     if (query.search) {
-      groupWhere.OR = [
+      const searchCond = [
         { code: { contains: query.search, mode: 'insensitive' } },
         { name: { contains: query.search, mode: 'insensitive' } },
         { topic: { title: { contains: query.search, mode: 'insensitive' } } },
+        { topic: { owner: { fullName: { contains: query.search, mode: 'insensitive' } } } },
+        { members: { some: { student: { user: { fullName: { contains: query.search, mode: 'insensitive' } } } } } },
+        { members: { some: { student: { studentCode: { contains: query.search, mode: 'insensitive' } } } } },
       ];
+      groupWhere.AND = [...(groupWhere.AND || []), { OR: searchCond }];
     }
 
     const groups = await this.prisma.group.findMany({
@@ -1549,27 +1935,24 @@ export class ScoresService {
       let diemTongKet: number | null = null;
       let congThucTinh = '';
 
-      if (gvhdTotal !== null && gvpbTotal !== null && councilTotal !== null) {
-        diemTongKet = Number(
-          (gvhdTotal * 0.3 + gvpbTotal * 0.3 + councilTotal * 0.4).toFixed(2),
-        );
-        congThucTinh =
-          'Điểm tổng kết = (Điểm GVHD × 30%) + (Điểm GVPB × 30%) + (Điểm Hội đồng × 40%)';
-      } else if (gvhdTotal !== null && gvpbTotal !== null) {
-        diemTongKet = Number(((gvhdTotal + gvpbTotal) / 2).toFixed(2));
-        congThucTinh = 'Điểm tổng kết = (Điểm GVHD × 50%) + (Điểm GVPB × 50%)';
-      } else if (gvhdTotal !== null && councilTotal !== null) {
-        diemTongKet = Number((gvhdTotal * 0.4 + councilTotal * 0.6).toFixed(2));
-        congThucTinh = 'Điểm tổng kết = (Điểm GVHD × 40%) + (Điểm Hội đồng × 60%)';
-      } else if (councilTotal !== null) {
-        diemTongKet = councilTotal;
-        congThucTinh = 'Điểm tổng kết = Điểm Hội đồng bảo vệ';
-      } else if (gvhdTotal !== null) {
-        diemTongKet = gvhdTotal;
-        congThucTinh = 'Điểm tổng kết = Điểm đánh giá GVHD';
+      const scoreComponents: Array<{ name: string; score: number }> = [];
+      if (gvhdTotal !== null) scoreComponents.push({ name: 'Điểm GVHD', score: gvhdTotal });
+      if (gvpbTotal !== null) scoreComponents.push({ name: 'Điểm GVPB', score: gvpbTotal });
+      if (councilTotal !== null) scoreComponents.push({ name: 'Điểm Hội đồng', score: councilTotal });
+
+      if (scoreComponents.length > 0) {
+        const sum = scoreComponents.reduce((acc, c) => acc + c.score, 0);
+        diemTongKet = Number((sum / scoreComponents.length).toFixed(2));
+
+        if (scoreComponents.length === 1) {
+          congThucTinh = `Điểm tổng kết = ${scoreComponents[0].name}`;
+        } else {
+          const names = scoreComponents.map((c) => c.name).join(' + ');
+          congThucTinh = `Điểm tổng kết = (${names}) / ${scoreComponents.length}`;
+        }
       } else if (g.scores.length > 0) {
         diemTongKet = this.calculateWeightedTotal(g.scores);
-        congThucTinh = 'Điểm tổng kết = Tổng điểm có trọng số các tiêu chí đã chấm';
+        congThucTinh = `Điểm tổng kết = Trung bình cộng ${g.scores.length} tiêu chí đã chấm`;
       } else {
         diemTongKet = null;
         congThucTinh = 'Chưa có điểm đánh giá';
@@ -1584,106 +1967,116 @@ export class ScoresService {
       const ketQua =
         diemTongKet !== null ? (diemTongKet >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA';
 
-      // 6. Cảnh báo khi điểm chưa đầy đủ
+      // 6. Cảnh báo khi điểm chưa đầy đủ (Kiểm tra trạng thái giữa kỳ trước tiên)
       const warnings: string[] = [];
       const missingComponents: string[] = [];
 
-      // Kiểm tra GVHD
-      if (gvhdScores.length === 0) {
-        missingComponents.push('THIEU_DIEM_GVHD');
+      if (g.midtermStatus === 'STOPPED') {
+        missingComponents.push('DA_DUNG_GIUA_KY');
+        warnings.push('Nhóm đã dừng thực hiện đề tài ở đánh giá giữa kỳ (Không thực hiện chấm điểm bảo vệ)');
+      } else if (g.midtermStatus !== 'CONTINUE') {
+        missingComponents.push('CHUA_XAC_NHAN_GIUA_KY');
         warnings.push(
-          `Chưa có điểm từ Cán bộ Hướng dẫn (${g.topic?.owner?.fullName || 'GVHD'})`,
+          `Chưa xác nhận kết quả giữa kỳ — GVHD (${g.topic?.owner?.fullName || 'GVHD'}) cần xác nhận CHO LÀM TIẾP trước khi mở nhập điểm`,
         );
       } else {
-        if (gvhdScoresToCalc.length < 10) {
-          missingComponents.push('GVHD_CHUA_DU_10_TIEU_CHI');
-          warnings.push(`Cán bộ Hướng dẫn mới chấm ${gvhdScoresToCalc.length}/10 tiêu chí`);
-        }
-        if (gvhdHasDraft) {
-          missingComponents.push('GVHD_DIEM_NHAP');
+        // Kiểm tra GVHD
+        if (gvhdScores.length === 0) {
+          missingComponents.push('THIEU_DIEM_GVHD');
           warnings.push(
-            'Điểm của Cán bộ Hướng dẫn vẫn đang ở trạng thái Bản nháp (DRAFT), chưa khóa điểm',
+            `Chưa có điểm từ Cán bộ Hướng dẫn (${g.topic?.owner?.fullName || 'GVHD'})`,
           );
-        }
-        if (gvhdIsOpened) {
-          missingComponents.push('GVHD_DIEM_MO_KHOA');
-          warnings.push('Điểm của Cán bộ Hướng dẫn đang được mở khóa để chỉnh sửa');
-        }
-      }
-
-      // Kiểm tra GVPB
-      if (g.reviewerAssignments.length === 0) {
-        missingComponents.push('CHUA_PHAN_CONG_GVPB');
-        warnings.push('Nhóm chưa được phân công Giảng viên phản biện (GVPB)');
-      } else {
-        for (const ra of g.reviewerAssignments) {
-          const revName = ra.lecturer?.user?.fullName || 'Cán bộ phản biện';
-          const rScores = ra.lecturer?.user?.id
-            ? g.scores.filter((s) => s.scorerId === ra.lecturer?.user?.id)
-            : [];
-          if (rScores.length === 0) {
-            missingComponents.push('THIEU_DIEM_GVPB');
-            warnings.push(`GVPB (${revName}) chưa nhập điểm`);
-          } else {
-            if (rScores.length < 10) {
-              missingComponents.push('GVPB_CHUA_DU_10_TIEU_CHI');
-              warnings.push(`GVPB (${revName}) mới chấm ${rScores.length}/10 tiêu chí`);
-            }
-            if (rScores.some((s) => s.status === 'DRAFT')) {
-              missingComponents.push('GVPB_DIEM_NHAP');
-              warnings.push(`Điểm của GVPB (${revName}) vẫn đang ở trạng thái Bản nháp`);
-            }
-            if (rScores.some((s) => s.status === 'OPENED')) {
-              missingComponents.push('GVPB_DIEM_MO_KHOA');
-              warnings.push(`Điểm của GVPB (${revName}) đang được mở khóa để chỉnh sửa`);
-            }
-          }
-        }
-      }
-
-      // Kiểm tra Hội đồng
-      if (g.defenses.length === 0) {
-        missingComponents.push('CHUA_XEP_LICH_HOI_DONG');
-        warnings.push('Nhóm chưa được xếp lịch bảo vệ Hội đồng');
-      } else {
-        if (!committee) {
-          missingComponents.push('CHUA_GAN_HOI_DONG');
-          warnings.push('Lịch bảo vệ chưa được gán Hội đồng đánh giá');
         } else {
-          const unratedMembers = committee.members.filter(
-            (m: any) => !g.scores.some((s) => s.scorerId === m.userId),
-          );
-          if (unratedMembers.length > 0) {
-            missingComponents.push('THIEU_DIEM_HOI_DONG');
-            const unratedNames = unratedMembers
-              .map((m: any) => m.user?.fullName || 'Ủy viên')
-              .join(', ');
+          if (gvhdScoresToCalc.length < 10) {
+            missingComponents.push('GVHD_CHUA_DU_10_TIEU_CHI');
+            warnings.push(`Cán bộ Hướng dẫn mới chấm ${gvhdScoresToCalc.length}/10 tiêu chí`);
+          }
+          if (gvhdHasDraft) {
+            missingComponents.push('GVHD_DIEM_NHAP');
             warnings.push(
-              `Hội đồng bảo vệ chưa đủ điểm (${
-                committee.members.length - unratedMembers.length
-              }/${committee.members.length} thành viên đã chấm, còn thiếu: ${unratedNames})`,
+              'Điểm của Cán bộ Hướng dẫn vẫn đang ở trạng thái Bản nháp (DRAFT), chưa khóa điểm',
             );
           }
-          for (const m of committee.members) {
-            const mScores = g.scores.filter((s) => s.scorerId === m.userId);
-            if (mScores.length > 0) {
-              if (mScores.length < 10) {
-                missingComponents.push('HOI_DONG_CHUA_DU_10_TIEU_CHI');
-                warnings.push(
-                  `Thành viên HĐ (${m.user?.fullName}) mới chấm ${mScores.length}/10 tiêu chí`,
-                );
+          if (gvhdIsOpened) {
+            missingComponents.push('GVHD_DIEM_MO_KHOA');
+            warnings.push('Điểm của Cán bộ Hướng dẫn đang được mở khóa để chỉnh sửa');
+          }
+        }
+
+        // Kiểm tra GVPB
+        if (g.reviewerAssignments.length === 0) {
+          missingComponents.push('CHUA_PHAN_CONG_GVPB');
+          warnings.push('Nhóm chưa được phân công Giảng viên phản biện (GVPB)');
+        } else {
+          for (const ra of g.reviewerAssignments) {
+            const revName = ra.lecturer?.user?.fullName || 'Cán bộ phản biện';
+            const rScores = ra.lecturer?.user?.id
+              ? g.scores.filter((s) => s.scorerId === ra.lecturer?.user?.id)
+              : [];
+            if (rScores.length === 0) {
+              missingComponents.push('THIEU_DIEM_GVPB');
+              warnings.push(`GVPB (${revName}) chưa nhập điểm`);
+            } else {
+              if (rScores.length < 10) {
+                missingComponents.push('GVPB_CHUA_DU_10_TIEU_CHI');
+                warnings.push(`GVPB (${revName}) mới chấm ${rScores.length}/10 tiêu chí`);
               }
-              if (mScores.some((s) => s.status === 'DRAFT')) {
-                missingComponents.push('HOI_DONG_DIEM_NHAP');
-                warnings.push(
-                  `Điểm của Thành viên HĐ (${m.user?.fullName}) vẫn đang ở trạng thái Bản nháp`,
-                );
+              if (rScores.some((s) => s.status === 'DRAFT')) {
+                missingComponents.push('GVPB_DIEM_NHAP');
+                warnings.push(`Điểm của GVPB (${revName}) vẫn đang ở trạng thái Bản nháp`);
               }
-              if (mScores.some((s) => s.status === 'OPENED')) {
-                missingComponents.push('HOI_DONG_DIEM_MO_KHOA');
-                warnings.push(
-                  `Điểm của Thành viên HĐ (${m.user?.fullName}) đang được mở khóa để chỉnh sửa`,
-                );
+              if (rScores.some((s) => s.status === 'OPENED')) {
+                missingComponents.push('GVPB_DIEM_MO_KHOA');
+                warnings.push(`Điểm của GVPB (${revName}) đang được mở khóa để chỉnh sửa`);
+              }
+            }
+          }
+        }
+
+        // Kiểm tra Hội đồng
+        if (g.defenses.length === 0) {
+          missingComponents.push('CHUA_XEP_LICH_HOI_DONG');
+          warnings.push('Nhóm chưa được xếp lịch bảo vệ Hội đồng');
+        } else {
+          if (!committee) {
+            missingComponents.push('CHUA_GAN_HOI_DONG');
+            warnings.push('Lịch bảo vệ chưa được gán Hội đồng đánh giá');
+          } else {
+            const unratedMembers = committee.members.filter(
+              (m: any) => !g.scores.some((s) => s.scorerId === m.userId),
+            );
+            if (unratedMembers.length > 0) {
+              missingComponents.push('THIEU_DIEM_HOI_DONG');
+              const unratedNames = unratedMembers
+                .map((m: any) => m.user?.fullName || 'Ủy viên')
+                .join(', ');
+              warnings.push(
+                `Hội đồng bảo vệ chưa đủ điểm (${
+                  committee.members.length - unratedMembers.length
+                }/${committee.members.length} thành viên đã chấm, còn thiếu: ${unratedNames})`,
+              );
+            }
+            for (const m of committee.members) {
+              const mScores = g.scores.filter((s) => s.scorerId === m.userId);
+              if (mScores.length > 0) {
+                if (mScores.length < 10) {
+                  missingComponents.push('HOI_DONG_CHUA_DU_10_TIEU_CHI');
+                  warnings.push(
+                    `Thành viên HĐ (${m.user?.fullName}) mới chấm ${mScores.length}/10 tiêu chí`,
+                  );
+                }
+                if (mScores.some((s) => s.status === 'DRAFT')) {
+                  missingComponents.push('HOI_DONG_DIEM_NHAP');
+                  warnings.push(
+                    `Điểm của Thành viên HĐ (${m.user?.fullName}) vẫn đang ở trạng thái Bản nháp`,
+                  );
+                }
+                if (mScores.some((s) => s.status === 'OPENED')) {
+                  missingComponents.push('HOI_DONG_DIEM_MO_KHOA');
+                  warnings.push(
+                    `Điểm của Thành viên HĐ (${m.user?.fullName}) đang được mở khóa để chỉnh sửa`,
+                  );
+                }
               }
             }
           }
@@ -1691,10 +2084,90 @@ export class ScoresService {
       }
 
       const isReadyForDefense = g.midtermStatus === 'CONTINUE' && g.status !== 'CANCELLED';
-      const isComplete = missingComponents.length === 0 && warnings.length === 0;
+      const isComplete = isReadyForDefense && missingComponents.length === 0 && warnings.length === 0;
       const hasWarning = warnings.length > 0;
+      const primaryReviewer = reviewers[0]
+        ? { id: reviewers[0].userId, fullName: reviewers[0].fullName, email: reviewers[0].email }
+        : g.topic?.reviewer || null;
+
+      // Tính điểm chi tiết riêng cho từng sinh viên trong nhóm
+      const studentScoresList = g.members.map((m) => {
+        const uId = m.student?.user?.id;
+        const sId = m.studentId;
+        const sCode = m.student?.studentCode;
+        const keys = [uId, sId, sCode];
+
+        const stGvhd =
+          gvhdScoresToCalc.length > 0
+            ? calculateStudentWeightedTotal(gvhdScoresToCalc, keys)
+            : null;
+
+        const stRevScores = g.reviewerAssignments
+          .map((ra) => {
+            const revId = ra.lecturer?.user?.id;
+            const rScores = revId ? this.getScoresToCalculate(g.scores.filter((s) => s.scorerId === revId)) : [];
+            return rScores.length > 0 ? calculateStudentWeightedTotal(rScores, keys) : null;
+          })
+          .filter((v): v is number => v !== null);
+        const stGvpb =
+          stRevScores.length > 0
+            ? Number((stRevScores.reduce((a, b) => a + b, 0) / stRevScores.length).toFixed(2))
+            : null;
+
+        const stCouncilScores = (committee?.members || [])
+          .map((cm: any) => {
+            const cScores = this.getScoresToCalculate(g.scores.filter((s) => s.scorerId === cm.userId));
+            return cScores.length > 0 ? calculateStudentWeightedTotal(cScores, keys) : null;
+          })
+          .filter((v: number | null): v is number => v !== null);
+        const stCouncil =
+          stCouncilScores.length > 0
+            ? Number(
+                (
+                  stCouncilScores.reduce((a: number, b: number) => a + b, 0) /
+                  stCouncilScores.length
+                ).toFixed(2),
+              )
+            : null;
+
+        const stEvidences = approvedEvidences.filter((ev) => ev.userId === uId);
+        const stRawBonus = stEvidences.reduce((sum, ev) => sum + (ev.points ? Number(ev.points) : 0), 0);
+        const stBonus = Math.min(2.0, Number(stRawBonus.toFixed(2)));
+
+        const stParts = [stGvhd, stGvpb, stCouncil].filter((v): v is number => v !== null);
+        let stFinal: number | null = null;
+        if (stParts.length > 0) {
+          stFinal = Number((stParts.reduce((a, b) => a + b, 0) / stParts.length).toFixed(2));
+          if (stBonus > 0) {
+            stFinal = Math.min(10, Number((stFinal + stBonus).toFixed(2)));
+          }
+        }
+
+        return {
+          studentId: m.studentId,
+          userId: uId,
+          fullName: m.student?.user?.fullName,
+          studentCode: m.student?.studentCode,
+          email: m.student?.user?.email,
+          phone: m.student?.user?.phone,
+          department: m.student?.department?.name,
+          isLeader: m.isLeader,
+          gvhd: stGvhd,
+          gvpb: stGvpb,
+          council: stCouncil,
+          bonusPoints: stBonus,
+          finalScore: stFinal,
+          xepLoai: stFinal !== null ? getRatingClassification(stFinal) : 'Chưa xếp loại',
+          ketQua: stFinal !== null ? (stFinal >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA',
+        };
+      });
 
       return {
+        id: g.id,
+        code: g.code,
+        name: g.name,
+        status: g.status,
+        midtermStatus: g.midtermStatus,
         group: {
           id: g.id,
           code: g.code,
@@ -1710,16 +2183,9 @@ export class ScoresService {
               reviewer: g.topic.reviewer,
             }
           : null,
-        students: g.members.map((m) => ({
-          studentId: m.studentId,
-          userId: m.student?.user?.id,
-          fullName: m.student?.user?.fullName,
-          studentCode: m.student?.studentCode,
-          email: m.student?.user?.email,
-          phone: m.student?.user?.phone,
-          department: m.student?.department?.name,
-          isLeader: m.isLeader,
-        })),
+        reviewer: primaryReviewer,
+        students: studentScoresList,
+        studentScores: studentScoresList,
         isReadyForDefense,
         defenseSchedule: defense
           ? {
@@ -1737,6 +2203,36 @@ export class ScoresService {
                 : null,
             }
           : null,
+        scores: {
+          gvhd: gvhdTotal,
+          gvpb: gvpbTotal,
+          council: councilTotal,
+          bonusPoints,
+          councilEvaluationsCount: membersWithScores.length,
+          councilMembersCount: committeeMembers.length,
+        },
+        scoreBreakdown: {
+          gvhd: {
+            isDraft: gvhdHasDraft,
+            isLocked: gvhdIsLocked,
+            isOpened: gvhdIsOpened,
+            total: gvhdTotal,
+          },
+          gvpb: {
+            isDraft: reviewers.some((r) => r.hasDraft),
+            isLocked: reviewers.length > 0 && reviewers.every((r) => r.isLocked),
+            total: gvpbTotal,
+          },
+          council: {
+            evaluations: committeeMembers.map((cm: any) => ({
+              lecturerName: cm.fullName,
+              role: cm.role,
+              count: cm.criteriaCount,
+              isDraft: cm.hasDraft,
+              totalScore: cm.total,
+            })),
+          },
+        },
         componentScores: {
           gvhd: {
             scorer: g.topic?.owner || null,
@@ -1779,8 +2275,11 @@ export class ScoresService {
         },
         finalScore: diemTongKet,
         rating: xepLoai,
+        xepLoai,
         result: ketQua,
+        ketQua,
         formula: congThucTinh,
+        congThucTinh,
         scoreCompleteness: {
           isComplete,
           hasWarning,

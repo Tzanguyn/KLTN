@@ -23,6 +23,18 @@ export class DashboardService {
       return semester;
     }
 
+    // 1. Ưu tiên đợt KLTN chính thức đang mở (không phải đợt test tự động SEM_DEF_)
+    const officialSemester = await this.prisma.semester.findFirst({
+      where: {
+        status: 'OPEN',
+        NOT: { code: { startsWith: 'SEM_DEF_' } },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { department: true },
+    });
+    if (officialSemester) return officialSemester;
+
+    // 2. Fallback đợt OPEN bất kỳ nếu không có đợt chính thức
     const activeSemester = await this.prisma.semester.findFirst({
       where: { status: 'OPEN' },
       orderBy: { createdAt: 'desc' },
@@ -30,6 +42,7 @@ export class DashboardService {
     });
     if (activeSemester) return activeSemester;
 
+    // 3. Fallback đợt mới nhất trong hệ thống
     const latest = await this.prisma.semester.findFirst({
       orderBy: { createdAt: 'desc' },
       include: { department: true },
@@ -39,11 +52,186 @@ export class DashboardService {
   }
 
   /**
+   * Chuẩn hóa và đồng bộ dữ liệu lộ trình 5 giai đoạn của Đợt KLTN giữa tất cả các Actor
+   */
+  async formatSemesterWithTimeline(semester: any) {
+    if (!semester) return null;
+
+    const now = new Date();
+    const regFrom = semester.registrationFrom ? new Date(semester.registrationFrom) : null;
+    const regTo = semester.registrationTo ? new Date(semester.registrationTo) : null;
+    const subTo = semester.submissionTo ? new Date(semester.submissionTo) : null;
+    const defFrom = semester.defenseFrom ? new Date(semester.defenseFrom) : null;
+    const defTo = semester.defenseTo ? new Date(semester.defenseTo) : null;
+
+    // Khoảng thời gian ước tính giữa kỳ
+    let midFrom: Date | null = null;
+    let midTo: Date | null = null;
+    if (regTo && subTo) {
+      const midTime = (regTo.getTime() + subTo.getTime()) / 2;
+      midFrom = new Date(regTo.getTime() + 7 * 86400000);
+      midTo = new Date(midTime);
+    }
+
+    // 1. Kiểm tra cấu hình ghi đè bước thủ công từ Trưởng BM / Quản lý BM nếu có
+    const manualConfig = await this.prisma.systemConfig.findFirst({
+      where: {
+        OR: [
+          { key: 'SEMESTER_TIMELINE_STEP', semesterId: semester.id },
+          { key: `SEMESTER_TIMELINE_STEP_${semester.id}` },
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    let currentStep = manualConfig?.value ? Number(manualConfig.value) : 0;
+
+    if (!manualConfig?.value || isNaN(currentStep) || currentStep < 1 || currentStep > 5) {
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        currentStep = 5;
+      } else {
+        // A. Tính bước theo mốc thời gian (Date-based)
+        let stepFromDate = 1;
+        if (defFrom && now >= defFrom) {
+          stepFromDate = 5;
+        } else if (subTo && now >= subTo) {
+          stepFromDate = 4;
+        } else if (midTo && now >= midTo) {
+          stepFromDate = 3;
+        } else if (regTo && now > regTo) {
+          stepFromDate = 2;
+        } else {
+          stepFromDate = 1;
+        }
+
+        // B. Tính bước theo dữ liệu thực tế (Data-driven: defenses, scores, reviewers, groups, registrations)
+        let stepFromData = 1;
+        if (semester.id) {
+          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                midtermStatus: 'CONTINUE',
+                status: { not: 'CANCELLED' },
+              },
+            }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+              },
+            }),
+            this.prisma.registration.count({
+              where: {
+                semesterId: semester.id,
+                status: 'APPROVED',
+              },
+            }),
+          ]);
+
+          if (defCount > 0 || scoreCount > 0) {
+            stepFromData = 5; // Bảo vệ & Tổng kết
+          } else if (revCount > 0 || contGroupCount > 0) {
+            stepFromData = 4; // Báo cáo & Phản biện
+          } else if (grpCount > 0) {
+            stepFromData = 3; // Thực hiện & Giữa kỳ
+          } else if (regApprovedCount > 0) {
+            stepFromData = 2; // Duyệt & Ghép nhóm
+          } else {
+            stepFromData = 1; // Đăng ký đề tài
+          }
+        }
+
+        currentStep = Math.max(stepFromDate, stepFromData);
+      }
+    }
+
+    const stageTitles = [
+      'Đăng ký đề tài',
+      'Duyệt & Ghép nhóm',
+      'Thực hiện & Giữa kỳ',
+      'Báo cáo & Phản biện',
+      'Bảo vệ & Tổng kết',
+    ];
+
+    const timelineSteps = [
+      {
+        number: 1,
+        title: 'Đăng ký đề tài',
+        subtitle: 'Mở đợt, chọn hoặc đề xuất đề tài mới',
+        phase: 'Tuần 1 - 3',
+        startDate: regFrom ? regFrom.toISOString() : null,
+        endDate: regTo ? regTo.toISOString() : null,
+      },
+      {
+        number: 2,
+        title: 'Duyệt & Ghép nhóm',
+        subtitle: 'GVHD duyệt, thành lập nhóm KLTN',
+        phase: 'Tuần 3 - 4',
+        startDate: regTo ? regTo.toISOString() : null,
+        endDate: midFrom ? midFrom.toISOString() : null,
+      },
+      {
+        number: 3,
+        title: 'Thực hiện & Giữa kỳ',
+        subtitle: 'Báo cáo tiến độ, đánh giá giữa kỳ',
+        phase: 'Tuần 5 - 10',
+        startDate: midFrom ? midFrom.toISOString() : null,
+        endDate: subTo ? subTo.toISOString() : null,
+      },
+      {
+        number: 4,
+        title: 'Báo cáo & Phản biện',
+        subtitle: 'Nộp báo cáo hoàn chỉnh, GV phản biện',
+        phase: 'Tuần 11 - 13',
+        startDate: subTo ? subTo.toISOString() : null,
+        endDate: defFrom ? defFrom.toISOString() : null,
+      },
+      {
+        number: 5,
+        title: 'Bảo vệ & Tổng kết',
+        subtitle: 'Hội đồng chấm điểm 10 tiêu chí, NCKH',
+        phase: 'Tuần 14 - 15',
+        startDate: defFrom ? defFrom.toISOString() : null,
+        endDate: defTo ? defTo.toISOString() : null,
+      },
+    ];
+
+    return {
+      id: semester.id,
+      code: semester.code,
+      name: semester.name,
+      academicYear: semester.academicYear,
+      status: semester.status,
+      registrationFrom: semester.registrationFrom,
+      registrationTo: semester.registrationTo,
+      submissionTo: semester.submissionTo,
+      defenseFrom: semester.defenseFrom,
+      defenseTo: semester.defenseTo,
+      currentStep,
+      currentStage: stageTitles[currentStep - 1] || 'Đăng ký đề tài',
+      timelineSteps,
+    };
+  }
+
+  /**
    * Xác định vai trò chính của user từ token
    */
   resolveRole(userRoles: string[], requestedRole?: string): RoleCode {
-    if (requestedRole && userRoles.includes(requestedRole)) {
-      return requestedRole as RoleCode;
+    if (requestedRole) {
+      if (userRoles.includes(requestedRole)) {
+        return requestedRole as RoleCode;
+      }
+      // Trưởng bộ môn & Quản lý bộ môn kế thừa chức năng của giảng viên -> cho phép xem dashboard giảng viên
+      if (
+        (userRoles.includes(RoleCode.TRUONG_BO_MON) || userRoles.includes(RoleCode.QUAN_LY_BO_MON)) &&
+        requestedRole === RoleCode.GIANG_VIEN
+      ) {
+        return RoleCode.GIANG_VIEN;
+      }
     }
 
     // Thứ tự ưu tiên nhận diện vai trò: TRUONG_BO_MON > QUAN_LY_BO_MON > GIANG_VIEN > SINH_VIEN
@@ -91,7 +279,7 @@ export class DashboardService {
     });
 
     // Thông tin đăng ký đề tài
-    const registration = studentProfile
+    let registration = studentProfile
       ? await this.prisma.registration.findFirst({
           where: { studentId: studentProfile.id, semesterId: semester.id },
           include: {
@@ -105,8 +293,25 @@ export class DashboardService {
         })
       : null;
 
+    if (!registration && studentProfile) {
+      registration = await this.prisma.registration.findFirst({
+        where: {
+          studentId: studentProfile.id,
+          status: { in: ['APPROVED', 'PENDING', 'CHO_XAC_NHAN'] },
+        },
+        include: {
+          topic: {
+            include: {
+              owner: { select: { id: true, fullName: true, email: true, phone: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
     // Nhóm KLTN của sinh viên
-    const groupMember = studentProfile
+    let groupMember = studentProfile
       ? await this.prisma.groupMember.findFirst({
           where: {
             studentId: studentProfile.id,
@@ -162,7 +367,67 @@ export class DashboardService {
         })
       : null;
 
+    if (!groupMember && studentProfile) {
+      groupMember = await this.prisma.groupMember.findFirst({
+        where: {
+          studentId: studentProfile.id,
+          group: { status: { not: 'CANCELLED' } },
+        },
+        include: {
+          group: {
+            include: {
+              topic: {
+                include: {
+                  owner: { select: { id: true, fullName: true, email: true, phone: true } },
+                },
+              },
+              members: {
+                include: {
+                  student: {
+                    include: {
+                      user: { select: { id: true, fullName: true, email: true, phone: true } },
+                    },
+                  },
+                },
+              },
+              reviewerAssignments: {
+                include: {
+                  lecturer: {
+                    include: {
+                      user: { select: { id: true, fullName: true, email: true, phone: true } },
+                    },
+                  },
+                },
+              },
+              defenses: {
+                where: { status: { not: 'CANCELLED' } },
+                include: {
+                  committee: {
+                    include: {
+                      members: {
+                        include: {
+                          user: { select: { id: true, fullName: true, email: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              submissions: {
+                orderBy: { submittedAt: 'desc' },
+                take: 5,
+              },
+            },
+          },
+        },
+        orderBy: { joinedAt: 'desc' },
+      });
+    }
+
     const group: any = (groupMember as any)?.group || null;
+    if (group && !group.topic && registration?.topic) {
+      group.topic = registration.topic;
+    }
     const defenseSchedule = group?.defenses?.[0] || null;
 
     // Lấy điểm số chi tiết nếu có nhóm
@@ -188,15 +453,32 @@ export class DashboardService {
     if (!studentProfile?.eligible) {
       actionItems.push('Hồ sơ hiện tại chưa đủ điều kiện làm KLTN (vui lòng liên hệ Văn phòng khoa/Bộ môn)');
     }
-    if (!registration) {
-      const now = new Date();
-      if (semester.registrationTo && now > new Date(semester.registrationTo)) {
-        actionItems.push('Đã hết hạn đăng ký đề tài KLTN cho đợt này');
-      } else {
-        actionItems.push('Chưa đăng ký đề tài KLTN. Vui lòng vào mục Đăng ký đề tài để chọn nguyện vọng');
+
+    const hasActiveTopicOrGroup = Boolean(
+      group ||
+      (registration && (registration.status === 'APPROVED' || registration.status === 'CHO_XAC_NHAN')) ||
+      defenseSchedule ||
+      group?.topic ||
+      registration?.topic
+    );
+
+    if (!hasActiveTopicOrGroup) {
+      if (!registration) {
+        const now = new Date();
+        if (semester.registrationTo && now > new Date(semester.registrationTo)) {
+          actionItems.push('Đã hết hạn đăng ký đề tài KLTN cho đợt này');
+        } else {
+          actionItems.push('Chưa đăng ký đề tài KLTN. Vui lòng vào mục Đăng ký đề tài để chọn nguyện vọng');
+        }
+      } else if (registration.status === 'PENDING') {
+        actionItems.push('Đơn đăng ký đề tài đang chờ Giảng viên / Bộ môn phê duyệt');
+      } else if (registration.status === 'REJECTED') {
+        actionItems.push('Đơn đăng ký đề tài đã bị từ chối. Vui lòng chọn đề tài khác hoặc đề xuất đề tài mới');
       }
-    } else if (registration.status === 'PENDING') {
-      actionItems.push('Đơn đăng ký đề tài đang chờ Giảng viên / Bộ môn phê duyệt');
+    } else {
+      if (registration && registration.status === 'PENDING') {
+        actionItems.push('Đơn đăng ký đề tài đang chờ Giảng viên / Bộ môn phê duyệt');
+      }
     }
 
     if (group) {
@@ -214,21 +496,12 @@ export class DashboardService {
       }
     }
 
+    const formattedSemester = await this.formatSemesterWithTimeline(semester);
+
     return {
       role: RoleCode.SINH_VIEN,
       user,
-      semester: {
-        id: semester.id,
-        code: semester.code,
-        name: semester.name,
-        academicYear: semester.academicYear,
-        status: semester.status,
-        registrationFrom: semester.registrationFrom,
-        registrationTo: semester.registrationTo,
-        submissionTo: semester.submissionTo,
-        defenseFrom: semester.defenseFrom,
-        defenseTo: semester.defenseTo,
-      },
+      semester: formattedSemester,
       studentProfile: studentProfile
         ? {
             id: studentProfile.id,
@@ -326,10 +599,29 @@ export class DashboardService {
    * Thống kê đề tài hướng dẫn, phản biện, hạn mức, lịch hội đồng và việc cần làm.
    */
   private async getLecturerDashboard(user: any, semester: any) {
-    const lecturerProfile = await this.prisma.lecturerProfile.findUnique({
+    let lecturerProfile = await this.prisma.lecturerProfile.findUnique({
       where: { userId: user.id },
       include: { department: true },
     });
+
+    if (!lecturerProfile) {
+      const defaultDept = await this.prisma.department.findFirst({
+        where: { code: { in: ['IS', 'CNTT'] } },
+      });
+      if (defaultDept) {
+        lecturerProfile = await this.prisma.lecturerProfile.create({
+          data: {
+            userId: user.id,
+            lecturerCode: `GV_${user.id.slice(0, 6).toUpperCase()}`,
+            title: 'ThS.',
+            specialization: 'Hệ thống thông tin',
+            departmentId: defaultDept.id,
+            maxGroups: 10,
+          },
+          include: { department: true },
+        });
+      }
+    }
 
     const maxGroups = lecturerProfile?.maxGroups || 5;
 
@@ -458,16 +750,12 @@ export class DashboardService {
       actionItems.push(`Đang tham gia ${committeeMemberships.length} Hội đồng chấm bảo vệ KLTN`);
     }
 
+    const formattedSemester = await this.formatSemesterWithTimeline(semester);
+
     return {
       role: RoleCode.GIANG_VIEN,
       user,
-      semester: {
-        id: semester.id,
-        code: semester.code,
-        name: semester.name,
-        academicYear: semester.academicYear,
-        status: semester.status,
-      },
+      semester: formattedSemester,
       summary: {
         topicsCount: topics.length,
         approvedTopicsCount: topics.filter((t: any) => t.status === 'APPROVED' || (t.status as any) === 'DA_DUYET').length,
@@ -614,16 +902,12 @@ export class DashboardService {
       actionItems.push(`Có ${incompleteScoresCount} nhóm KLTN còn cảnh báo thiếu điểm thành phần`);
     }
 
+    const formattedSemester = await this.formatSemesterWithTimeline(semester);
+
     return {
       role: RoleCode.TRUONG_BO_MON,
       user,
-      semester: {
-        id: semester.id,
-        code: semester.code,
-        name: semester.name,
-        academicYear: semester.academicYear,
-        status: semester.status,
-      },
+      semester: formattedSemester,
       summary: {
         pendingTopicsCount: pendingTopics.length,
         totalGroupsCount: allGroups.length,
@@ -713,16 +997,12 @@ export class DashboardService {
       actionItems.push(`Còn ${unscheduledCount} nhóm đủ điều kiện bảo vệ chưa được xếp lịch thi`);
     }
 
+    const formattedSemester = await this.formatSemesterWithTimeline(semester);
+
     return {
       role: RoleCode.QUAN_LY_BO_MON,
       user,
-      semester: {
-        id: semester.id,
-        code: semester.code,
-        name: semester.name,
-        academicYear: semester.academicYear,
-        status: semester.status,
-      },
+      semester: formattedSemester,
       summary: {
         totalStudents,
         eligibleStudentsCount: eligibleStudents,

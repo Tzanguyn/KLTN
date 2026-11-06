@@ -8,9 +8,9 @@ export class LecturerQuotaItemDto {
   @IsString()
   lecturerId!: string;
 
-  @ApiProperty({ example: 5, description: 'Số nhóm hướng dẫn tối đa cho giảng viên trong học kỳ này' })
+  @ApiProperty({ example: 5, description: 'Số nhóm hướng dẫn tối đa cho giảng viên trong học kỳ này (>= 0)' })
   @IsInt({ message: 'maxGroups phải là số nguyên' })
-  @Min(1, { message: 'maxGroups tối thiểu là 1' })
+  @Min(0, { message: 'Hạn mức hướng dẫn không được là số âm (tối thiểu là 0)' })
   @Max(50, { message: 'maxGroups tối đa là 50' })
   maxGroups!: number;
 }

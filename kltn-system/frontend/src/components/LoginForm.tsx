@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -9,6 +9,7 @@ import { StudentWorkspace } from './workspaces/StudentWorkspace';
 import { LecturerWorkspace } from './workspaces/LecturerWorkspace';
 import { HeadWorkspace } from './workspaces/HeadWorkspace';
 import { ManagerWorkspace } from './workspaces/ManagerWorkspace';
+import { AdminWorkspace } from './workspaces/AdminWorkspace';
 import {
   GraduationCap,
   Lock,
@@ -33,7 +34,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export function LoginForm() {
-  const { accessToken, user, setSession } = useAuthStore();
+  const { accessToken, user, setSession, activeRole } = useAuthStore();
   const [serverError, setServerError] = useState<{ message: string; type: 'auth' | 'locked' | 'rate_limit' | 'general' } | null>(null);
 
   // Forgot password modal
@@ -43,6 +44,20 @@ export function LoginForm() {
   const [newPassword, setNewPassword] = useState('');
   const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request');
   const [forgotMessage, setForgotMessage] = useState('');
+
+  // System maintenance info
+  const [systemInfo, setSystemInfo] = useState<{ status: string; message: string; maintenanceUntil?: string } | null>(null);
+
+  useEffect(() => {
+    api.get('/admin/system-status')
+      .then((res) => {
+        const data = res.data?.data ?? res.data;
+        if (data && data.status && data.status !== 'OPEN') {
+          setSystemInfo(data);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   const {
     register,
@@ -62,7 +77,16 @@ export function LoginForm() {
       setSession(data.accessToken, data.user);
     } catch (error: any) {
       const status = error.response?.status;
-      const message = error.response?.data?.message || 'Đăng nhập không thành công. Hãy kiểm tra kết nối máy chủ.';
+      const apiMessage =
+        error.response?.data?.message ||
+        error.response?.data?.error?.message ||
+        (typeof error.response?.data?.error === 'string' ? error.response.data.error : null);
+
+      const message =
+        apiMessage ||
+        (error.response
+          ? 'Đăng nhập không thành công. Vui lòng kiểm tra lại thông tin.'
+          : 'Đăng nhập không thành công. Hãy kiểm tra kết nối máy chủ backend (http://localhost:3000).');
 
       if (status === 401) {
         setServerError({ message, type: 'auth' });
@@ -119,18 +143,19 @@ export function LoginForm() {
 
   // If user is already logged in, render Navbar and corresponding Role Workspace
   if (accessToken && user) {
-    const rawRole = user.role || user.roles?.[0] || 'SINH_VIEN';
+    const rawRole = activeRole || user.role || user.roles?.[0] || 'SINH_VIEN';
     const role = String(rawRole).toUpperCase();
 
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900">
         <Navbar />
         <main className="pb-16">
+          {role === 'ADMIN' && <AdminWorkspace />}
           {role === 'SINH_VIEN' && <StudentWorkspace />}
           {role === 'GIANG_VIEN' && <LecturerWorkspace />}
           {role === 'TRUONG_BO_MON' && <HeadWorkspace />}
           {role === 'QUAN_LY_BO_MON' && <ManagerWorkspace />}
-          {!['SINH_VIEN', 'GIANG_VIEN', 'TRUONG_BO_MON', 'QUAN_LY_BO_MON'].includes(role) && (
+          {!['ADMIN', 'SINH_VIEN', 'GIANG_VIEN', 'TRUONG_BO_MON', 'QUAN_LY_BO_MON'].includes(role) && (
             <StudentWorkspace />
           )}
         </main>
@@ -140,24 +165,40 @@ export function LoginForm() {
 
   // Not logged in: Render Auth Portal
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex flex-col justify-center py-6 sm:py-12 px-3 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 text-white shadow-xl shadow-indigo-500/20 mb-3">
-          <GraduationCap className="w-9 h-9" />
+        <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-indigo-600 text-white shadow-xl shadow-indigo-500/20 mb-3">
+          <GraduationCap className="w-8 h-8 sm:w-9 sm:h-9" />
         </div>
         <div className="inline-block px-3 py-1 mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-200 bg-indigo-900/60 rounded-full border border-indigo-700/50">
           Khoa Công nghệ Thông tin
         </div>
-        <h2 className="text-3xl font-extrabold tracking-tight text-white">
+        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
           Hệ thống Quản lý KLTN
         </h2>
-        <p className="mt-1.5 text-sm text-slate-400">
+        <p className="mt-1.5 text-xs sm:text-sm text-slate-400">
           Cổng thông tin điều phối đề tài, tiến độ báo cáo và bảo vệ khóa luận
         </p>
       </div>
 
-      <div className="mt-7 sm:mx-auto sm:w-full sm:max-w-md px-4">
-        <div className="bg-white py-8 px-6 shadow-2xl rounded-2xl sm:px-10 border border-slate-100">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-0 sm:px-0">
+        <div className="bg-white py-6 px-4 sm:py-8 sm:px-10 shadow-2xl rounded-2xl border border-slate-100 space-y-4">
+          {/* Maintenance Notice Banner */}
+          {systemInfo && systemInfo.status === 'MAINTENANCE' && (
+            <div className="p-3.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 text-xs font-medium flex items-start gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">HỆ THỐNG ĐANG TẠM ĐÓNG ĐỂ BẢO TRÌ</div>
+                <div className="mt-0.5">{systemInfo.message || 'Hệ thống đang bảo trì dữ liệu. Chỉ tài khoản Quản trị viên (Admin) mới có quyền đăng nhập lúc này.'}</div>
+                {systemInfo.maintenanceUntil && (
+                  <div className="mt-1 font-semibold text-[11px] text-rose-700">
+                    Dự kiến hoàn tất: {new Date(systemInfo.maintenanceUntil).toLocaleString('vi-VN')}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -236,44 +277,47 @@ export function LoginForm() {
             <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider text-center mb-2.5">
               Đăng nhập thử nghiệm 1-Click (Mật khẩu: Password@123)
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => handleQuickLogin('SV2026001')}
-                className="p-2 text-left border border-slate-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 transition-colors group"
+                className="p-2 text-left border border-slate-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 transition-colors group cursor-pointer"
               >
                 <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 flex items-center justify-between">
-                  <span>SV Đủ ĐK</span>
-                  <span className="text-[9px] px-1.5 py-0.2 bg-emerald-100 text-emerald-700 rounded font-semibold">125 TC</span>
+                  <span>Sinh viên 1</span>
+                  <span className="text-[9px] px-1.5 py-0.2 bg-emerald-100 text-emerald-700 rounded font-semibold">SV2026001</span>
                 </div>
-                <div className="text-[10px] text-slate-400 truncate">MSSV: SV2026001</div>
+                <div className="text-[10px] text-slate-400 truncate">sinhvien@kltn.edu.vn (Nguyễn Minh Sinh)</div>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleQuickLogin('SV2026002')}
-                className="p-2 text-left border border-slate-200 rounded-xl hover:border-rose-400 hover:bg-rose-50/50 transition-colors group"
+                onClick={() => handleQuickLogin('sinhvien2@kltn.edu.vn')}
+                className="p-2 text-left border border-slate-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 transition-colors group cursor-pointer"
               >
-                <div className="text-xs font-bold text-slate-800 group-hover:text-rose-600 flex items-center justify-between">
-                  <span>SV Chưa Đủ ĐK</span>
-                  <span className="text-[9px] px-1.5 py-0.2 bg-rose-100 text-rose-700 rounded font-semibold">95 TC</span>
+                <div className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 flex items-center justify-between">
+                  <span>Sinh viên 2</span>
+                  <span className="text-[9px] px-1.5 py-0.2 bg-blue-100 text-blue-700 rounded font-semibold">SV2026002</span>
                 </div>
-                <div className="text-[10px] text-slate-400 truncate">MSSV: SV2026002</div>
+                <div className="text-[10px] text-slate-400 truncate">sinhvien2@kltn.edu.vn (Trần Thị Mai)</div>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleQuickLogin('giangvien@kltn.edu.vn')}
-                className="p-2 text-left border border-slate-200 rounded-xl hover:border-emerald-500 hover:bg-emerald-50/50 transition-colors group"
+                onClick={() => handleQuickLogin('dong.buivan@kltn.edu.vn')}
+                className="p-2 text-left border border-emerald-200 bg-emerald-50/30 rounded-xl hover:border-emerald-500 hover:bg-emerald-50/60 transition-colors group cursor-pointer"
               >
-                <div className="text-xs font-bold text-slate-800 group-hover:text-emerald-600">Giảng viên</div>
-                <div className="text-[10px] text-slate-400 truncate">giangvien@kltn.edu.vn</div>
+                <div className="text-xs font-bold text-emerald-800 group-hover:text-emerald-900 flex items-center justify-between">
+                  <span>GVHD (ThS. Bùi Văn Đồng)</span>
+                  <span className="text-[9px] px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded font-semibold">GVHD</span>
+                </div>
+                <div className="text-[10px] text-slate-500 truncate">dong.buivan@kltn.edu.vn</div>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('truongbomon@kltn.edu.vn')}
-                className="p-2 text-left border border-slate-200 rounded-xl hover:border-purple-500 hover:bg-purple-50/50 transition-colors group"
+                className="p-2 text-left border border-slate-200 rounded-xl hover:border-purple-500 hover:bg-purple-50/50 transition-colors group cursor-pointer"
               >
                 <div className="text-xs font-bold text-slate-800 group-hover:text-purple-600">Trưởng bộ môn</div>
                 <div className="text-[10px] text-slate-400 truncate">truongbomon@kltn.edu.vn</div>
@@ -282,7 +326,7 @@ export function LoginForm() {
               <button
                 type="button"
                 onClick={() => handleQuickLogin('quanly@kltn.edu.vn')}
-                className="p-2 text-left border border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50/50 transition-colors group"
+                className="p-2 text-left border border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50/50 transition-colors group cursor-pointer"
               >
                 <div className="text-xs font-bold text-slate-800 group-hover:text-amber-600">Quản lý bộ môn</div>
                 <div className="text-[10px] text-slate-400 truncate">quanly@kltn.edu.vn</div>
@@ -290,12 +334,24 @@ export function LoginForm() {
 
               <button
                 type="button"
-                onClick={() => handleQuickLogin('khoataikhoan@kltn.edu.vn')}
-                className="p-2 text-left border border-rose-200 bg-rose-50/30 rounded-xl hover:border-rose-500 hover:bg-rose-50 transition-colors group"
+                onClick={() => handleQuickLogin('admin@kltn.edu.vn')}
+                className="p-2 text-left border border-rose-200 bg-rose-50/40 rounded-xl hover:border-rose-500 hover:bg-rose-50 transition-colors group cursor-pointer"
               >
                 <div className="text-xs font-bold text-rose-800 group-hover:text-rose-900 flex items-center justify-between">
+                  <span>Quản trị viên (Admin)</span>
+                  <span className="text-[9px] px-1.5 py-0.2 bg-rose-200 text-rose-900 rounded font-bold">ADMIN</span>
+                </div>
+                <div className="text-[10px] text-slate-500 truncate">admin@kltn.edu.vn</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickLogin('khoataikhoan@kltn.edu.vn')}
+                className="p-2 text-left border border-slate-200 bg-slate-50/60 rounded-xl hover:border-slate-400 hover:bg-slate-100 transition-colors group cursor-pointer"
+              >
+                <div className="text-xs font-bold text-slate-700 group-hover:text-slate-900 flex items-center justify-between">
                   <span>Khóa tài khoản</span>
-                  <span className="text-[9px] px-1 bg-rose-200 text-rose-800 rounded">E2: 403</span>
+                  <span className="text-[9px] px-1 bg-slate-200 text-slate-800 rounded">E2: 403</span>
                 </div>
                 <div className="text-[10px] text-slate-500 truncate">khoataikhoan@kltn.edu.vn</div>
               </button>

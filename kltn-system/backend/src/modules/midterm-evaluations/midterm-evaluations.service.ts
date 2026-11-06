@@ -72,7 +72,8 @@ export class MidtermEvaluationsService {
       }
     }
 
-    const isOpen = (!fromDate || now >= fromDate) && (!toDate || now <= toDate);
+    // Phục vụ kiểm thử (Test mode): Luôn mở khung thời gian xác nhận giữa kỳ không cần chờ tới hạn
+    const isOpen = true;
 
     return {
       fromDate,
@@ -251,29 +252,40 @@ export class MidtermEvaluationsService {
       throw new ForbiddenException('Bạn không có quyền đánh giá giữa kỳ cho nhóm này');
     }
 
-    // 4. Kiểm tra khung thời gian cấu hình xác nhận giữa kỳ
-    const windowInfo = await this.getEvaluationWindow(group.semesterId);
-    const now = new Date();
+    // 4. Bỏ kiểm tra khung thời gian cấu hình xác nhận giữa kỳ để phục vụ test mọi lúc
+    // (Cho phép GVHD và Quản lý bộ môn xác nhận hoặc xử lý lại GK bất kỳ lúc nào)
 
-    if (windowInfo.fromDate && now < windowInfo.fromDate) {
-      throw new BadRequestException('Chưa đến thời gian xác nhận đánh giá giữa kỳ KLTN');
-    }
-    if (windowInfo.toDate && now > windowInfo.toDate) {
-      throw new BadRequestException('Đã hết thời hạn xác nhận đánh giá giữa kỳ KLTN');
+    // 5. Chuẩn hóa kết quả đánh giá & Kiểm tra điều kiện Xử lý lại GK
+    if (group.status === 'CANCELLED') {
+      throw new BadRequestException('Nhóm đã bị hủy, không thể đánh giá hoặc xử lý lại giữa kỳ');
     }
 
-    // 5. Chuẩn hóa kết quả đánh giá
     const isContinue = dto.ketQua === 'CHO_LAM_TIEP' || dto.ketQua === 'CONTINUE';
     const newMidtermStatus = isContinue ? MidtermStatus.CONTINUE : MidtermStatus.STOPPED;
+    const previousMidtermStatus = group.midtermStatus;
+    const isReEvaluation = previousMidtermStatus !== 'PENDING' && previousMidtermStatus !== newMidtermStatus;
     const evaluationTime = new Date();
 
-    // 6. Cập nhật trạng thái Group
+    // Nếu xử lý lại GK sang DỪNG ĐỀ TÀI (STOPPED), kiểm tra xem nhóm đã khóa điểm chính thức chưa
+    if (!isContinue) {
+      const lockedScoreCount = await this.prisma.score.count({
+        where: { groupId: group.id, status: 'LOCKED' },
+      });
+      if (lockedScoreCount > 0) {
+        throw new BadRequestException(
+          'Nhóm đã khóa điểm chấm chính thức, không thể xử lý lại giữa kỳ sang Dừng đề tài. Vui lòng mở khóa điểm trước.',
+        );
+      }
+    }
+
+    // 6. Cập nhật trạng thái Group & Đồng bộ ảnh hưởng đến Phản biện / Hội đồng
     const updatedGroup = await this.prisma.group.update({
       where: { id: groupId },
       data: {
         midtermStatus: newMidtermStatus,
         midtermNote: dto.lyDo || null,
         midtermAt: evaluationTime,
+        ...(isContinue && group.status === 'FORMING' ? { status: 'ACTIVE' } : {}),
       },
       include: {
         topic: true,
@@ -288,6 +300,21 @@ export class MidtermEvaluationsService {
         },
       },
     });
+
+    // Nếu xử lý lại GK từ CONTINUE -> STOPPED: tự động thu hồi phân công GVPB và lịch bảo vệ dự thảo chưa hoàn thành
+    let revokedReviewersCount = 0;
+    let cancelledDefensesCount = 0;
+    if (!isContinue) {
+      const delRev = await this.prisma.reviewerAssignment.deleteMany({
+        where: { groupId: group.id },
+      });
+      revokedReviewersCount = delRev.count;
+
+      const delDef = await this.prisma.defenseSchedule.deleteMany({
+        where: { groupId: group.id, status: { not: 'COMPLETED' } },
+      });
+      cancelledDefensesCount = delDef.count;
+    }
 
     // 7. Cập nhật trạng thái Registration liên quan
     const decisionNoteText =
@@ -308,16 +335,20 @@ export class MidtermEvaluationsService {
       },
     });
 
-    // 8. Ghi nhận Audit Log
+    // 8. Ghi nhận Audit Log (Lưu lịch sử đánh giá / xử lý lại GK)
     await this.prisma.auditLog.create({
       data: {
         userId,
-        action: 'MIDTERM_EVALUATION',
+        action: isReEvaluation ? 'RE_EVALUATE_MIDTERM' : 'MIDTERM_EVALUATION',
         entity: 'Group',
         entityId: group.id,
         metadata: {
           ketQua: dto.ketQua,
+          previousMidtermStatus,
           midtermStatus: newMidtermStatus,
+          isReEvaluation,
+          revokedReviewersCount,
+          cancelledDefensesCount,
           lyDo: dto.lyDo,
           confirmedBy: userId,
           midtermAt: evaluationTime,
@@ -387,14 +418,53 @@ export class MidtermEvaluationsService {
     }
 
     return {
-      message: `Đã xác nhận đánh giá giữa kỳ: ${resultLabel}`,
+      message: isReEvaluation
+        ? `Đã xử lý lại kết quả giữa kỳ (${previousMidtermStatus} → ${newMidtermStatus}): ${resultLabel}`
+        : `Đã xác nhận đánh giá giữa kỳ: ${resultLabel}`,
       groupId: group.id,
+      previousMidtermStatus,
       midtermStatus: newMidtermStatus,
+      isReEvaluation,
+      revokedReviewersCount,
+      cancelledDefensesCount,
       ketQua: dto.ketQua,
       midtermNote: dto.lyDo || null,
       midtermAt: evaluationTime,
       confirmedBy: userId,
       group: updatedGroup,
     };
+  }
+
+  async getHistory(groupId: string) {
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        entity: 'Group',
+        entityId: groupId,
+        action: { in: ['MIDTERM_EVALUATION', 'RE_EVALUATE_MIDTERM'] },
+      },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return logs.map((l) => {
+      const meta = (l.metadata as any) || {};
+      return {
+        id: l.id,
+        action: l.action,
+        isReEvaluation: Boolean(meta.isReEvaluation || l.action === 'RE_EVALUATE_MIDTERM'),
+        previousMidtermStatus: meta.previousMidtermStatus || null,
+        midtermStatus: meta.midtermStatus || null,
+        ketQua: meta.ketQua || null,
+        lyDo: meta.lyDo || null,
+        revokedReviewersCount: meta.revokedReviewersCount ?? 0,
+        cancelledDefensesCount: meta.cancelledDefensesCount ?? 0,
+        evaluator: l.user
+          ? { id: l.user.id, fullName: l.user.fullName, email: l.user.email }
+          : null,
+        createdAt: l.createdAt,
+      };
+    });
   }
 }

@@ -26,9 +26,11 @@ import { QuotasModule } from './modules/quotas/quotas.module';
 import { SemestersModule } from './modules/semesters/semesters.module';
 import { StatisticsModule } from './modules/statistics/statistics.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
+    AdminModule,
     DashboardModule,
     StatisticsModule,
     SemestersModule,

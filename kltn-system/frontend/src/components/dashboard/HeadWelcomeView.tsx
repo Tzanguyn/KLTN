@@ -29,21 +29,39 @@ interface HeadWelcomeViewProps {
 
 export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, workspaceData }) => {
   const { user } = useAuthStore();
-  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [dashboardData, setDashboardData] = useState<any>(workspaceData?.dashboardData || null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        setLoading(true);
-        const res = await api.get('/dashboard');
-        setDashboardData(res.data?.data ?? res.data);
-      } catch {
-        // fallback
-      } finally {
-        setLoading(false);
+    if (workspaceData?.dashboardData) {
+      setDashboardData((prev: any) => ({
+        ...(prev || {}),
+        ...workspaceData.dashboardData,
+        semester: workspaceData.dashboardData.semester || prev?.semester,
+      }));
+    }
+  }, [workspaceData?.dashboardData]);
+
+  const fetchDashboard = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/dashboard?role=TRUONG_BO_MON');
+      const d = res.data?.data ?? res.data;
+      if (d) {
+        setDashboardData((prev: any) => ({
+          ...(prev || {}),
+          ...d,
+          semester: d.semester || prev?.semester,
+        }));
       }
-    };
+    } catch {
+      // fallback
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchDashboard();
   }, []);
 
@@ -65,8 +83,6 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
     dashboardData?.summary?.pendingScoreUnlocksCount ??
     workspaceData?.scoreRequests?.filter((r: any) => r.status === 'PENDING')?.length ??
     0;
-  const pendingEvidenceCount =
-    dashboardData?.summary?.pendingEvidenceCount ?? workspaceData?.pendingEvidence?.length ?? 0;
   const incompleteScoresCount = dashboardData?.summary?.incompleteScoresCount ?? 0;
 
   const actionItems: string[] = dashboardData?.actionItems?.length
@@ -75,13 +91,10 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
 
   if (!actionItems.length) {
     if (pendingTopicsCount > 0) {
-      actionItems.push(`Có ${pendingTopicsCount} đề tài mới của Giảng viên cần phê duyệt`);
+      actionItems.push(`Có ${pendingTopicsCount} đề tài mới cần Trưởng bộ môn phê duyệt`);
     }
     if (pendingScoreUnlocksCount > 0) {
       actionItems.push(`Có ${pendingScoreUnlocksCount} yêu cầu mở khóa sửa điểm đang chờ xử lý`);
-    }
-    if (pendingEvidenceCount > 0) {
-      actionItems.push(`Có ${pendingEvidenceCount} hồ sơ minh chứng NCKH sinh viên cần thẩm định`);
     }
     if (unassignedReviewersCount > 0) {
       actionItems.push(`Còn ${unassignedReviewersCount} nhóm KLTN chưa được phân công CB Phản biện`);
@@ -91,7 +104,7 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
   return (
     <div className="space-y-6">
       {/* 1. HERO BANNER CHÀO MỪNG */}
-      <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-purple-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-purple-950 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-8 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
@@ -122,20 +135,20 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
           </div>
 
           {/* Quick Approvals Stat Box */}
-          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-5 rounded-2xl flex flex-col gap-2 min-w-[240px]">
+          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-4 sm:p-5 rounded-2xl flex flex-col gap-2 w-full sm:w-auto sm:min-w-[240px]">
             <span className="text-xs text-purple-200 uppercase tracking-wider font-semibold">
               Hồ sơ chờ Trưởng BM duyệt
             </span>
             <div className="flex items-center gap-3">
               <div className="text-3xl font-black text-white">
-                {pendingTopicsCount + pendingScoreUnlocksCount + pendingEvidenceCount}
+                {pendingTopicsCount + pendingScoreUnlocksCount}
               </div>
               <Badge variant={pendingTopicsCount > 0 ? 'warning' : 'success'} size="md">
                 {pendingTopicsCount > 0 ? 'Cần duyệt ngay' : 'Đã xử lý hết'}
               </Badge>
             </div>
             <span className="text-[11px] text-purple-200">
-              {pendingTopicsCount} đề tài • {pendingScoreUnlocksCount} yêu cầu điểm • {pendingEvidenceCount} NCKH
+              {pendingTopicsCount} đề tài • {pendingScoreUnlocksCount} yêu cầu mở khóa điểm
             </span>
           </div>
         </div>
@@ -274,21 +287,21 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
 
         <Card
           className="p-4 bg-white border border-slate-200/90 hover:border-purple-400 hover:shadow-md transition-all cursor-pointer group"
-          onClick={() => onNavigate('evidence')}
+          onClick={() => onNavigate('scores')}
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Minh chứng NCKH
+              Quản lý điểm KLTN
             </span>
             <div className="p-2 rounded-xl bg-teal-50 text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors">
               <Award className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-2.5">
-            <div className="text-2xl font-black text-slate-900">{pendingEvidenceCount} hồ sơ</div>
+            <div className="text-2xl font-black text-slate-900">{incompleteScoresCount} cảnh báo</div>
             <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between">
-              <span>Thẩm định điểm</span>
-              <span className="text-teal-700 font-bold group-hover:underline">Thẩm định →</span>
+              <span>Bảng điểm toàn khóa</span>
+              <span className="text-teal-700 font-bold group-hover:underline">Xem điểm →</span>
             </div>
           </div>
         </Card>
@@ -304,7 +317,7 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
           <span className="text-xs text-slate-400">1-Click chuyển tab</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
           <button
             onClick={() => onNavigate('approvals')}
             className="flex flex-col items-center justify-center p-3 rounded-xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50/50 transition-all text-center group cursor-pointer"
@@ -384,19 +397,6 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
           </button>
 
           <button
-            onClick={() => onNavigate('evidence')}
-            className="flex flex-col items-center justify-center p-3 rounded-xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50/50 transition-all text-center group cursor-pointer"
-          >
-            <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center mb-1.5 group-hover:scale-110 transition-transform">
-              <Award className="w-4.5 h-4.5" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-teal-600">
-              Duyệt NCKH
-            </span>
-            <span className="text-[10px] text-slate-400">Cộng điểm thưởng</span>
-          </button>
-
-          <button
             onClick={() => onNavigate('reports')}
             className="flex flex-col items-center justify-center p-3 rounded-xl border border-slate-200 hover:border-purple-500 hover:bg-purple-50/50 transition-all text-center group cursor-pointer"
           >
@@ -412,7 +412,14 @@ export const HeadWelcomeView: React.FC<HeadWelcomeViewProps> = ({ onNavigate, wo
       </div>
 
       {/* 5. LỘ TRÌNH KLTN 5 BƯỚC */}
-      <WelcomeTimeline currentStep={4} />
+      <WelcomeTimeline
+        currentStep={dashboardData?.semester?.currentStep}
+        semesterInfo={dashboardData?.semester}
+        role="TRUONG_BO_MON"
+        onNavigate={onNavigate}
+        canManageTimeline={true}
+        onTimelineStepChange={fetchDashboard}
+      />
     </div>
   );
 };

@@ -19,12 +19,32 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.use(helmet({ crossOriginResourcePolicy: false }));
   app.use(cookieParser());
-  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? [], credentials: true, methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] });
+  const allowedOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+    : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  app.enableCors({
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      if (!origin) return callback(null, true);
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Range'],
+    exposedHeaders: ['Content-Range', 'X-Total-Count'],
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   const config = new DocumentBuilder().setTitle('KLTN Management API').setDescription('Graduation thesis management API').setVersion('1.0').addBearerAuth().build();
   SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));
-  await app.listen(process.env.PORT ?? 3000);
+  const port = Number(process.env.PORT ?? 3000);
+  await app.listen(port, '0.0.0.0');
 }
 bootstrap();

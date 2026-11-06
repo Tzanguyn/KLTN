@@ -42,14 +42,14 @@ export class TopicProposalsController {
   }
 
   @Get('lecturer')
-  @Roles(RoleCode.GIANG_VIEN)
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON)
   @ApiOperation({ summary: 'Giảng viên xem danh sách đề xuất gửi tới mình' })
   findLecturerProposals(@CurrentUser() user: { id: string }) {
     return this.service.findLecturerProposals(user.id);
   }
 
   @Patch(':id/decision')
-  @Roles(RoleCode.GIANG_VIEN)
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON)
   @ApiOperation({ summary: 'Giảng viên xét duyệt hoặc từ chối đề xuất' })
   decide(
     @CurrentUser() user: { id: string },

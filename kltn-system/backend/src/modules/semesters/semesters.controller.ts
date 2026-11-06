@@ -179,6 +179,33 @@ export class SemestersController {
   ) {
     return this.semestersService.setRegistrationConditions(id, dto);
   }
+
+  @ApiOperation({
+    summary: 'Cập nhật giai đoạn lộ trình KLTN của đợt (Trưởng bộ môn / Quản lý)',
+    description:
+      'Thiết lập bước hiện tại (1: Đăng ký đề tài, 2: Duyệt & Ghép nhóm, 3: Thực hiện & Giữa kỳ, 4: Báo cáo & Phản biện, 5: Bảo vệ & Tổng kết) hoặc tự động đồng bộ theo dữ liệu thực tế.',
+  })
+  @ApiParam({ name: 'id', description: 'ID của đợt KLTN (UUID)' })
+  @ApiResponse({ status: 200, description: 'Cập nhật giai đoạn lộ trình thành công' })
+  @ApiResponse({ status: 403, description: 'Không có quyền truy cập' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy đợt KLTN' })
+  @Put(':id/timeline-step')
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  setTimelineStep(
+    @Param('id') id: string,
+    @Body() body: { step?: number; autoSync?: boolean },
+  ) {
+    return this.semestersService.setTimelineStep(id, body.step, body.autoSync);
+  }
+
+  @ApiOperation({
+    summary: 'Đặt lại toàn bộ dữ liệu về trạng thái Mới mở học kỳ (Bước 1: Đăng ký đề tài) để kiểm thử từ đầu (Chỉ Trưởng bộ môn)',
+  })
+  @Post('reset-test-data')
+  @Roles(RoleCode.TRUONG_BO_MON)
+  resetTestData(@Body() body?: { semesterId?: string }) {
+    return this.semestersService.resetToNewSemesterState(body?.semesterId);
+  }
 }
 
 

@@ -26,6 +26,19 @@ export class QuotasController {
   }
 
   @ApiOperation({
+    summary: 'Thiết lập hạn mức hướng dẫn chung cho TOÀN BỘ giảng viên trong học kỳ (Bước 1)',
+    description: 'Nhận payload gồm semesterId (tùy chọn) và maxGroups áp dụng đồng loạt cho toàn bộ giảng viên trong kỳ.',
+  })
+  @Put('bulk')
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  setSemesterBulkQuota(
+    @Body() body: { semesterId?: string; maxGroups: number },
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.quotasService.setSemesterBulkQuota(body, user.id);
+  }
+
+  @ApiOperation({
     summary: 'Cập nhật hạn mức số nhóm hướng dẫn cho các giảng viên theo đợt/học kỳ (Trưởng bộ môn / Quản lý)',
     description: 'Nhận payload gồm semesterId và danh sách các cặp { lecturerId, maxGroups }.',
   })

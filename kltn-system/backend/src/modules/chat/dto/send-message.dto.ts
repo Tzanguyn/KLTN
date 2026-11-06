@@ -1,8 +1,13 @@
-import { IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class SendMessageDto {
-  @IsUUID()
-  groupId!: string;
+  @IsOptional()
+  @IsString()
+  groupId?: string;
+
+  @IsOptional()
+  @IsString()
+  topicId?: string;
 
   @IsString()
   @MinLength(1)

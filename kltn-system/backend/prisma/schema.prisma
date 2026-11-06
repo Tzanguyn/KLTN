@@ -8,6 +8,7 @@ datasource db {
 }
 
 enum RoleCode {
+  ADMIN
   SINH_VIEN
   GIANG_VIEN
   TRUONG_BO_MON

@@ -77,11 +77,20 @@ export class TopicsService {
       where.ownerId = gvId;
     }
     if (chuyenNganh) {
-      where.OR = [
-        { departmentId: chuyenNganh },
-        { department: { code: { equals: chuyenNganh, mode: 'insensitive' } } },
-        { department: { name: { contains: chuyenNganh, mode: 'insensitive' } } },
-      ];
+      const isIS = ['httt', 'is', 'hệ thống thông tin', 'he thong thong tin'].includes(chuyenNganh.trim().toLowerCase());
+      if (isIS) {
+        where.OR = [
+          { departmentId: chuyenNganh },
+          { department: { code: { in: ['IS', 'HTTT'], mode: 'insensitive' } } },
+          { department: { name: { contains: 'Hệ thống thông tin', mode: 'insensitive' } } },
+        ];
+      } else {
+        where.OR = [
+          { departmentId: chuyenNganh },
+          { department: { code: { equals: chuyenNganh, mode: 'insensitive' } } },
+          { department: { name: { contains: chuyenNganh, mode: 'insensitive' } } },
+        ];
+      }
     }
 
     if (searchTerm) {
@@ -130,7 +139,27 @@ export class TopicsService {
         department: true,
         registrations: {
           where: { status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] } },
-          select: { studentId: true, status: true },
+          select: {
+            id: true,
+            studentId: true,
+            status: true,
+            proposal: true,
+            student: {
+              select: {
+                id: true,
+                studentCode: true,
+                className: true,
+                user: {
+                  select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
+                    phone: true,
+                  },
+                },
+              },
+            },
+          },
         },
         groups: {
           include: {
@@ -140,8 +169,67 @@ export class TopicsService {
       },
     });
 
+    const allProposals = await this.prisma.topicProposal.findMany({
+      where: where.semesterId ? { semesterId: where.semesterId } : {},
+      include: {
+        student: {
+          select: {
+            id: true,
+            studentCode: true,
+            className: true,
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                email: true,
+                phone: true,
+              },
+            },
+          },
+        },
+        lecturer: {
+          select: {
+            id: true,
+            userId: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
     // Compute soLuongDaDangKy & soChoConLai
     const mapped = allMatchingTopics.map((topic) => {
+      const matchingProposal = allProposals.find(
+        (p) =>
+          p.tenDeTai.trim().toLowerCase() === topic.title.trim().toLowerCase() &&
+          p.semesterId === topic.semesterId &&
+          (!p.lecturer?.userId || p.lecturer.userId === topic.ownerId),
+      );
+      const proposerReg = topic.registrations.find((r) => Boolean(r.proposal));
+      const isStudentProposed = Boolean(
+        topic.technologies?.toLowerCase().includes('đề xuất sinh viên') ||
+          matchingProposal ||
+          proposerReg,
+      );
+      const proposerStudent =
+        matchingProposal?.student ||
+        proposerReg?.student ||
+        (isStudentProposed ? topic.registrations[0]?.student : null);
+
+      const studentProposer = proposerStudent
+        ? {
+            id: proposerStudent.id,
+            userId: proposerStudent.user?.id,
+            fullName: proposerStudent.user?.fullName || 'Sinh viên',
+            studentCode: proposerStudent.studentCode,
+            className: proposerStudent.className,
+            email: proposerStudent.user?.email,
+            phone: proposerStudent.user?.phone,
+            proposalId: matchingProposal?.id,
+            proposalStatus: matchingProposal?.status || 'GV_DA_DUYET',
+            gvConfirmed: matchingProposal ? matchingProposal.status === 'GV_DA_DUYET' : true,
+          }
+        : null;
       const registeredStudentIds = new Set<string>();
       let isRegisteredByCurrentUser = false;
 
@@ -221,13 +309,26 @@ export class TopicsService {
         semester: topic.semester,
         daDangKy: isRegisteredByCurrentUser,
         registrations: topic.registrations,
+        sourceType: isStudentProposed ? 'SINH_VIEN' : 'GIANG_VIEN',
+        nguonDeXuat: isStudentProposed ? 'Sinh viên đề xuất' : 'Giảng viên đề xuất',
+        isStudentProposed,
+        studentProposer,
         createdAt: topic.createdAt,
         updatedAt: topic.updatedAt,
       };
     });
 
-    // Filter hasSlot
-    const filtered = hasSlotFilter ? mapped.filter((t) => t.soChoConLai > 0) : mapped;
+    // Filter hasSlot & only show student-proposed topics in pending queue after GVHD confirmed
+    const isPendingStatusFilter = Boolean(
+      query.status && ['CHO_DUYET', 'CHO_TRUONG_BM_DUYET', 'PENDING_APPROVAL'].includes(query.status),
+    );
+    const filtered = mapped.filter((t) => {
+      if (hasSlotFilter && t.soChoConLai <= 0) return false;
+      if (isPendingStatusFilter && t.isStudentProposed && t.studentProposer && !t.studentProposer.gvConfirmed) {
+        return false;
+      }
+      return true;
+    });
 
     const total = filtered.length;
     const totalPages = Math.ceil(total / limit);
@@ -264,11 +365,40 @@ export class TopicsService {
       throw new BadRequestException('Số lượng sinh viên tối đa phải là số nguyên dương lớn hơn 0');
     }
 
-    // 2. Tiền điều kiện: Đã đăng nhập role GiangVien
-    const lecturer = await this.prisma.lecturerProfile.findUnique({
+    // 2. Tiền điều kiện: Đã đăng nhập role GiangVien / TruongBoMon / QuanLyBoMon
+    let lecturer = await this.prisma.lecturerProfile.findUnique({
       where: { userId },
       include: { user: true },
     });
+    if (!lecturer) {
+      const userWithRoles = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { roles: { include: { role: true } } },
+      });
+      const roleCodes = userWithRoles?.roles.map((r) => r.role.code) ?? [];
+      if (
+        roleCodes.includes('GIANG_VIEN' as any) ||
+        roleCodes.includes('TRUONG_BO_MON' as any) ||
+        roleCodes.includes('QUAN_LY_BO_MON' as any)
+      ) {
+        const defaultDept = await this.prisma.department.findFirst({
+          where: { code: { in: ['IS', 'CNTT'] } },
+        });
+        if (defaultDept) {
+          lecturer = await this.prisma.lecturerProfile.create({
+            data: {
+              userId,
+              lecturerCode: `GV_${userId.slice(0, 6).toUpperCase()}`,
+              title: 'ThS.',
+              specialization: 'Hệ thống thông tin',
+              departmentId: defaultDept.id,
+              maxGroups: 10,
+            },
+            include: { user: true },
+          });
+        }
+      }
+    }
     if (!lecturer) {
       throw new ForbiddenException('Chỉ giảng viên mới có quyền đăng ký đề tài KLTN');
     }
@@ -316,15 +446,19 @@ export class TopicsService {
       },
     });
 
-    const activeTopicsCount = await this.prisma.topic.count({
+    const chosenTopicsCount = await this.prisma.topic.count({
       where: {
         ownerId: userId,
         semesterId: semester.id,
         status: { in: ['CHO_DUYET', 'CHO_TRUONG_BM_DUYET', 'PENDING_APPROVAL', 'APPROVED', 'CAN_CAP_NHAT'] },
+        OR: [
+          { groups: { some: { status: { not: 'CANCELLED' } } } },
+          { registrations: { some: { status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] } } } },
+        ],
       },
     });
 
-    const currentLoad = Math.max(guidedGroupsCount, activeTopicsCount);
+    const currentLoad = Math.max(guidedGroupsCount, chosenTopicsCount);
     if (currentLoad >= maxGroups) {
       throw new ForbiddenException('Bạn đã đạt số nhóm tối đa được phép hướng dẫn');
     }
@@ -643,6 +777,18 @@ export class TopicsService {
     const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
     if (topic.ownerId !== userId) throw new ForbiddenException('Bạn không sở hữu đề tài này');
+    const activeGroupsCount = await this.prisma.group.count({
+      where: { topicId, status: { not: 'CANCELLED' } },
+    });
+    if (activeGroupsCount > 0) {
+      throw new BadRequestException(
+        'Không thể hủy đề tài đang có nhóm sinh viên thực hiện. Vui lòng chuyển hoặc hủy nhóm trước.',
+      );
+    }
+    await this.prisma.registration.updateMany({
+      where: { topicId, status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] } },
+      data: { status: 'DA_HUY', decisionNote: 'Đề tài đã bị hủy/lưu trữ bởi Giảng viên hướng dẫn', decidedAt: new Date() },
+    });
     return this.prisma.topic.update({ where: { id: topicId }, data: { status: 'ARCHIVED' } });
   }
 
@@ -752,6 +898,47 @@ export class TopicsService {
       registrationTo: topic.semester?.registrationTo,
     };
 
+    const matchingProposal = await this.prisma.topicProposal.findFirst({
+      where: {
+        tenDeTai: { equals: topic.title.trim(), mode: 'insensitive' },
+        semesterId: topic.semesterId,
+      },
+      include: {
+        student: {
+          include: {
+            user: { select: { id: true, fullName: true, email: true, phone: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const proposerReg = topic.registrations.find((r) => Boolean(r.proposal));
+    const isStudentProposed = Boolean(
+      topic.technologies?.toLowerCase().includes('đề xuất sinh viên') ||
+        matchingProposal ||
+        proposerReg,
+    );
+    const proposerStudent =
+      matchingProposal?.student ||
+      proposerReg?.student ||
+      (isStudentProposed ? topic.registrations[0]?.student : null);
+
+    const studentProposer = proposerStudent
+      ? {
+          id: proposerStudent.id,
+          userId: proposerStudent.user?.id,
+          fullName: proposerStudent.user?.fullName || 'Sinh viên',
+          studentCode: proposerStudent.studentCode,
+          className: proposerStudent.className,
+          email: proposerStudent.user?.email,
+          phone: proposerStudent.user?.phone,
+          proposalId: matchingProposal?.id,
+          proposalStatus: matchingProposal?.status || 'GV_DA_DUYET',
+          gvConfirmed: matchingProposal ? matchingProposal.status === 'GV_DA_DUYET' : true,
+        }
+      : null;
+
     return {
       id: topic.id,
       title: topic.title,
@@ -788,6 +975,10 @@ export class TopicsService {
       hocKy: hocKyData,
       registrations: topic.registrations,
       approvals: topic.approvals,
+      sourceType: isStudentProposed ? 'SINH_VIEN' : 'GIANG_VIEN',
+      nguonDeXuat: isStudentProposed ? 'Sinh viên đề xuất' : 'Giảng viên đề xuất',
+      isStudentProposed,
+      studentProposer,
       createdAt: topic.createdAt,
       updatedAt: topic.updatedAt,
     };
@@ -804,7 +995,25 @@ export class TopicsService {
   async approve(topicId: string, reviewerId: string, dto?: ApproveTopicDto) {
     const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
-    if (topic.ownerId === reviewerId) {
+
+    const matchingProposal = await this.prisma.topicProposal.findFirst({
+      where: {
+        tenDeTai: { equals: topic.title.trim(), mode: 'insensitive' },
+        semesterId: topic.semesterId,
+      },
+      include: { student: { include: { user: true } } },
+    });
+    const isStudentTopic = Boolean(
+      topic.technologies?.toLowerCase().includes('đề xuất sinh viên') || matchingProposal,
+    );
+
+    if (isStudentTopic && matchingProposal && matchingProposal.status !== 'GV_DA_DUYET') {
+      throw new BadRequestException(
+        'Đề tài do sinh viên đề xuất cần được Giảng viên hướng dẫn xác nhận đồng ý trước khi Trưởng bộ môn phê duyệt.',
+      );
+    }
+
+    if (topic.ownerId === reviewerId && !isStudentTopic) {
       throw new BadRequestException('Không thể tự duyệt đề tài của mình');
     }
 
@@ -831,6 +1040,27 @@ export class TopicsService {
         },
       });
 
+      // Nếu là đề tài do Sinh viên đề xuất, tự động cập nhật TopicProposal và Registration của SV đó sang APPROVED
+      if (isStudentTopic) {
+        if (matchingProposal) {
+          await tx.topicProposal.update({
+            where: { id: matchingProposal.id },
+            data: { status: 'GV_DA_DUYET', rejectionReason: null },
+          });
+        }
+        await tx.registration.updateMany({
+          where: {
+            topicId: topic.id,
+            status: { in: ['PENDING', 'CHO_XAC_NHAN'] },
+          },
+          data: {
+            status: 'APPROVED',
+            decidedAt: approvalTime,
+            decisionNote: note || 'Đã được Trưởng bộ môn phê duyệt đề tài đề xuất',
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           userId: reviewerId,
@@ -843,6 +1073,7 @@ export class TopicsService {
             ketQua: 'APPROVED',
             lyDo: note,
             topicTitle: topic.title,
+            sourceType: isStudentTopic ? 'SINH_VIEN' : 'GIANG_VIEN',
           },
         },
       });
@@ -851,11 +1082,21 @@ export class TopicsService {
         await this.notifications.create(
           topic.ownerId,
           'Đề tài KLTN đã được phê duyệt',
-          `Đề tài "${topic.title}" của bạn đã được Trưởng bộ môn phê duyệt đưa vào danh mục đăng ký.${note ? ` Ghi chú: ${note}` : ''}`,
+          `Đề tài "${topic.title}" đã được Trưởng bộ môn phê duyệt đưa vào danh mục chính thức.${note ? ` Ghi chú: ${note}` : ''}`,
           'SYSTEM',
           { topicId: topic.id, status: 'APPROVED', approved: true, note },
           true,
         );
+        if (matchingProposal?.student?.userId) {
+          await this.notifications.create(
+            matchingProposal.student.userId,
+            'Đề tài đề xuất đã được Trưởng bộ môn phê duyệt',
+            `Đề tài "${topic.title}" do bạn đề xuất (GVHD: ${updated.owner?.fullName}) đã được Trưởng bộ môn phê duyệt chính thức!${note ? ` Ghi chú: ${note}` : ''}`,
+            'REGISTRATION',
+            { topicId: topic.id, status: 'APPROVED' },
+            true,
+          );
+        }
       } catch {
         // ignore notification error
       }
@@ -878,7 +1119,25 @@ export class TopicsService {
 
     const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
-    if (topic.ownerId === reviewerId) {
+
+    const matchingProposal = await this.prisma.topicProposal.findFirst({
+      where: {
+        tenDeTai: { equals: topic.title.trim(), mode: 'insensitive' },
+        semesterId: topic.semesterId,
+      },
+      include: { student: { include: { user: true } } },
+    });
+    const isStudentTopic = Boolean(
+      topic.technologies?.toLowerCase().includes('đề xuất sinh viên') || matchingProposal,
+    );
+
+    if (isStudentTopic && matchingProposal && matchingProposal.status !== 'GV_DA_DUYET') {
+      throw new BadRequestException(
+        'Đề tài do sinh viên đề xuất cần được Giảng viên hướng dẫn xác nhận đồng ý trước khi Trưởng bộ môn phê duyệt.',
+      );
+    }
+
+    if (topic.ownerId === reviewerId && !isStudentTopic) {
       throw new BadRequestException('Không thể tự duyệt đề tài của mình');
     }
 
@@ -904,6 +1163,26 @@ export class TopicsService {
         },
       });
 
+      if (isStudentTopic) {
+        if (matchingProposal) {
+          await tx.topicProposal.update({
+            where: { id: matchingProposal.id },
+            data: { status: 'TU_CHOI', rejectionReason: lyDo },
+          });
+        }
+        await tx.registration.updateMany({
+          where: {
+            topicId: topic.id,
+            status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] },
+          },
+          data: {
+            status: 'REJECTED',
+            decidedAt: rejectTime,
+            decisionNote: `Trưởng bộ môn từ chối đề tài đề xuất: ${lyDo}`,
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           userId: reviewerId,
@@ -924,11 +1203,21 @@ export class TopicsService {
         await this.notifications.create(
           topic.ownerId,
           'Đề tài KLTN bị từ chối',
-          `Đề tài "${topic.title}" của bạn đã bị từ chối. Lý do: ${lyDo}`,
+          `Đề tài "${topic.title}" đã bị Trưởng bộ môn từ chối. Lý do: ${lyDo}`,
           'SYSTEM',
           { topicId: topic.id, status: 'REJECTED', approved: false, lyDo },
           true,
         );
+        if (matchingProposal?.student?.userId) {
+          await this.notifications.create(
+            matchingProposal.student.userId,
+            'Đề tài đề xuất bị Trưởng bộ môn từ chối',
+            `Đề tài "${topic.title}" do bạn đề xuất đã bị Trưởng bộ môn từ chối. Lý do: ${lyDo}`,
+            'REGISTRATION',
+            { topicId: topic.id, status: 'REJECTED', lyDo },
+            true,
+          );
+        }
       } catch {
         // ignore notification error
       }
@@ -953,7 +1242,25 @@ export class TopicsService {
 
     const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
-    if (topic.ownerId === reviewerId) {
+
+    const matchingProposal = await this.prisma.topicProposal.findFirst({
+      where: {
+        tenDeTai: { equals: topic.title.trim(), mode: 'insensitive' },
+        semesterId: topic.semesterId,
+      },
+      include: { student: { include: { user: true } } },
+    });
+    const isStudentTopic = Boolean(
+      topic.technologies?.toLowerCase().includes('đề xuất sinh viên') || matchingProposal,
+    );
+
+    if (isStudentTopic && matchingProposal && matchingProposal.status !== 'GV_DA_DUYET') {
+      throw new BadRequestException(
+        'Đề tài do sinh viên đề xuất cần được Giảng viên hướng dẫn xác nhận đồng ý trước khi Trưởng bộ môn phê duyệt.',
+      );
+    }
+
+    if (topic.ownerId === reviewerId && !isStudentTopic) {
       throw new BadRequestException('Không thể tự duyệt đề tài của mình');
     }
 
@@ -999,11 +1306,21 @@ export class TopicsService {
         await this.notifications.create(
           topic.ownerId,
           'Yêu cầu chỉnh sửa đề tài KLTN',
-          `Đề tài "${topic.title}" của bạn cần được chỉnh sửa/cập nhật. Nội dung yêu cầu: ${lyDo}`,
+          `Đề tài "${topic.title}" cần được chỉnh sửa/cập nhật. Nội dung yêu cầu: ${lyDo}`,
           'SYSTEM',
           { topicId: topic.id, status: 'CAN_CAP_NHAT', lyDo },
           true,
         );
+        if (matchingProposal?.student?.userId) {
+          await this.notifications.create(
+            matchingProposal.student.userId,
+            'Trưởng bộ môn yêu cầu chỉnh sửa đề tài đề xuất',
+            `Đề tài "${topic.title}" do bạn đề xuất cần được bổ sung/chỉnh sửa: ${lyDo}`,
+            'REGISTRATION',
+            { topicId: topic.id, status: 'CAN_CAP_NHAT', lyDo },
+            true,
+          );
+        }
       } catch {
         // ignore notification error
       }
@@ -1015,68 +1332,17 @@ export class TopicsService {
         status: updated.status,
         lyDoTuChoi: lyDo,
         rejectionReason: lyDo,
-        message: 'Đã gửi yêu cầu chỉnh sửa đề tài cho Giảng viên',
+        message: 'Đã gửi yêu cầu chỉnh sửa đề tài',
       };
     });
   }
 
   async review(topicId: string, reviewerId: string, dto: ReviewTopicDto) {
-    const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
-    if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
-    if (topic.ownerId === reviewerId) throw new BadRequestException('Không thể tự duyệt đề tài của mình');
-    const reviewTime = new Date();
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.topic.update({
-        where: { id: topicId },
-        data: {
-          status: dto.approved ? 'APPROVED' : 'REJECTED',
-          rejectionReason: dto.approved ? null : dto.note,
-          reviewerId,
-        },
-      });
-      await tx.topicApproval.create({
-        data: {
-          topicId,
-          reviewerId,
-          approved: dto.approved,
-          note: dto.note,
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          userId: reviewerId,
-          action: dto.approved ? 'APPROVE_TOPIC' : 'REJECT_TOPIC',
-          entity: 'Topic',
-          entityId: topic.id,
-          metadata: {
-            nguoiDuyet: reviewerId,
-            thoiGian: reviewTime.toISOString(),
-            ketQua: dto.approved ? 'APPROVED' : 'REJECTED',
-            lyDo: dto.note || null,
-            topicTitle: topic.title,
-          },
-        },
-      });
-
-      // Send notification to topic owner
-      try {
-        await this.notifications.create(
-          topic.ownerId,
-          dto.approved ? 'Đề tài KLTN đã được phê duyệt' : 'Đề tài KLTN bị từ chối',
-          dto.approved
-            ? `Đề tài "${topic.title}" của bạn đã được Trưởng bộ môn phê duyệt đưa vào danh mục đăng ký.`
-            : `Đề tài "${topic.title}" của bạn đã bị từ chối. Lý do: ${dto.note || 'Không có lý do cụ thể'}`,
-          'SYSTEM',
-          { topicId: topic.id, approved: dto.approved },
-          true,
-        );
-      } catch {
-        // ignore notification error
-      }
-
-      return updated;
-    });
+    if (dto.approved) {
+      return this.approve(topicId, reviewerId, { note: dto.note });
+    } else {
+      return this.reject(topicId, reviewerId, { lyDo: dto.note || 'Chưa đạt yêu cầu của Bộ môn' });
+    }
   }
 
   async getRegistrations(userId: string, topicId: string) {
@@ -1137,18 +1403,19 @@ export class TopicsService {
       throw new NotFoundException('Không tìm thấy đề tài');
     }
 
-    // Kiểm tra quyền: chủ đề tài hoặc Trưởng/Quản lý bộ môn
+    // Kiểm tra quyền: chủ đề tài, Trưởng/Quản lý bộ môn, hoặc sinh viên
     const isOwner = topic.ownerId === userId;
     if (!isOwner) {
       const userRoles = await this.prisma.userRole.findMany({
         where: { userId },
         include: { role: true },
       });
-      const hasManagerRole = userRoles.some(
-        (ur) => ur.role.code === 'TRUONG_BO_MON' || ur.role.code === 'QUAN_LY_BO_MON',
+      const hasManagerOrLecturerRole = userRoles.some(
+        (ur) => ur.role.code === 'TRUONG_BO_MON' || ur.role.code === 'QUAN_LY_BO_MON' || ur.role.code === 'GIANG_VIEN',
       );
-      if (!hasManagerRole) {
-        throw new ForbiddenException('Bạn không sở hữu đề tài này');
+      const isStudent = userRoles.some((ur) => ur.role.code === 'SINH_VIEN');
+      if (!hasManagerOrLecturerRole && !isStudent) {
+        throw new ForbiddenException('Bạn không có quyền xem danh sách này');
       }
     }
 
@@ -1224,6 +1491,19 @@ export class TopicsService {
       }
     }
 
+    const topicGroups = (topic.groups || []).map((g: any) => ({
+      id: g.id,
+      code: g.code,
+      name: g.name,
+      status: g.status,
+      members: (g.members || []).map((m: any) => ({
+        studentId: m.studentId,
+        studentCode: m.student?.studentCode,
+        fullName: m.student?.user?.fullName,
+        isLeader: m.isLeader,
+      })),
+    }));
+
     return {
       topicId: topic.id,
       topicTitle: topic.title,
@@ -1232,6 +1512,7 @@ export class TopicsService {
       soChoConLai: Math.max(0, topic.capacity - resultList.length),
       data: resultList,
       registrations: resultList,
+      groups: topicGroups,
     };
   }
 

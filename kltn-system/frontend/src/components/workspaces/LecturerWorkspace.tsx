@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
 import { Card, CardHeader, CardContent } from '../ui/Card';
@@ -36,12 +37,23 @@ import {
   Save,
   ShieldCheck,
   LayoutDashboard,
+  Building2,
+  RefreshCw,
 } from 'lucide-react';
 import { LecturerWelcomeView } from '../dashboard/LecturerWelcomeView';
+import { WorkspaceSidebar } from './WorkspaceSidebar';
 
 export const LecturerWorkspace: React.FC = () => {
-  const { user } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<string>('welcome');
+  const { user, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
+  const [activeTab, setActiveTab] = useState<string>(storeActiveTab || 'welcome');
+  const isHeadUser = user?.roles?.includes('TRUONG_BO_MON') || user?.role === 'TRUONG_BO_MON';
+
+  useEffect(() => {
+    if (storeActiveTab) {
+      setActiveTab(storeActiveTab);
+      setStoreActiveTab(null);
+    }
+  }, [storeActiveTab]);
 
   // State
   const [dashboardData, setDashboardData] = useState<any>(null);
@@ -110,21 +122,87 @@ export const LecturerWorkspace: React.FC = () => {
   const [showScoreChangeModal, setShowScoreChangeModal] = useState(false);
   const [scoreChangeReason, setScoreChangeReason] = useState('');
 
-  // 10-Criteria Scoring Form State
+  // 10-Criteria Scoring Form State (Chấm riêng cho từng sinh viên trong nhóm)
   const [scoringFormData, setScoringFormData] = useState<any>(null);
-  const [tenScores, setTenScores] = useState<Record<string, { value: string; note: string }>>({});
+  const [tenScores, setTenScores] = useState<
+    Record<string, { value: string; note: string; studentScores?: Record<string, string> }>
+  >({});
   const [scoringComment, setScoringComment] = useState('');
   const [savingScores, setSavingScores] = useState(false);
 
-  // Live calculation of weighted total score
+  // Danh sách sinh viên của nhóm đang chấm
+  const scoringStudents = React.useMemo(() => {
+    if (Array.isArray(scoringFormData?.topic?.students) && scoringFormData.topic.students.length > 0) {
+      return scoringFormData.topic.students.map((st: any, idx: number) => ({
+        key: st.id || st.userId || st.studentId || st.studentCode || `sv_${idx + 1}`,
+        id: st.id || st.userId || st.studentId,
+        studentId: st.studentId,
+        userId: st.userId || st.id,
+        studentCode: st.studentCode || `SV${idx + 1}`,
+        fullName: st.fullName || `Sinh viên ${idx + 1}`,
+        isLeader: st.isLeader,
+      }));
+    }
+    const grp = myGroups.find((g) => g.id === selectedGroupId);
+    if (Array.isArray(grp?.members) && grp.members.length > 0) {
+      return grp.members.map((m: any, idx: number) => ({
+        key: m.student?.user?.id || m.studentId || m.student?.studentCode || `sv_${idx + 1}`,
+        id: m.student?.user?.id || m.studentId,
+        studentId: m.studentId,
+        userId: m.student?.user?.id,
+        studentCode: m.student?.studentCode || `SV${idx + 1}`,
+        fullName: m.student?.user?.fullName || `Sinh viên ${idx + 1}`,
+        isLeader: m.isLeader,
+      }));
+    }
+    return [
+      {
+        key: 'sv_1',
+        id: 'sv_1',
+        studentId: 'sv_1',
+        userId: 'sv_1',
+        studentCode: 'SV01',
+        fullName: 'Sinh viên 1',
+        isLeader: true,
+      },
+    ];
+  }, [scoringFormData, myGroups, selectedGroupId]);
+
+  // Tính điểm trung bình riêng cho từng sinh viên theo thời gian thực
+  const liveStudentTotals = React.useMemo(() => {
+    const criteria = scoringFormData?.criteria || [];
+    const count = criteria.length || 10;
+    const totals: Record<string, number> = {};
+
+    for (const st of scoringStudents) {
+      if (criteria.length === 0) {
+        totals[st.key] = 0;
+        continue;
+      }
+      const sum = criteria.reduce((acc: number, c: any) => {
+        const row = tenScores[c.code] ?? tenScores[c.id];
+        const stRaw =
+          row?.studentScores?.[st.key] ??
+          (st.userId ? row?.studentScores?.[st.userId] : undefined) ??
+          (st.studentId ? row?.studentScores?.[st.studentId] : undefined) ??
+          (st.studentCode ? row?.studentScores?.[st.studentCode] : undefined) ??
+          row?.value ??
+          '0';
+        const val = parseFloat(String(stRaw)) || 0;
+        return acc + val;
+      }, 0);
+      totals[st.key] = Math.round((sum / count) * 100) / 100;
+    }
+    return totals;
+  }, [scoringFormData, tenScores, scoringStudents]);
+
+  // Điểm trung bình chung của nhóm (dùng hiển thị tham khảo)
   const liveTotal = React.useMemo(() => {
-    if (!scoringFormData?.criteria) return 0;
-    const total = scoringFormData.criteria.reduce((sum: number, c: any) => {
-      const val = parseFloat(tenScores[c.code]?.value ?? tenScores[c.id]?.value ?? '0') || 0;
-      return sum + (val * Number(c.weight)) / 100;
-    }, 0);
-    return Math.round(total * 100) / 100;
-  }, [scoringFormData, tenScores]);
+    const vals = scoringStudents.map((st: any) => liveStudentTotals[st.key] ?? 0);
+    if (vals.length === 0) return 0;
+    const sum = vals.reduce((a: number, b: number) => a + b, 0);
+    return Math.round((sum / vals.length) * 100) / 100;
+  }, [scoringStudents, liveStudentTotals]);
 
   const [showMidtermModal, setShowMidtermModal] = useState(false);
   const [midtermGroup, setMidtermGroup] = useState<any>(null);
@@ -142,7 +220,7 @@ export const LecturerWorkspace: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [tRes, gRes, subRes, appRes, revRes, comRes, critRes, propRes, midRes, dashRes] = await Promise.all([
+      const [tRes, gRes, subRes, appRes, revRes, comRes, critRes, propRes, midRes, dashRes, officialDashRes] = await Promise.all([
         api.get('/topics/my').catch(() => api.get('/topics/mine')),
         api.get('/groups/mine'),
         api.get('/submissions'),
@@ -153,18 +231,32 @@ export const LecturerWorkspace: React.FC = () => {
         api.get('/topic-proposals/lecturer').catch(() => null),
         api.get('/midterm-evaluations/my-groups').catch(() => null),
         api.get('/lecturers/me/dashboard').catch(() => null),
+        api.get('/dashboard?role=GIANG_VIEN').catch(() => null),
       ]);
 
       setMyTopics(tRes.data.data ?? []);
       const groups = gRes.data.data ?? [];
       setMyGroups(groups);
       if (groups.length > 0 && !selectedGroupId) {
-        setSelectedGroupId(groups[0].id);
+        const passedGroup = groups.find((g: any) => g.midtermStatus === 'CONTINUE');
+        setSelectedGroupId((passedGroup || groups[0]).id);
       }
 
-      if (dashRes?.data?.data) {
-        setDashboardData(dashRes.data.data);
-      }
+      const lecDashData = dashRes?.data?.data ?? {};
+      const officialDashData = officialDashRes?.data?.data ?? {};
+      const mergedDashboard = {
+        ...lecDashData,
+        ...officialDashData,
+        semester: officialDashData?.semester || lecDashData?.semester || null,
+        soNhomHuongDan: lecDashData?.soNhomHuongDan ?? officialDashData?.summary?.guidedGroupsCount ?? groups.length,
+        maxGroupsQuota: lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? 5,
+        choTrong: lecDashData?.choTrong ?? officialDashData?.summary?.remainingGuidingSlots ?? 5,
+        phanTramHoanThanhTrungBinh: lecDashData?.phanTramHoanThanhTrungBinh ?? 0,
+        soLanNop: lecDashData?.soLanNop,
+        canhBaoChamTienDo: lecDashData?.canhBaoChamTienDo ?? [],
+        trangThaiGiuaKy: lecDashData?.trangThaiGiuaKy,
+      };
+      setDashboardData(mergedDashboard);
 
       if (midRes?.data?.data) {
         const evalWin = midRes.data.data.evaluationWindow;
@@ -258,14 +350,42 @@ export const LecturerWorkspace: React.FC = () => {
       const form = res.data.data;
       setScoringFormData(form);
       if (form?.criteria) {
-        const initScores: Record<string, { value: string; note: string }> = {};
+        const formStudents = form?.topic?.students || [];
+        const initScores: Record<
+          string,
+          { value: string; note: string; studentScores: Record<string, string> }
+        > = {};
         form.criteria.forEach((c: any) => {
           const existing = form.existingScores?.find(
             (s: any) => s.criterionId === c.id || s.criterionCode === c.code,
           );
+          const stScoresMap: Record<string, string> = {};
+          if (existing?.studentScores && typeof existing.studentScores === 'object') {
+            for (const [k, v] of Object.entries(existing.studentScores)) {
+              if (v !== undefined && v !== null) {
+                stScoresMap[k] = String(v);
+              }
+            }
+          }
+          formStudents.forEach((st: any, idx: number) => {
+            const stKey = st.id || st.userId || st.studentId || st.studentCode || `sv_${idx + 1}`;
+            const resolvedVal =
+              stScoresMap[stKey] ??
+              (st.userId ? stScoresMap[st.userId] : undefined) ??
+              (st.studentId ? stScoresMap[st.studentId] : undefined) ??
+              (st.studentCode ? stScoresMap[st.studentCode] : undefined) ??
+              (existing !== undefined && existing !== null ? String(existing.value) : '');
+            stScoresMap[stKey] = resolvedVal;
+            if (st.id) stScoresMap[st.id] = resolvedVal;
+            if (st.userId) stScoresMap[st.userId] = resolvedVal;
+            if (st.studentId) stScoresMap[st.studentId] = resolvedVal;
+            if (st.studentCode) stScoresMap[st.studentCode] = resolvedVal;
+          });
+
           initScores[c.code] = {
             value: existing ? String(existing.value) : '',
             note: existing?.note || '',
+            studentScores: stScoresMap,
           };
         });
         setTenScores(initScores);
@@ -275,12 +395,23 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
+  const fetchChatMessages = async (groupIdToLoad = selectedGroupId) => {
+    if (!groupIdToLoad) return;
+    try {
+      const currentG = myGroups.find((g) => g.id === groupIdToLoad);
+      const topicId = currentG?.topicId || currentG?.topic?.id;
+      const res = await api.get(`/chat/messages?groupId=${groupIdToLoad}${topicId ? `&topicId=${topicId}` : ''}`);
+      const data = res.data?.data ?? [];
+      setChatMessages(Array.isArray(data) ? data : (data.items ?? []));
+    } catch {
+      setChatMessages([]);
+    }
+  };
+
   // When selectedGroupId changes, load chat, scores, and scoring form
   useEffect(() => {
     if (!selectedGroupId) return;
-    api.get(`/chat/messages?groupId=${selectedGroupId}`)
-      .then((r) => setChatMessages(r.data.data ?? []))
-      .catch(() => setChatMessages([]));
+    fetchChatMessages(selectedGroupId);
 
     api.get(`/scores/groups/${selectedGroupId}`)
       .then((r) => setGroupScores(r.data.data ?? null))
@@ -288,6 +419,48 @@ export const LecturerWorkspace: React.FC = () => {
 
     loadScoringForm(selectedGroupId);
   }, [selectedGroupId]);
+
+  // Realtime Socket.io and Polling for Lecturer chat
+  useEffect(() => {
+    if (activeTab === 'chat' && selectedGroupId) {
+      fetchChatMessages(selectedGroupId);
+
+      const socketUrl = import.meta.env.VITE_API_URL?.replace(/\/api$/, '') ?? 'http://localhost:3000';
+      const socket = io(`${socketUrl}/chat`, { withCredentials: true });
+
+      socket.emit('joinGroup', selectedGroupId);
+      const currentG = myGroups.find((g) => g.id === selectedGroupId);
+      const topicId = currentG?.topicId || currentG?.topic?.id;
+      if (topicId) {
+        socket.emit('joinTopic', topicId);
+      }
+
+      const handleIncomingMessage = (newMsg: any) => {
+        if (!newMsg || !newMsg.id) return;
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+      };
+
+      socket.on('message', handleIncomingMessage);
+      socket.on('new_message', handleIncomingMessage);
+
+      // Polling dự phòng mỗi 4 giây
+      const interval = setInterval(() => {
+        fetchChatMessages(selectedGroupId);
+      }, 4000);
+
+      return () => {
+        clearInterval(interval);
+        socket.emit('leaveGroup', selectedGroupId);
+        if (topicId) {
+          socket.emit('leaveTopic', topicId);
+        }
+        socket.disconnect();
+      };
+    }
+  }, [activeTab, selectedGroupId]);
 
   // Create topic
   const handleCreateTopic = async (e: React.FormEvent) => {
@@ -424,22 +597,27 @@ export const LecturerWorkspace: React.FC = () => {
   const handleMidtermSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!midtermGroup) return;
+    const evaluatedGroupId = midtermGroup.id;
+    const evaluatedGroupCode = midtermGroup.code;
     setMidtermSubmitting(true);
     try {
       await api.post('/midterm-evaluations', {
-        groupId: midtermGroup.id,
+        groupId: evaluatedGroupId,
         ketQua: midtermKetQua,
         lyDo: midtermLyDo.trim() || undefined,
       });
       notify(
-        `Đã xác nhận giữa kỳ cho nhóm ${midtermGroup.code}: ${
-          midtermKetQua === 'CHO_LAM_TIEP' ? 'CHO LÀM TIẾP' : 'DỪNG ĐỀ TÀI'
-        }`,
+        midtermKetQua === 'CHO_LAM_TIEP'
+          ? `Đã xác nhận qua giữa kỳ (CHO LÀM TIẾP) cho nhóm ${evaluatedGroupCode}. Hệ thống đã mở chức năng nhập điểm KLTN!`
+          : `Đã xác nhận giữa kỳ cho nhóm ${evaluatedGroupCode}: DỪNG ĐỀ TÀI`,
       );
       setShowMidtermModal(false);
       setMidtermGroup(null);
       setMidtermLyDo('');
-      loadData();
+      await loadData();
+      if (selectedGroupId === evaluatedGroupId) {
+        await loadScoringForm(evaluatedGroupId);
+      }
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi đánh giá giữa kỳ', 'error');
     } finally {
@@ -459,7 +637,7 @@ export const LecturerWorkspace: React.FC = () => {
       await api.patch(`/topic-proposals/${proposalId}/decision`, { status, reason });
       notify(
         status === 'GV_DA_DUYET'
-          ? 'Đã chấp nhận đề xuất! Hệ thống đã tạo Đề tài và ghi nhận Đăng ký thành công.'
+          ? 'Đã xác nhận đồng ý hướng dẫn! Đề tài đã được chuyển tới Trưởng bộ môn để phê duyệt chính thức.'
           : 'Đã từ chối đề xuất đề tài.',
       );
       loadData();
@@ -480,6 +658,60 @@ export const LecturerWorkspace: React.FC = () => {
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Không thể thêm thành viên', 'error');
+    }
+  };
+
+  // Remove member from group
+  const handleRemoveMember = async (groupId: string, studentId: string, studentName: string) => {
+    if (!confirm(`Bạn có chắc chắn muốn xóa sinh viên "${studentName}" khỏi nhóm này?`)) return;
+    try {
+      await api.delete(`/groups/${groupId}/members/${studentId}`);
+      notify(`Đã xóa sinh viên ${studentName} khỏi nhóm!`);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi xóa sinh viên khỏi nhóm', 'error');
+    }
+  };
+
+  // Transfer member between GVHD's groups
+  const handleTransferMember = async (fromGroupId: string, studentId: string, studentName: string) => {
+    const otherGroups = myGroups.filter((g) => g.id !== fromGroupId && g.status !== 'CANCELLED');
+    if (otherGroups.length === 0) {
+      return notify('Bạn chưa có nhóm hướng dẫn nào khác để chuyển sinh viên sang', 'error');
+    }
+    const optionsText = otherGroups.map((g) => `${g.code} (${g.name})`).join(', ');
+    const targetCodeOrId = prompt(
+      `Chuyển sinh viên "${studentName}" sang nhóm nào?\nNhập mã nhóm đích (${optionsText}):`,
+      otherGroups[0].code,
+    );
+    if (!targetCodeOrId) return;
+    const targetGroup = otherGroups.find(
+      (g) => g.code.toLowerCase() === targetCodeOrId.trim().toLowerCase() || g.id === targetCodeOrId.trim(),
+    );
+    if (!targetGroup) {
+      return notify(`Không tìm thấy nhóm có mã "${targetCodeOrId}" trong danh sách nhóm của bạn`, 'error');
+    }
+    try {
+      await api.post(`/groups/${fromGroupId}/transfer-member`, {
+        studentId,
+        targetGroupId: targetGroup.id,
+      });
+      notify(`Đã chuyển sinh viên ${studentName} sang nhóm ${targetGroup.code} thành công!`);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi chuyển nhóm cho sinh viên', 'error');
+    }
+  };
+
+  // Cancel / Archive topic
+  const handleCancelTopic = async (topicId: string, topicTitle: string) => {
+    if (!confirm(`Bạn có chắc chắn muốn hủy / lưu trữ đề tài "${topicTitle}"?`)) return;
+    try {
+      await api.delete(`/topics/${topicId}`);
+      notify('Đã hủy đề tài thành công!');
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Không thể hủy đề tài', 'error');
     }
   };
 
@@ -511,11 +743,20 @@ export const LecturerWorkspace: React.FC = () => {
     e.preventDefault();
     if (!chatInput.trim() || !selectedGroupId) return;
     try {
+      const currentG = myGroups.find((g) => g.id === selectedGroupId);
+      const topicId = currentG?.topicId || currentG?.topic?.id;
       const res = await api.post('/chat/messages', {
         groupId: selectedGroupId,
+        topicId: topicId || undefined,
         content: chatInput,
       });
-      setChatMessages((prev) => [...prev, res.data.data]);
+      const newMsg = res.data?.data ?? res.data;
+      if (newMsg && newMsg.id) {
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+      }
       setChatInput('');
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi gửi tin nhắn', 'error');
@@ -600,11 +841,40 @@ export const LecturerWorkspace: React.FC = () => {
 
     try {
       setSavingScores(true);
-      const scoresPayload = scoringFormData.criteria.map((c: any) => ({
-        tieuChiId: c.code,
-        score: parseFloat(tenScores[c.code]?.value ?? tenScores[c.id]?.value ?? '0') || 0,
-        note: tenScores[c.code]?.note ?? tenScores[c.id]?.note ?? '',
-      }));
+      const scoresPayload = scoringFormData.criteria.map((c: any) => {
+        const row = tenScores[c.code] ?? tenScores[c.id];
+        const studentScoresPayload: Record<string, number> = {};
+        const numericVals: number[] = [];
+
+        scoringStudents.forEach((st: any) => {
+          const rawStVal =
+            row?.studentScores?.[st.key] ??
+            (st.userId ? row?.studentScores?.[st.userId] : undefined) ??
+            (st.studentId ? row?.studentScores?.[st.studentId] : undefined) ??
+            (st.studentCode ? row?.studentScores?.[st.studentCode] : undefined) ??
+            row?.value ??
+            '0';
+          const numVal = Math.min(Math.max(parseFloat(String(rawStVal)) || 0, 0), 10);
+          studentScoresPayload[st.key] = numVal;
+          if (st.id) studentScoresPayload[st.id] = numVal;
+          if (st.userId) studentScoresPayload[st.userId] = numVal;
+          if (st.studentId) studentScoresPayload[st.studentId] = numVal;
+          if (st.studentCode) studentScoresPayload[st.studentCode] = numVal;
+          numericVals.push(numVal);
+        });
+
+        const avgCriterionScore =
+          numericVals.length > 0
+            ? Math.round((numericVals.reduce((a, b) => a + b, 0) / numericVals.length) * 100) / 100
+            : parseFloat(row?.value ?? '0') || 0;
+
+        return {
+          tieuChiId: c.code,
+          score: avgCriterionScore,
+          studentScores: studentScoresPayload,
+          note: row?.note ?? '',
+        };
+      });
 
       const res = await api.post('/scores', {
         topicId: scoringFormData.topic?.id,
@@ -631,7 +901,15 @@ export const LecturerWorkspace: React.FC = () => {
     e.preventDefault();
     if (!selectedGroupId || !scoreChangeReason.trim()) return;
     try {
-      const topicId = scoringFormData?.topic?.id || selectedGroupId;
+      const g = myGroups.find((item) => item.id === selectedGroupId);
+      const rev = reviewerAssignments.find((r) => (r.groupId || r.id) === selectedGroupId);
+      const topicId =
+        scoringFormData?.topic?.id ||
+        g?.topicId ||
+        g?.topic?.id ||
+        rev?.topicId ||
+        selectedGroupId;
+
       await api.post(`/scores/${topicId}/unlock-request`, {
         reason: scoreChangeReason,
         groupId: selectedGroupId,
@@ -668,6 +946,15 @@ export const LecturerWorkspace: React.FC = () => {
   const isOverload = currentGroupsCount >= maxGroupsQuota;
 
   const currentGroup = myGroups.find((g) => g.id === selectedGroupId);
+  const effectiveMidtermStatus =
+    currentGroup?.midtermStatus ||
+    scoringFormData?.midtermStatus ||
+    scoringFormData?.topic?.group?.midtermStatus ||
+    (reviewerAssignments.some((r) => (r.groupId || r.id) === selectedGroupId) ||
+    committees.some((c) => c.schedules?.some((s: any) => s.group?.id === selectedGroupId))
+      ? 'CONTINUE'
+      : 'PENDING');
+  const isMidtermPassed = effectiveMidtermStatus === 'CONTINUE';
 
   const navItems = [
     { id: 'welcome', label: 'Tổng quan & Chào mừng', icon: LayoutDashboard },
@@ -695,64 +982,29 @@ export const LecturerWorkspace: React.FC = () => {
 
       {/* Main 2-Column Layout: Left Sidebar + Right Content */}
       <div className="flex flex-col lg:flex-row gap-6 items-start">
-        {/* THANH CHỨC NĂNG BÊN TRÁI (LEFT SIDEBAR) */}
-        <aside className="w-full lg:w-64 xl:w-72 shrink-0 lg:sticky lg:top-20 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-3 space-y-1">
-            <div className="px-3 py-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between">
-              <span>Chức năng Giảng viên</span>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-bold">
-                {navItems.length} mục
-              </span>
+        <WorkspaceSidebar
+          title="Chức năng Giảng viên"
+          navItems={navItems}
+          activeTab={activeTab}
+          onTabChange={(tabId) => setActiveTab(tabId)}
+          themeColor="emerald"
+          infoCard={
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/70 to-teal-50/50 border border-emerald-100/80 text-xs text-emerald-950 space-y-2">
+              <div className="font-bold flex items-center justify-between text-emerald-800">
+                <span>Hạn mức Hướng dẫn</span>
+                <Badge variant={isOverload ? 'danger' : 'success'} size="sm">
+                  {isOverload ? 'Đạt hạn mức' : `Còn ${maxGroupsQuota - currentGroupsCount} chỗ`}
+                </Badge>
+              </div>
+              <div className="text-[11px] text-slate-600">
+                Đang hướng dẫn: <strong className="text-emerald-700 font-bold">{currentGroupsCount}</strong> / {maxGroupsQuota} nhóm
+              </div>
             </div>
-            <nav className="space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
-                      isActive
-                        ? 'bg-emerald-700 text-white shadow-sm shadow-emerald-200 font-bold'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                      <span className="truncate">{item.label}</span>
-                    </div>
-                    {item.count !== undefined && item.count > 0 && (
-                      <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-1.5 shrink-0 ${
-                          isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}
-                      >
-                        {item.count}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          </div>
-
-          {/* Mini Quota Summary Card */}
-          <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/70 to-teal-50/50 border border-emerald-100/80 text-xs text-emerald-950 space-y-2">
-            <div className="font-bold flex items-center justify-between text-emerald-800">
-              <span>Hạn mức Hướng dẫn</span>
-              <Badge variant={isOverload ? 'danger' : 'success'} size="sm">
-                {isOverload ? 'Đạt hạn mức' : `Còn ${maxGroupsQuota - currentGroupsCount} chỗ`}
-              </Badge>
-            </div>
-            <div className="text-[11px] text-slate-600">
-              Đang hướng dẫn: <strong className="text-emerald-700 font-bold">{currentGroupsCount}</strong> / {maxGroupsQuota} nhóm
-            </div>
-          </div>
-        </aside>
+          }
+        />
 
         {/* NỘI DUNG CHÍNH BÊN PHẢI (MAIN CONTENT AREA) */}
-        <div className="flex-1 min-w-0 space-y-6">
+        <div className="flex-1 min-w-0 w-full space-y-6">
           {/* Tab 0: Welcome Dashboard */}
           {activeTab === 'welcome' && (
             <LecturerWelcomeView
@@ -764,6 +1016,7 @@ export const LecturerWorkspace: React.FC = () => {
                 reviewerAssignments,
                 committees,
                 proposals,
+                dashboardData,
               }}
             />
           )}
@@ -771,7 +1024,7 @@ export const LecturerWorkspace: React.FC = () => {
           {activeTab !== 'welcome' && (
             <>
               {/* Header & Quota Dashboard */}
-              <div className="bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+              <div className="bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2 text-emerald-200 text-xs font-semibold uppercase tracking-wider">
@@ -878,7 +1131,10 @@ export const LecturerWorkspace: React.FC = () => {
             </Card>
 
             {/* Card 4: Cảnh báo chậm tiến độ */}
-            <Card className="p-4 bg-white border border-slate-200/90 shadow-xs flex flex-col justify-between">
+            <Card
+              onClick={() => setActiveTab('groups')}
+              className="p-4 bg-white border border-slate-200/90 shadow-xs flex flex-col justify-between cursor-pointer hover:border-amber-300 hover:shadow-sm transition-all"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Cảnh báo chậm</span>
                 <div className={`p-2 rounded-lg ${(dashboardData?.canhBaoChamTienDo?.length ?? 0) > 0 ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-400'}`}>
@@ -920,8 +1176,8 @@ export const LecturerWorkspace: React.FC = () => {
             </Card>
           </div>
 
-          {/* CẢNH BÁO CHẬM TIẾN ĐỘ CHI TIẾT */}
-          {dashboardData?.canhBaoChamTienDo && dashboardData.canhBaoChamTienDo.length > 0 && (
+          {/* CẢNH BÁO CHẬM TIẾN ĐỘ CHI TIẾT - CHỈ HIỂN THỊ Ở TAB NHÓM HƯỚNG DẪN */}
+          {activeTab === 'groups' && dashboardData?.canhBaoChamTienDo && dashboardData.canhBaoChamTienDo.length > 0 && (
             <div className="p-4 bg-amber-50/90 border border-amber-200/90 rounded-2xl shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
@@ -1053,9 +1309,35 @@ export const LecturerWorkspace: React.FC = () => {
                     <div className="text-xs font-semibold text-slate-500">Thành viên ({group.members?.length ?? 0}):</div>
                     {group.members?.map((m: any) => (
                       <div key={m.studentId} className="p-2 rounded-lg bg-slate-50 border border-slate-200/60 text-xs text-slate-700 space-y-1">
-                        <div className="flex items-center justify-between font-semibold text-slate-900">
+                        <div className="flex items-center justify-between font-semibold text-slate-900 gap-1 flex-wrap">
                           <span>{m.student?.user?.fullName ?? 'Sinh viên'} ({m.student?.studentCode})</span>
-                          {m.isLeader && <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">Nhóm trưởng</span>}
+                          <div className="flex items-center gap-1">
+                            {m.isLeader && <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">Nhóm trưởng</span>}
+                            {myGroups.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTransferMember(group.id, m.studentId, m.student?.user?.fullName || m.student?.studentCode);
+                                }}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 font-semibold"
+                                title="Chuyển sinh viên sang nhóm khác của bạn"
+                              >
+                                Chuyển nhóm
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveMember(group.id, m.studentId, m.student?.user?.fullName || m.student?.studentCode);
+                              }}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 font-semibold"
+                              title="Xóa sinh viên khỏi nhóm"
+                            >
+                              Xóa
+                            </button>
+                          </div>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-slate-500 pt-0.5 border-t border-slate-200/50">
                           <div>📞 SĐT: <b className="text-slate-800 font-medium">{m.student?.user?.phone || 'Chưa cập nhật'}</b></div>
@@ -1081,28 +1363,80 @@ export const LecturerWorkspace: React.FC = () => {
                   )}
                 </div>
 
-                <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                  <span className="text-[11px] text-slate-400">Đánh giá giữa kỳ:</span>
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openMidtermModal(group, 'CHO_LAM_TIEP');
-                      }}
-                      className="px-2.5 py-1 text-xs font-bold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                    >
-                      Tiếp tục
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openMidtermModal(group, 'DUNG_DE_TAI');
-                      }}
-                      className="px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100"
-                    >
-                      Dừng
-                    </button>
+                <div className="pt-4 mt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {group.midtermStatus === 'PENDING' ? 'Đánh giá GK:' : 'Xử lý lại GK:'}
+                    </span>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openMidtermModal(group, 'CHO_LAM_TIEP');
+                        }}
+                        className="px-2.5 py-1 text-xs font-bold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                        title={
+                          group.midtermStatus === 'STOPPED'
+                            ? 'Xử lý lại giữa kỳ: Mở lại đề tài cho nhóm tiếp tục thực hiện và chấm điểm'
+                            : 'Xác nhận cho nhóm tiếp tục làm KLTN'
+                        }
+                      >
+                        {group.midtermStatus === 'STOPPED' ? 'Mở lại (Cho tiếp)' : 'Tiếp tục'}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openMidtermModal(group, 'DUNG_DE_TAI');
+                        }}
+                        className="px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200"
+                        title="Xác nhận hoặc xử lý lại giữa kỳ: Dừng đề tài"
+                      >
+                        Dừng
+                      </button>
+                    </div>
                   </div>
+
+                  {group.midtermStatus === 'CONTINUE' ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGroupId(group.id);
+                          loadScoringForm(group.id);
+                          setScoreChangeReason('');
+                          setShowScoreChangeModal(true);
+                        }}
+                        className="text-xs flex items-center gap-1.5 border-amber-300 text-amber-800 hover:text-amber-900 hover:bg-amber-50 font-semibold"
+                        title="Gửi yêu cầu mở khóa sửa điểm tới Trưởng bộ môn"
+                      >
+                        <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                        Yêu cầu mở khóa điểm
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGroupId(group.id);
+                          setActiveTab('scores');
+                        }}
+                        className="text-xs flex items-center gap-1 border-slate-200 text-slate-700 hover:text-emerald-700 hover:bg-emerald-50"
+                      >
+                        <Award className="w-3.5 h-3.5 text-emerald-600" />
+                        Chấm / Xem điểm
+                      </Button>
+                    </div>
+                  ) : group.midtermStatus === 'STOPPED' ? (
+                    <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-lg">
+                      Đã dừng đề tài giữa kỳ (Không chấm điểm)
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                      Xác nhận qua GK (Tiếp tục) để mở nhập điểm
+                    </span>
+                  )}
                 </div>
               </Card>
             ))}
@@ -1210,13 +1544,22 @@ export const LecturerWorkspace: React.FC = () => {
                       </button>
 
                       {isEditable ? (
-                        <button
-                          onClick={() => openEditTopicModal(topic)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 cursor-pointer transition-colors"
-                          title="Chỉnh sửa thông tin đề tài"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" /> Sửa đề tài
-                        </button>
+                        <>
+                          <button
+                            onClick={() => openEditTopicModal(topic)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 cursor-pointer transition-colors"
+                            title="Chỉnh sửa thông tin đề tài"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" /> Sửa đề tài
+                          </button>
+                          <button
+                            onClick={() => handleCancelTopic(topic.id, topic.tenDeTai || topic.title)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer transition-colors"
+                            title="Hủy / lưu trữ đề tài (khi chưa có nhóm thực hiện)"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Hủy đề tài
+                          </button>
+                        </>
                       ) : (
                         <span
                           className="text-[11px] text-slate-400 italic px-2 py-0.5 rounded bg-slate-50 border border-slate-200"
@@ -1297,10 +1640,10 @@ export const LecturerWorkspace: React.FC = () => {
                             }`}
                           >
                             {prop.status === 'GV_DA_DUYET'
-                              ? 'Đã chấp nhận'
+                              ? 'GVHD đã đồng ý hướng dẫn (Trưởng BM phê duyệt đề tài)'
                               : prop.status === 'TU_CHOI'
                               ? 'Đã từ chối'
-                              : 'Chờ bạn xác nhận (CHO_GV_XAC_NHAN)'}
+                              : 'Chờ bạn xác nhận hướng dẫn (CHO_GV_XAC_NHAN)'}
                           </span>
                           <span className="text-xs text-slate-400">
                             {new Date(prop.createdAt).toLocaleDateString('vi-VN')}
@@ -1632,32 +1975,74 @@ export const LecturerWorkspace: React.FC = () => {
       {/* TAB 4: Realtime Chat with Group */}
       {activeTab === 'chat' && (
         <Card className="h-[650px] flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedGroupId}
-                onChange={(e) => setSelectedGroupId(e.target.value)}
-                className="px-3 py-1.5 text-sm font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:outline-none"
-              >
-                {myGroups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.code} - {g.name}
-                  </option>
-                ))}
-              </select>
-              <span className="text-xs text-slate-500">Trao đổi trực tiếp nhóm</span>
+          <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 pb-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <select
+                  value={selectedGroupId}
+                  onChange={(e) => setSelectedGroupId(e.target.value)}
+                  className="px-3 py-1.5 text-sm font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:outline-none"
+                >
+                  {myGroups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.code} - {g.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-slate-500">Trao đổi trực tiếp nhóm</span>
+              </div>
+              {currentGroup?.topic?.title && (
+                <div className="text-xs text-slate-600">
+                  <strong className="text-slate-800">Đề tài:</strong> {currentGroup.topic.title}
+                </div>
+              )}
+              {currentGroup?.members && currentGroup.members.length > 0 && (
+                <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                  <span className="font-semibold text-slate-700">Sinh viên hướng dẫn ({currentGroup.members.length}):</span>
+                  {currentGroup.members.map((m: any, idx: number) => (
+                    <span key={m.studentId || idx} className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                      {m.student?.user?.fullName ?? m.student?.studentCode} {m.isLeader ? '(Trưởng nhóm)' : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Realtime
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => fetchChatMessages(selectedGroupId)}
+                className="text-xs text-slate-500 hover:text-emerald-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+                title="Tải lại tin nhắn"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Tải lại
+              </button>
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Realtime
+              </span>
+            </div>
           </CardHeader>
 
           <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-slate-50/40">
             {chatMessages.map((msg) => {
               const isMe = msg.senderId === user?.id;
+              const senderRoles = msg.sender?.roles?.map((r: any) => r.role?.code || r.role || r) || [];
+              const isStudent =
+                senderRoles.includes('SINH_VIEN') ||
+                currentGroup?.members?.some((m: any) => m.student?.userId === msg.senderId);
               return (
                 <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                  <div className="text-[11px] text-slate-400 mb-1 px-1">{msg.sender?.fullName}</div>
+                  <div className="flex items-center gap-1.5 text-[11px] mb-1 px-1">
+                    <span className="font-medium text-slate-600">
+                      {isMe ? 'Bạn (GVHD)' : (msg.sender?.fullName ?? 'Thành viên')}
+                    </span>
+                    {isMe ? (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-100 text-emerald-700 font-semibold">GVHD</span>
+                    ) : isStudent ? (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-blue-100 text-blue-700 font-semibold">Sinh viên</span>
+                    ) : (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-slate-100 text-slate-700 font-semibold">Khác</span>
+                    )}
+                  </div>
                   <div
                     className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm shadow-xs ${
                       isMe
@@ -1961,22 +2346,40 @@ export const LecturerWorkspace: React.FC = () => {
                     </div>
 
                     {/* Actions */}
-                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                    <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
                       <div className="text-xs text-slate-500">
                         Phân công lúc: {new Date(rev.assignedAt).toLocaleDateString('vi-VN')}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        onClick={() => {
-                          setSelectedGroupId(rev.groupId || rev.id);
-                          setActiveTab('scores');
-                        }}
-                        className="text-xs flex items-center gap-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Chấm điểm Phản biện
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const gId = rev.groupId || rev.id;
+                            setSelectedGroupId(gId);
+                            loadScoringForm(gId);
+                            setScoreChangeReason('');
+                            setShowScoreChangeModal(true);
+                          }}
+                          className="text-xs flex items-center gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 font-semibold"
+                          title="Gửi yêu cầu mở khóa sửa điểm phản biện tới Trưởng bộ môn"
+                        >
+                          <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                          Yêu cầu mở khóa
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => {
+                            setSelectedGroupId(rev.groupId || rev.id);
+                            setActiveTab('scores');
+                          }}
+                          className="text-xs flex items-center gap-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Chấm điểm Phản biện
+                        </Button>
+                      </div>
                     </div>
                   </Card>
                 ))}
@@ -2172,11 +2575,28 @@ export const LecturerWorkspace: React.FC = () => {
                   onChange={(e) => setSelectedGroupId(e.target.value)}
                   className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm"
                 >
-                  {myGroups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.code} - {g.name}
-                    </option>
-                  ))}
+                  <optgroup label="Nhóm hướng dẫn">
+                    {myGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.code} - {g.name} (
+                        {g.midtermStatus === 'CONTINUE'
+                          ? 'Đã qua GK - Cho làm tiếp'
+                          : g.midtermStatus === 'STOPPED'
+                          ? 'Đã dừng GK'
+                          : 'Chờ xác nhận GK'}
+                        )
+                      </option>
+                    ))}
+                  </optgroup>
+                  {reviewerAssignments.length > 0 && (
+                    <optgroup label="Nhóm phản biện">
+                      {reviewerAssignments.map((r) => (
+                        <option key={r.groupId || r.id} value={r.groupId || r.id}>
+                          {r.groupCode || r.group?.code || 'PB'} - {r.topicTitle || r.group?.name || 'Phản biện'}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
@@ -2189,136 +2609,487 @@ export const LecturerWorkspace: React.FC = () => {
                     : 'Cán bộ Hướng dẫn'}
                 </Badge>
 
-                {scoringFormData?.isLocked && !scoringFormData?.canEdit ? (
-                  <Badge variant="neutral" size="sm" className="bg-purple-100 text-purple-900 border-purple-200">
-                    <Lock className="w-3.5 h-3.5 mr-1 inline" /> ĐÃ KHÓA ĐIỂM
-                  </Badge>
-                ) : scoringFormData?.existingScores?.some((s: any) => s.status === 'OPENED') ? (
-                  <Badge variant="success" size="sm">
-                    <Unlock className="w-3.5 h-3.5 mr-1 inline" /> ĐÃ MỞ KHÓA SỬA
-                  </Badge>
-                ) : scoringFormData?.existingScores?.length > 0 ? (
-                  <Badge variant="warning" size="sm">
-                    BẢN NHÁP (DRAFT)
-                  </Badge>
+                {!isMidtermPassed ? (
+                  effectiveMidtermStatus === 'STOPPED' ? (
+                    <Badge variant="danger" size="sm">
+                      ĐÃ DỪNG ĐỀ TÀI GIỮA KỲ
+                    </Badge>
+                  ) : (
+                    <Badge variant="warning" size="sm">
+                      CHƯA XÁC NHẬN QUA GIỮA KỲ
+                    </Badge>
+                  )
                 ) : (
-                  <Badge variant="neutral" size="sm">
-                    CHƯA CHẤM
-                  </Badge>
-                )}
+                  <>
+                    {scoringFormData?.existingScores?.some((s: any) => s.status === 'OPENED') ? (
+                      <Badge variant="success" size="sm">
+                        <Unlock className="w-3.5 h-3.5 mr-1 inline" /> ĐÃ MỞ KHÓA SỬA
+                        {scoringFormData?.existingScores?.find((s: any) => s.unlockedUntil)?.unlockedUntil && (
+                          <span className="ml-1 text-[10px]">
+                            (đến {new Date(scoringFormData.existingScores.find((s: any) => s.unlockedUntil).unlockedUntil).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })})
+                          </span>
+                        )}
+                      </Badge>
+                    ) : (scoringFormData?.isLocked || !scoringFormData?.canEdit || scoringFormData?.existingScores?.some((s: any) => s.status === 'LOCKED' || s.status === 'SUBMITTED')) ? (
+                      <Badge variant="neutral" size="sm" className="bg-purple-100 text-purple-900 border-purple-200">
+                        <Lock className="w-3.5 h-3.5 mr-1 inline" /> ĐÃ KHÓA ĐIỂM
+                      </Badge>
+                    ) : scoringFormData?.existingScores?.length > 0 ? (
+                      <Badge variant="warning" size="sm">
+                        BẢN NHÁP (DRAFT)
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        CHƯA CHẤM
+                      </Badge>
+                    )}
 
-                <Button size="sm" variant="outline" onClick={handleDownloadPdf} className="text-xs flex items-center gap-1.5">
-                  <Download className="w-4 h-4 text-slate-600" />
-                  Xuất biểu mẫu PDF
-                </Button>
+                    <Button size="sm" variant="outline" onClick={handleDownloadPdf} className="text-xs flex items-center gap-1.5">
+                      <Download className="w-4 h-4 text-slate-600" />
+                      Xuất biểu mẫu PDF
+                    </Button>
 
-                {scoringFormData?.isLocked && !scoringFormData?.canEdit && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-xs text-amber-800 border-amber-300 hover:bg-amber-50 flex items-center gap-1"
-                    onClick={() => setShowScoreChangeModal(true)}
-                  >
-                    <Unlock className="w-3.5 h-3.5" />
-                    Yêu cầu mở khóa
-                  </Button>
+                    {/* NÚT YÊU CẦU MỞ KHÓA ĐIỂM TRÊN HEADER */}
+                    {scoringFormData?.unlockRequest?.status === 'PENDING' ? (
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="warning" size="sm" className="bg-amber-100 text-amber-900 border-amber-300">
+                          <Clock className="w-3.5 h-3.5 mr-1 inline" /> Chờ TBM duyệt
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs text-amber-800 border-amber-300 hover:bg-amber-50 flex items-center gap-1 font-semibold"
+                          onClick={() => {
+                            setScoreChangeReason(scoringFormData?.unlockRequest?.reason || '');
+                            setShowScoreChangeModal(true);
+                          }}
+                          title="Xem / Sửa lý do đề xuất mở khóa"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Sửa lý do
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 font-bold flex items-center gap-1.5 shadow-xs"
+                        onClick={() => {
+                          setScoreChangeReason(scoringFormData?.unlockRequest?.reason || '');
+                          setShowScoreChangeModal(true);
+                        }}
+                        title="Gửi yêu cầu mở khóa sửa điểm đến Trưởng bộ môn"
+                      >
+                        <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                        Yêu cầu mở khóa điểm
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </CardHeader>
 
             <CardContent className="space-y-6 pt-5">
-              {/* Cảnh báo khi điểm đã khóa hoặc đang có yêu cầu mở khóa */}
-              {scoringFormData?.isLocked && !scoringFormData?.canEdit && (
-                <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-xl text-xs space-y-2">
-                  <div className="flex items-start gap-2.5">
-                    <Lock className="w-4 h-4 text-purple-700 shrink-0 mt-0.5" />
+              {!isMidtermPassed ? (
+                effectiveMidtermStatus === 'STOPPED' ? (
+                  <div className="p-6 bg-rose-50/90 border border-rose-200 rounded-2xl space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-rose-100 text-rose-700 rounded-xl shrink-0">
+                        <AlertTriangle className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <h4 className="text-sm font-bold text-rose-950">
+                          Nhóm đã dừng thực hiện đề tài ở giai đoạn Giữa kỳ (DỪNG ĐỀ TÀI)
+                        </h4>
+                        <p className="text-xs text-rose-800 leading-relaxed">
+                          Nhóm <b>{currentGroup?.code || scoringFormData?.topic?.group?.code}</b> đã được Giảng viên hướng dẫn xác nhận{' '}
+                          <b>DỪNG ĐỀ TÀI</b> ở đánh giá giữa kỳ, vì vậy hệ thống khóa biểu mẫu nhập điểm KLTN. Nếu Quý Thầy/Cô muốn cập nhật lại quyết định giữa kỳ sang{' '}
+                          <b>CHO LÀM TIẾP</b> để nhóm tiếp tục thực hiện và mở nhập điểm, vui lòng xác nhận lại bên dưới.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2.5 pl-11">
+                      {currentGroup && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5"
+                          onClick={() => openMidtermModal(currentGroup, 'CHO_LAM_TIEP')}
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          Xác nhận lại: CHO LÀM TIẾP (Mở nhập điểm)
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs"
+                        onClick={() => setActiveTab('groups')}
+                      >
+                        Quay lại Nhóm hướng dẫn
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-6 bg-amber-50/90 border border-amber-200 rounded-2xl space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl shrink-0">
+                        <AlertTriangle className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <h4 className="text-sm font-bold text-amber-950">
+                          Chưa xác nhận kết quả Đánh giá Giữa kỳ — Chưa mở biểu mẫu nhập điểm
+                        </h4>
+                        <p className="text-xs text-amber-900 leading-relaxed">
+                          Nhóm <b>{currentGroup?.code || scoringFormData?.topic?.group?.code || 'hiện tại'}</b> đang ở trạng thái{' '}
+                          <b>Chờ đánh giá giữa kỳ</b>. Theo đúng quy trình KLTN, Giảng viên hướng dẫn cần xác nhận nhóm đạt yêu cầu qua giữa kỳ (
+                          <b>CHO LÀM TIẾP</b>) trước khi hệ thống tiến hành hiển thị biểu mẫu nhập điểm 10 tiêu chí.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2.5 pl-11">
+                      {currentGroup && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                            onClick={() => openMidtermModal(currentGroup, 'CHO_LAM_TIEP')}
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Xác nhận qua Giữa kỳ: CHO LÀM TIẾP (Mở nhập điểm ngay)
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            className="text-xs font-bold flex items-center gap-1.5"
+                            onClick={() => openMidtermModal(currentGroup, 'DUNG_DE_TAI')}
+                          >
+                            Dừng đề tài giữa kỳ
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs"
+                        onClick={() => setActiveTab('groups')}
+                      >
+                        Quay lại Nhóm hướng dẫn
+                      </Button>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <>
+                  <div className="px-3.5 py-2.5 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>
+                        Nhóm đã được xác nhận qua Giữa kỳ (<b>CHO LÀM TIẾP</b>) — Đủ điều kiện nhập điểm đánh giá KLTN.
+                      </span>
+                    </div>
+                    {(currentGroup?.midtermAt || scoringFormData?.topic?.group?.midtermAt) && (
+                      <span className="text-[11px] text-emerald-700">
+                        Xác nhận GK lúc:{' '}
+                        {new Date(currentGroup?.midtermAt || scoringFormData?.topic?.group?.midtermAt).toLocaleString('vi-VN')}
+                      </span>
+                    )}
+                  </div>
+              {/* Cảnh báo khi yêu cầu bị từ chối */}
+              {scoringFormData?.unlockRequest?.status === 'REJECTED' && (
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5 text-rose-900">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                     <div>
-                      <span className="font-bold text-purple-900">Điểm của nhóm này đã được khóa chính thức.</span>
-                      <p className="text-purple-700 mt-0.5">
-                        Theo quy chế đánh giá KLTN, điểm đã khóa không thể tự ý chỉnh sửa nhằm đảm bảo tính minh bạch.
-                        Nếu cần điều chỉnh, vui lòng nhấn <b>"Yêu cầu mở khóa"</b> để gửi lý do giải trình tới Trưởng bộ môn.
+                      <span className="font-bold">Yêu cầu mở khóa trước đó đã bị Trưởng bộ môn từ chối:</span>
+                      <p className="text-rose-700 mt-0.5">
+                        Lý do từ chối: "{scoringFormData.unlockRequest.rejectReason || 'Chưa cung cấp đủ minh chứng hợp lệ'}"
                       </p>
                     </div>
                   </div>
-
-                  {scoringFormData?.unlockRequest && scoringFormData.unlockRequest.status === 'PENDING' && (
-                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 font-medium flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>
-                        Yêu cầu mở khóa đang chờ Trưởng bộ môn phê duyệt (Gửi lúc:{' '}
-                        {new Date(scoringFormData.unlockRequest.createdAt).toLocaleString('vi-VN')} - Lý do: "
-                        {scoringFormData.unlockRequest.reason}")
-                      </span>
-                    </div>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shrink-0 flex items-center gap-1.5 shadow-sm self-start sm:self-auto"
+                    onClick={() => {
+                      setScoreChangeReason(scoringFormData.unlockRequest?.reason || '');
+                      setShowScoreChangeModal(true);
+                    }}
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    Gửi lại yêu cầu mở khóa
+                  </Button>
                 </div>
               )}
 
-              {/* Bảng 10 tiêu chí chấm điểm */}
+              {/* Cảnh báo khi điểm đã khóa hoặc đang có yêu cầu mở khóa */}
+              {(scoringFormData?.isLocked || !scoringFormData?.canEdit || scoringFormData?.existingScores?.some((s: any) => s.status === 'LOCKED' || s.status === 'SUBMITTED')) &&
+                !scoringFormData?.existingScores?.some((s: any) => s.status === 'OPENED') && (
+                  <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-xl text-xs space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <Lock className="w-4 h-4 text-purple-700 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold text-purple-900">Điểm của nhóm này đã được khóa chính thức.</span>
+                          <p className="text-purple-700 mt-0.5 leading-relaxed">
+                            Theo quy chế đánh giá KLTN, điểm đã khóa không thể tự ý chỉnh sửa nhằm đảm bảo tính minh bạch.
+                            Nếu cần điều chỉnh hoặc bổ sung điểm, Quý Thầy/Cô vui lòng gửi yêu cầu giải trình tới Trưởng bộ môn.
+                          </p>
+                        </div>
+                      </div>
+
+                      {scoringFormData?.unlockRequest?.status !== 'PENDING' && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shrink-0 flex items-center gap-1.5 shadow-sm self-start sm:self-auto"
+                          onClick={() => setShowScoreChangeModal(true)}
+                        >
+                          <Unlock className="w-3.5 h-3.5" />
+                          Gửi yêu cầu mở khóa điểm
+                        </Button>
+                      )}
+                    </div>
+
+                    {scoringFormData?.unlockRequest && scoringFormData.unlockRequest.status === 'PENDING' && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 font-medium flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>
+                            Yêu cầu mở khóa đang chờ Trưởng bộ môn phê duyệt (Gửi lúc:{' '}
+                            {new Date(scoringFormData.unlockRequest.createdAt).toLocaleString('vi-VN')} - Lý do: "
+                            {scoringFormData.unlockRequest.reason}")
+                          </span>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs text-amber-800 border-amber-300 hover:bg-amber-100 shrink-0 self-start sm:self-auto"
+                          onClick={() => setShowScoreChangeModal(true)}
+                        >
+                          Sửa lý do
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              {/* Thông tin Sinh viên thực hiện (Chấm riêng cho từng sinh viên) */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-emerald-600" />
+                    <span>Thông tin Sinh viên được đánh giá riêng biệt ({scoringStudents.length} sinh viên)</span>
+                  </div>
+                  {scoringStudents.length > 1 && !(scoringFormData?.isLocked && !scoringFormData?.canEdit) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const firstSt = scoringStudents[0];
+                        if (!firstSt) return;
+                        setTenScores((prev) => {
+                          const next = { ...prev };
+                          for (const code of Object.keys(next)) {
+                            const row = next[code];
+                            const sv1Val =
+                              row?.studentScores?.[firstSt.key] ??
+                              (firstSt.userId ? row?.studentScores?.[firstSt.userId] : undefined) ??
+                              (firstSt.studentId ? row?.studentScores?.[firstSt.studentId] : undefined) ??
+                              row?.value ??
+                              '';
+                            const updatedStScores: Record<string, string> = { ...(row?.studentScores || {}) };
+                            scoringStudents.forEach((st: any) => {
+                              updatedStScores[st.key] = String(sv1Val);
+                              if (st.id) updatedStScores[st.id] = String(sv1Val);
+                              if (st.userId) updatedStScores[st.userId] = String(sv1Val);
+                              if (st.studentId) updatedStScores[st.studentId] = String(sv1Val);
+                              if (st.studentCode) updatedStScores[st.studentCode] = String(sv1Val);
+                            });
+                            next[code] = {
+                              ...row,
+                              value: String(sv1Val),
+                              studentScores: updatedStScores,
+                            };
+                          }
+                          return next;
+                        });
+                        notify('Đã sao chép điểm từ Sinh viên 1 sang các sinh viên còn lại trong nhóm!');
+                      }}
+                      className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Sao chép nhanh điểm SV1 → SV2
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                  {scoringStudents.map((st: any, idx: number) => (
+                    <div
+                      key={st.key}
+                      className="px-3.5 py-2.5 bg-white rounded-lg border border-slate-200 flex items-center justify-between text-xs shadow-2xs"
+                    >
+                      <div>
+                        <div className="text-slate-500">
+                          Họ tên sinh viên {idx + 1}:{' '}
+                          <b className="text-slate-900 text-sm">{st.fullName}</b>
+                          {st.isLeader && (
+                            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                              Nhóm trưởng
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-slate-500 mt-0.5">
+                          Mã số sinh viên: <b className="font-mono text-slate-800">{st.studentCode}</b>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400 uppercase font-bold">Điểm TB SV{idx + 1}</div>
+                        <div className="text-base font-black text-emerald-700">
+                          {(liveStudentTotals[st.key] ?? 0).toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Bảng 10 tiêu chí chấm điểm riêng cho từng sinh viên */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
                     <Edit3 className="w-4 h-4 text-emerald-600" />
-                    Bảng chi tiết 10 tiêu chí đánh giá KLTN
+                    Bảng chi tiết 10 tiêu chí đánh giá KLTN (Chấm riêng từng sinh viên)
                   </h4>
-                  <span className="text-xs text-slate-500 font-medium">Thang điểm 10 • Tổng trọng số 100%</span>
+                  <span className="text-xs text-slate-500 font-medium">
+                    Thang điểm 10 • Điểm trung bình mỗi SV = Trung bình cộng 10 tiêu chí LO của SV đó
+                  </span>
                 </div>
 
                 <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full min-w-[780px] text-left text-xs">
                     <thead className="bg-slate-50 text-slate-700 font-bold uppercase border-b border-slate-200">
                       <tr>
-                        <th className="p-3 w-12 text-center">STT</th>
-                        <th className="p-3 w-24">Mã TC</th>
-                        <th className="p-3">Nội dung tiêu chí đánh giá</th>
-                        <th className="p-3 w-20 text-center">Trọng số</th>
-                        <th className="p-3 w-20 text-center">Điểm TĐ</th>
-                        <th className="p-3 w-36 text-center">Điểm chấm (0 - 10)</th>
-                        <th className="p-3 w-56">Ghi chú / Nhận xét</th>
+                        <th rowSpan={2} className="p-3 w-14 text-center border-r border-slate-200">
+                          STT
+                        </th>
+                        <th rowSpan={2} className="p-3 border-r border-slate-200">
+                          LO
+                        </th>
+                        <th
+                          colSpan={scoringStudents.length}
+                          className="p-2 text-center border-b border-r border-slate-200 bg-emerald-50/60 text-emerald-950"
+                        >
+                          Kết quả đánh giá (Thang điểm 10)
+                        </th>
+                        <th rowSpan={2} className="p-3 w-52">
+                          Ghi chú / Nhận xét
+                        </th>
+                      </tr>
+                      <tr>
+                        {scoringStudents.map((st: any, idx: number) => (
+                          <th
+                            key={st.key}
+                            className="p-2.5 w-44 text-center border-r border-slate-200 bg-emerald-50/30"
+                          >
+                            <div className="text-xs font-extrabold text-slate-900">
+                              Sinh viên {idx + 1}
+                            </div>
+                            <div className="text-[11px] font-semibold text-emerald-800 normal-case truncate max-w-[160px] mx-auto">
+                              {st.fullName}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-500 normal-case">
+                              MSSV: {st.studentCode}
+                            </div>
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {scoringFormData?.criteria?.map((c: any, index: number) => {
                         const isLocked = scoringFormData?.isLocked && !scoringFormData?.canEdit;
-                        const currentVal = tenScores[c.code]?.value ?? '';
-                        const currentNote = tenScores[c.code]?.note ?? '';
+                        const rowData = tenScores[c.code];
+                        const currentNote = rowData?.note ?? '';
 
                         return (
                           <tr key={c.id} className="hover:bg-slate-50/60 transition-colors">
-                            <td className="p-3 text-center font-bold text-slate-400">{index + 1}</td>
-                            <td className="p-3 font-mono font-bold text-slate-800">{c.code}</td>
-                            <td className="p-3">
-                              <div className="font-semibold text-slate-900">{c.name}</div>
-                              {c.description && (
-                                <div className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{c.description}</div>
-                              )}
+                            <td className="p-3 text-center font-mono font-bold text-slate-700 border-r border-slate-100">
+                              {String(index + 1).padStart(2, '0')}
                             </td>
-                            <td className="p-3 text-center font-bold text-indigo-700 bg-indigo-50/30">{c.weight}%</td>
-                            <td className="p-3 text-center font-medium text-slate-600">{c.maxScore}</td>
-                            <td className="p-3">
-                              <input
-                                type="number"
-                                min="0"
-                                max="10"
-                                step="0.1"
-                                placeholder="0 - 10"
-                                value={currentVal}
-                                disabled={isLocked}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setTenScores((prev) => ({
-                                    ...prev,
-                                    [c.code]: { ...prev[c.code], value: val, note: prev[c.code]?.note || '' },
-                                  }));
-                                }}
-                                className={`w-full px-3 py-1.5 text-center font-bold text-sm rounded-lg border focus:outline-none transition-all ${
-                                  isLocked
-                                    ? 'bg-slate-100 text-slate-600 border-slate-200 cursor-not-allowed'
-                                    : 'bg-white text-emerald-800 border-slate-300 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-sm'
-                                }`}
-                              />
+                            <td className="p-3 border-r border-slate-100">
+                              <div className="font-semibold text-slate-900 leading-relaxed">{c.name}</div>
                             </td>
-                            <td className="p-3">
+                            {scoringStudents.map((st: any, stIdx: number) => {
+                              const stVal =
+                                rowData?.studentScores?.[st.key] ??
+                                (st.userId ? rowData?.studentScores?.[st.userId] : undefined) ??
+                                (st.studentId ? rowData?.studentScores?.[st.studentId] : undefined) ??
+                                (st.studentCode ? rowData?.studentScores?.[st.studentCode] : undefined) ??
+                                rowData?.value ??
+                                '';
+                              return (
+                                <td key={st.key} className="p-2.5 border-r border-slate-100">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="10"
+                                    step="0.1"
+                                    placeholder={`Điểm SV${stIdx + 1} (0-10)`}
+                                    value={stVal}
+                                    disabled={isLocked}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setTenScores((prev) => {
+                                        const prevRow = prev[c.code] || { value: '', note: '', studentScores: {} };
+                                        const nextStScores: Record<string, string> = {
+                                          ...(prevRow.studentScores || {}),
+                                          [st.key]: val,
+                                        };
+                                        if (st.id) nextStScores[st.id] = val;
+                                        if (st.userId) nextStScores[st.userId] = val;
+                                        if (st.studentId) nextStScores[st.studentId] = val;
+                                        if (st.studentCode) nextStScores[st.studentCode] = val;
+
+                                        const nums = scoringStudents
+                                          .map((member: any) =>
+                                            parseFloat(
+                                              nextStScores[member.key] ??
+                                                (member.userId ? nextStScores[member.userId] : undefined) ??
+                                                prevRow.value ??
+                                                '0',
+                                            ),
+                                          )
+                                          .filter((n: number) => !isNaN(n));
+                                        const avgStr =
+                                          nums.length > 0
+                                            ? String(
+                                                Math.round(
+                                                  (nums.reduce((a: number, b: number) => a + b, 0) / nums.length) *
+                                                    100,
+                                                ) / 100,
+                                              )
+                                            : val;
+
+                                        return {
+                                          ...prev,
+                                          [c.code]: {
+                                            ...prevRow,
+                                            value: avgStr,
+                                            note: prevRow.note || '',
+                                            studentScores: nextStScores,
+                                          },
+                                        };
+                                      });
+                                    }}
+                                    className={`w-full px-2.5 py-1.5 text-center font-bold text-sm rounded-lg border focus:outline-none transition-all ${
+                                      isLocked
+                                        ? 'bg-slate-100 text-slate-600 border-slate-200 cursor-not-allowed'
+                                        : 'bg-white text-emerald-800 border-slate-300 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-sm'
+                                    }`}
+                                  />
+                                </td>
+                              );
+                            })}
+                            <td className="p-2.5">
                               <input
                                 type="text"
                                 placeholder="Ghi chú đánh giá..."
@@ -2328,7 +3099,12 @@ export const LecturerWorkspace: React.FC = () => {
                                   const note = e.target.value;
                                   setTenScores((prev) => ({
                                     ...prev,
-                                    [c.code]: { ...prev[c.code], value: prev[c.code]?.value || '', note },
+                                    [c.code]: {
+                                      ...prev[c.code],
+                                      value: prev[c.code]?.value || '',
+                                      note,
+                                      studentScores: prev[c.code]?.studentScores || {},
+                                    },
                                   }));
                                 }}
                                 className={`w-full px-2.5 py-1.5 text-xs rounded-lg border focus:outline-none transition-all ${
@@ -2342,53 +3118,132 @@ export const LecturerWorkspace: React.FC = () => {
                         );
                       })}
                     </tbody>
+                    <tfoot className="bg-slate-50 border-t-2 border-slate-200 font-bold text-slate-900">
+                      <tr className="border-b border-slate-200">
+                        <td colSpan={2} className="p-3 text-center uppercase tracking-wider text-sm border-r border-slate-200">
+                          ĐIỂM TRUNG BÌNH
+                        </td>
+                        {scoringStudents.map((st: any) => {
+                          const stTotal = liveStudentTotals[st.key] ?? 0;
+                          return (
+                            <td
+                              key={st.key}
+                              className="p-3 text-center text-base font-black text-emerald-700 border-r border-slate-200"
+                            >
+                              {stTotal.toFixed(2)} / 10
+                            </td>
+                          );
+                        })}
+                        <td className="p-3 text-xs text-slate-500 font-normal">
+                          Trung bình cộng 10 LO từng SV
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={2} className="p-3 text-center uppercase tracking-wider text-sm border-r border-slate-200">
+                          KẾT QUẢ
+                        </td>
+                        {scoringStudents.map((st: any) => {
+                          const stTotal = liveStudentTotals[st.key] ?? 0;
+                          const isPass = stTotal >= 5.0;
+                          return (
+                            <td key={st.key} className="p-3 border-r border-slate-200">
+                              <div className="flex flex-col items-start gap-1.5 text-xs font-bold pl-2">
+                                <label className="inline-flex items-center gap-2 text-emerald-800">
+                                  <input
+                                    type="checkbox"
+                                    checked={isPass}
+                                    readOnly
+                                    className="rounded text-emerald-600 w-4 h-4"
+                                  />
+                                  <span>Đạt</span>
+                                </label>
+                                <label className="inline-flex items-center gap-2 text-rose-800">
+                                  <input
+                                    type="checkbox"
+                                    checked={stTotal > 0 && !isPass}
+                                    readOnly
+                                    className="rounded text-rose-600 w-4 h-4"
+                                  />
+                                  <span>Không đạt</span>
+                                </label>
+                              </div>
+                            </td>
+                          );
+                        })}
+                        <td className="p-3 text-xs text-slate-500 font-normal">
+                          Đạt khi ĐTB ≥ 5.0
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               </div>
 
-              {/* Hộp hiển thị Điểm tổng tự động tính theo thời gian thực */}
-              <div className="p-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
+              {/* Hộp hiển thị Điểm tổng tự động tính riêng cho từng Sinh viên */}
+              <div className="p-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 rounded-2xl space-y-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
                     <span className="text-xs font-black tracking-wider text-emerald-950 uppercase">
-                      Tổng điểm tự động tính (Hệ 10)
+                      Tổng hợp kết quả đánh giá theo từng Sinh viên (Hệ 10)
                     </span>
-                    <Badge
-                      variant={
-                        liveTotal >= 9.0
-                          ? 'success'
-                          : liveTotal >= 8.0
-                          ? 'primary'
-                          : liveTotal >= 6.5
-                          ? 'primary'
-                          : liveTotal >= 5.0
-                          ? 'warning'
-                          : 'danger'
-                      }
-                      size="sm"
-                    >
-                      XẾP LOẠI:{' '}
-                      {liveTotal >= 9.0
-                        ? 'XUẤT SẮC'
-                        : liveTotal >= 8.0
-                        ? 'GIỎI'
-                        : liveTotal >= 6.5
-                        ? 'KHÁ'
-                        : liveTotal >= 5.0
-                        ? 'TRUNG BÌNH'
-                        : 'KHÔNG ĐẠT'}
-                    </Badge>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Công thức: Điểm trung bình mỗi sinh viên = (∑ Điểm 10 tiêu chí LO của sinh viên đó) / 10
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-600">
-                    Công thức: Điểm tổng = ∑ (Điểm tiêu chí × Trọng số) / 100 • Hệ thống tự động cập nhật khi nhập
-                  </p>
                 </div>
 
-                <div className="text-right flex items-center gap-3 shrink-0">
-                  <div>
-                    <div className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">Điểm tổng kết</div>
-                    <div className="text-4xl font-black text-emerald-700 tracking-tight">{liveTotal.toFixed(2)} / 10</div>
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scoringStudents.map((st: any, idx: number) => {
+                    const stTotal = liveStudentTotals[st.key] ?? 0;
+                    const ratingLabel =
+                      stTotal >= 9.0
+                        ? 'XUẤT SẮC'
+                        : stTotal >= 8.0
+                        ? 'GIỎI'
+                        : stTotal >= 6.5
+                        ? 'KHÁ'
+                        : stTotal >= 5.0
+                        ? 'TRUNG BÌNH'
+                        : 'KHÔNG ĐẠT';
+                    return (
+                      <div
+                        key={st.key}
+                        className="p-4 bg-white/90 border border-emerald-200/80 rounded-xl flex items-center justify-between gap-3 shadow-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="text-xs text-slate-500 font-semibold">
+                            Sinh viên {idx + 1} • MSSV: <span className="font-mono text-slate-700">{st.studentCode}</span>
+                          </div>
+                          <div className="text-sm font-bold text-slate-900">{st.fullName}</div>
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <Badge
+                              variant={
+                                stTotal >= 9.0
+                                  ? 'success'
+                                  : stTotal >= 6.5
+                                  ? 'primary'
+                                  : stTotal >= 5.0
+                                  ? 'warning'
+                                  : 'danger'
+                              }
+                              size="sm"
+                            >
+                              Xếp loại: {ratingLabel}
+                            </Badge>
+                            <Badge variant={stTotal >= 5.0 ? 'success' : 'danger'} size="sm">
+                              {stTotal >= 5.0 ? 'Đạt' : 'Không đạt'}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[10px] text-slate-400 uppercase font-bold">Điểm TB</div>
+                          <div className="text-3xl font-black text-emerald-700 tracking-tight">
+                            {stTotal.toFixed(2)} <span className="text-sm font-bold text-slate-400">/ 10</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2424,6 +3279,20 @@ export const LecturerWorkspace: React.FC = () => {
                     <Button
                       type="button"
                       variant="outline"
+                      onClick={() => {
+                        setScoreChangeReason(scoringFormData?.unlockRequest?.reason || '');
+                        setShowScoreChangeModal(true);
+                      }}
+                      className="text-xs flex items-center gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 font-semibold"
+                      title="Gửi yêu cầu mở khóa sửa điểm tới Trưởng bộ môn"
+                    >
+                      <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                      Yêu cầu mở khóa điểm
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
                       disabled={savingScores}
                       onClick={() => handleSaveBatchScores(true)}
                       className="text-xs flex items-center gap-1.5 border-slate-300 text-slate-700 hover:bg-slate-100"
@@ -2444,12 +3313,55 @@ export const LecturerWorkspace: React.FC = () => {
                     </Button>
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500 italic flex items-center gap-1">
-                    <Lock className="w-3.5 h-3.5 text-purple-600" />
-                    Điểm đã khóa. Muốn sửa điểm, vui lòng gửi yêu cầu mở khóa đến Trưởng bộ môn.
+                  <div className="flex flex-wrap items-center gap-3">
+                    {scoringFormData?.unlockRequest?.status === 'PENDING' ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="warning" size="sm" className="bg-amber-100 text-amber-900 border-amber-300 flex items-center gap-1 py-1.5 px-3 font-semibold text-xs">
+                          <Clock className="w-3.5 h-3.5 text-amber-700 animate-spin" />
+                          Đang chờ Trưởng bộ môn duyệt mở khóa
+                        </Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-xs text-amber-800 border-amber-300 hover:bg-amber-50 flex items-center gap-1 font-semibold"
+                          onClick={() => {
+                            if (scoringFormData?.unlockRequest?.reason) {
+                              setScoreChangeReason(scoringFormData.unlockRequest.reason);
+                            }
+                            setShowScoreChangeModal(true);
+                          }}
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Sửa lý do đề xuất
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="text-xs text-slate-500 italic flex items-center gap-1">
+                          <Lock className="w-3.5 h-3.5 text-purple-600" />
+                          Điểm đã khóa chính thức. Muốn cập nhật điểm, vui lòng gửi yêu cầu mở khóa đến Trưởng bộ môn:
+                        </div>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm px-3.5 py-1.5"
+                          onClick={() => {
+                            setScoreChangeReason('');
+                            setShowScoreChangeModal(true);
+                          }}
+                        >
+                          <Unlock className="w-4 h-4" />
+                          <span>Yêu cầu mở khóa điểm</span>
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -2667,7 +3579,7 @@ export const LecturerWorkspace: React.FC = () => {
               </div>
             ) : (
               <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                <table className="w-full text-xs text-left">
+                <table className="w-full min-w-[500px] text-xs text-left">
                   <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-2.5">MSSV</th>
@@ -2831,7 +3743,7 @@ export const LecturerWorkspace: React.FC = () => {
               <option value="">-- Chọn tiêu chí --</option>
               {criteria.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} (Trọng số: {c.weight}%, Thang: {c.maxScore})
+                  {c.code ? `${c.code} - ` : ''}{c.name} (Thang: {c.maxScore})
                 </option>
               ))}
             </select>
@@ -2865,24 +3777,89 @@ export const LecturerWorkspace: React.FC = () => {
       </Modal>
 
       {/* MODAL: Score Change Request */}
-      <Modal isOpen={showScoreChangeModal} onClose={() => setShowScoreChangeModal(false)} title="Đề xuất mở khóa sửa điểm">
+      <Modal isOpen={showScoreChangeModal} onClose={() => setShowScoreChangeModal(false)} title="Đề xuất mở khóa sửa điểm KLTN">
         <form onSubmit={handleRequestScoreChange} className="space-y-4 text-sm">
+          {/* Target Group & Topic Context */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-800">
+                Nhóm:{' '}
+                <span className="font-mono text-indigo-700">
+                  {currentGroup?.code || reviewerAssignments.find((r) => (r.groupId || r.id) === selectedGroupId)?.groupCode || scoringFormData?.topic?.group?.code || 'KLTN'}
+                </span>{' '}
+                - {currentGroup?.name || reviewerAssignments.find((r) => (r.groupId || r.id) === selectedGroupId)?.groupName || scoringFormData?.topic?.group?.name || 'Nhóm sinh viên'}
+              </span>
+              <Badge variant="purple" size="sm">
+                {scoringFormData?.role === 'PHAN_BIEN'
+                  ? 'Cán bộ Phản biện'
+                  : scoringFormData?.role === 'HOI_DONG'
+                  ? 'Hội đồng'
+                  : 'Cán bộ Hướng dẫn'}
+              </Badge>
+            </div>
+            <div className="text-slate-600 truncate">
+              Đề tài: <b>{scoringFormData?.topic?.title || currentGroup?.topic?.title || 'Đề tài Khóa luận tốt nghiệp'}</b>
+            </div>
+            {scoringFormData?.unlockRequest?.status === 'PENDING' && (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 flex items-center gap-1.5 font-medium">
+                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>Yêu cầu trước đó đang chờ TBM duyệt. Gửi lại sẽ cập nhật lý do mới nhất.</span>
+              </div>
+            )}
+          </div>
+
+          {/* Quick preset reasons */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Gợi ý lý do nhanh
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                'Cần cập nhật điểm theo báo cáo/minh chứng nghiệm thu mới của sinh viên',
+                'Đính chính nhầm lẫn khi nhập điểm các tiêu chí đánh giá',
+                'Điều chỉnh điểm theo biên bản kết luận thống nhất của Hội đồng',
+                'Bổ sung nhận xét chi tiết và xếp loại kết quả KLTN',
+              ].map((reasonItem) => (
+                <button
+                  key={reasonItem}
+                  type="button"
+                  onClick={() => setScoreChangeReason(reasonItem)}
+                  className="text-left text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800 text-slate-700 transition-colors"
+                >
+                  + {reasonItem}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-              Lý do cần chỉnh sửa điểm
+              Chi tiết lý do cần mở khóa điểm <span className="text-rose-500">*</span>
             </label>
             <textarea
               rows={4}
-              placeholder="Nêu rõ lý do và căn cứ cần điều chỉnh lại điểm của nhóm..."
+              placeholder="Nêu rõ lý do, căn cứ hoặc các tiêu chí cần điều chỉnh lại điểm..."
               value={scoreChangeReason}
               onChange={(e) => setScoreChangeReason(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
               required
             />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Đề xuất sẽ được gửi trực tiếp đến Trưởng bộ môn. Sau khi phê duyệt, Thầy/Cô sẽ có thể cập nhật lại điểm trong thời gian quy định.
+            </p>
           </div>
-          <div className="flex justify-end gap-3 pt-3">
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
             <Button type="button" variant="outline" onClick={() => setShowScoreChangeModal(false)}>Hủy</Button>
-            <Button type="submit" variant="primary">Gửi đề xuất tới Trưởng bộ môn</Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!scoreChangeReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
+            >
+              <Unlock className="w-4 h-4" />
+              <span>Gửi đề xuất tới Trưởng bộ môn</span>
+            </Button>
           </div>
         </form>
       </Modal>
@@ -2910,7 +3887,7 @@ export const LecturerWorkspace: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
               Kết quả đánh giá giữa kỳ <span className="text-rose-500">*</span>
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label
                 className={`flex items-center gap-2 p-3 border rounded-xl cursor-pointer transition-all ${
                   midtermKetQua === 'CHO_LAM_TIEP'

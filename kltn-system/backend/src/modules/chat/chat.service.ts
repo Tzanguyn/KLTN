@@ -92,11 +92,27 @@ export class ChatService {
       throw new NotFoundException('Không tìm thấy người dùng');
     }
 
-    // Tìm nhóm liên kết (nếu có)
-    const activeGroup = await this.prisma.group.findFirst({
-      where: { topicId, status: { not: 'CANCELLED' } },
-      select: { id: true },
+    // Tìm nhóm liên kết (nếu có, ưu tiên nhóm của chính sinh viên gửi)
+    const student = await this.prisma.studentProfile.findUnique({
+      where: { userId },
     });
+    let activeGroup = null;
+    if (student) {
+      activeGroup = await this.prisma.group.findFirst({
+        where: {
+          topicId,
+          status: { not: 'CANCELLED' },
+          members: { some: { studentId: student.id } },
+        },
+        select: { id: true },
+      });
+    }
+    if (!activeGroup) {
+      activeGroup = await this.prisma.group.findFirst({
+        where: { topicId, status: { not: 'CANCELLED' } },
+        select: { id: true },
+      });
+    }
 
     // Chuẩn bị danh sách attachments
     let attachments: any[] = [];
@@ -154,12 +170,107 @@ export class ChatService {
   }
 
   /**
-   * Tương thích ngược: Lấy tin nhắn theo groupId
+   * Lấy tin nhắn theo groupId hoặc topicId (hỗ trợ liên thông giữa nhóm và đề tài)
    */
-  async list(userId: string, groupId: string) {
-    await this.assertMember(userId, groupId);
-    return this.prisma.chatMessage.findMany({
-      where: { groupId },
+  async list(userId: string, groupId?: string, topicId?: string) {
+    if (!groupId && !topicId) {
+      throw new BadRequestException('Vui lòng cung cấp groupId hoặc topicId');
+    }
+
+    if (groupId) {
+      await this.assertMember(userId, groupId);
+      const group = await this.prisma.group.findUnique({
+        where: { id: groupId },
+        select: { id: true, topicId: true },
+      });
+
+      const effectiveTopicId = group?.topicId || topicId;
+
+      const whereClause: any = effectiveTopicId
+        ? {
+            OR: [
+              { groupId },
+              { topicId: effectiveTopicId, groupId: null },
+              { topicId: effectiveTopicId, groupId },
+            ],
+          }
+        : { groupId };
+
+      return this.prisma.chatMessage.findMany({
+        where: whereClause,
+        include: {
+          sender: {
+            select: {
+              id: true,
+              fullName: true,
+              avatarUrl: true,
+              roles: { include: { role: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 300,
+      });
+    }
+
+    if (topicId) {
+      const res = await this.listByTopic(userId, topicId, 1, 300);
+      return res.items;
+    }
+
+    return [];
+  }
+
+  /**
+   * Gửi tin nhắn theo groupId hoặc topicId
+   */
+  async send(userId: string, dto: SendMessageDto) {
+    if (!dto.groupId && !dto.topicId) {
+      throw new BadRequestException('Vui lòng cung cấp groupId hoặc topicId');
+    }
+
+    let groupId = dto.groupId;
+    let topicId = dto.topicId;
+
+    if (groupId) {
+      await this.assertMember(userId, groupId);
+      const group = await this.prisma.group.findUnique({
+        where: { id: groupId },
+        include: { topic: true },
+      });
+      if (!topicId && group?.topicId) {
+        topicId = group.topicId;
+      }
+    } else if (topicId) {
+      const { topic } = await this.assertTopicMember(userId, topicId);
+      const student = await this.prisma.studentProfile.findUnique({ where: { userId } });
+      if (student) {
+        const studentGroup = await this.prisma.group.findFirst({
+          where: {
+            topicId,
+            status: { not: 'CANCELLED' },
+            members: { some: { studentId: student.id } },
+          },
+          select: { id: true },
+        });
+        groupId = studentGroup?.id;
+      }
+      if (!groupId) {
+        const activeGroup = await this.prisma.group.findFirst({
+          where: { topicId, status: { not: 'CANCELLED' } },
+          select: { id: true },
+        });
+        groupId = activeGroup?.id;
+      }
+    }
+
+    const message = await this.prisma.chatMessage.create({
+      data: {
+        groupId,
+        topicId,
+        senderId: userId,
+        content: dto.content.trim(),
+      },
       include: {
         sender: {
           select: {
@@ -170,38 +281,38 @@ export class ChatService {
           },
         },
       },
-      orderBy: { createdAt: 'asc' },
-      take: 200,
-    });
-  }
-
-  /**
-   * Tương thích ngược: Gửi tin nhắn theo groupId
-   */
-  async send(userId: string, dto: SendMessageDto) {
-    await this.assertMember(userId, dto.groupId);
-    const group = await this.prisma.group.findUnique({
-      where: { id: dto.groupId },
-      select: { topicId: true },
     });
 
-    const message = await this.prisma.chatMessage.create({
-      data: {
-        groupId: dto.groupId,
-        topicId: group?.topicId,
-        senderId: userId,
-        content: dto.content.trim(),
-      },
-      include: {
-        sender: {
-          select: { id: true, fullName: true, avatarUrl: true },
+    if (groupId) {
+      this.gateway.emitToGroup(groupId, message);
+    }
+    if (topicId) {
+      this.gateway.emitToTopic(topicId, message);
+    }
+
+    // Gửi thông báo đến GVHD và các thành viên nhóm
+    const sender = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { fullName: true },
+    });
+
+    if (topicId) {
+      const topic = await this.prisma.topic.findUnique({
+        where: { id: topicId },
+        include: {
+          groups: { include: { members: { include: { student: true } } } },
+          registrations: { include: { student: true } },
         },
-      },
-    });
-
-    this.gateway.emitToGroup(dto.groupId, message);
-    if (group?.topicId) {
-      this.gateway.emitToTopic(group.topicId, message);
+      });
+      if (topic) {
+        await this.notifyTopicParticipants(
+          topic,
+          userId,
+          sender?.fullName || 'Thành viên',
+          dto.content.trim(),
+          message.id,
+        );
+      }
     }
 
     return message;
@@ -287,18 +398,50 @@ export class ChatService {
       where: { id: groupId },
       include: {
         members: { include: { student: true } },
-        topic: { select: { ownerId: true } },
+        topic: { select: { id: true, ownerId: true, reviewerId: true } },
       },
     });
     if (!group) throw new BadRequestException('Không tìm thấy nhóm');
-    const student = await this.prisma.studentProfile.findUnique({ where: { userId } });
-    const isStudent = Boolean(
-      student && group.members.some((member) => member.studentId === student.id),
+
+    // 1. Quản lý / Admin
+    const userRoles = await this.prisma.userRole.findMany({
+      where: { userId },
+      include: { role: true },
+    });
+    const isPrivileged = userRoles.some((r) =>
+      ['ADMIN', 'TRUONG_BO_MON', 'QUAN_LY_BO_MON'].includes(r.role.code),
     );
-    const isLecturer = Boolean(group.topic?.ownerId === userId);
-    if (!isStudent && !isLecturer) {
-      throw new ForbiddenException('Bạn không thuộc không gian trao đổi này');
+    if (isPrivileged) return;
+
+    // 2. Giảng viên hướng dẫn hoặc phản biện của đề tài
+    if (
+      group.topic &&
+      (group.topic.ownerId === userId || group.topic.reviewerId === userId)
+    ) {
+      return;
     }
+
+    // 3. Sinh viên trong nhóm
+    const student = await this.prisma.studentProfile.findUnique({ where: { userId } });
+    if (student) {
+      const isMember = group.members.some((member) => member.studentId === student.id);
+      if (isMember) return;
+
+      // Sinh viên có đăng ký được duyệt hoặc đang chờ cho nhóm/đề tài này
+      const hasRegistration = await this.prisma.registration.findFirst({
+        where: {
+          studentId: student.id,
+          OR: [
+            { groupId },
+            ...(group.topicId ? [{ topicId: group.topicId }] : []),
+          ],
+          status: { in: ['APPROVED', 'CHO_XAC_NHAN', 'PENDING'] },
+        },
+      });
+      if (hasRegistration) return;
+    }
+
+    throw new ForbiddenException('Bạn không thuộc không gian trao đổi này');
   }
 
   private async notifyTopicParticipants(

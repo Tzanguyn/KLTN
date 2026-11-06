@@ -74,8 +74,8 @@ export class EvidenceController {
   }
 
   @Post(':id/approve')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
-  @ApiOperation({ summary: 'Phê duyệt minh chứng NCKH và tự động cộng điểm theo quy định cấu hình' })
+  @Roles(RoleCode.QUAN_LY_BO_MON)
+  @ApiOperation({ summary: 'Quản lý bộ môn phê duyệt minh chứng NCKH và tự động cộng điểm theo quy định cấu hình' })
   approve(
     @CurrentUser() user: { id: string },
     @Param('id') id: string,
@@ -89,8 +89,8 @@ export class EvidenceController {
   }
 
   @Post(':id/reject')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
-  @ApiOperation({ summary: 'Từ chối minh chứng NCKH kèm lý do' })
+  @Roles(RoleCode.QUAN_LY_BO_MON)
+  @ApiOperation({ summary: 'Quản lý bộ môn từ chối minh chứng NCKH kèm lý do' })
   reject(
     @CurrentUser() user: { id: string },
     @Param('id') id: string,
@@ -104,8 +104,8 @@ export class EvidenceController {
   }
 
   @Post(':id/request-more-info')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
-  @ApiOperation({ summary: 'Yêu cầu sinh viên bổ sung thêm thông tin/minh chứng' })
+  @Roles(RoleCode.QUAN_LY_BO_MON)
+  @ApiOperation({ summary: 'Quản lý bộ môn yêu cầu sinh viên bổ sung thêm thông tin/minh chứng' })
   requestMoreInfo(
     @CurrentUser() user: { id: string },
     @Param('id') id: string,
@@ -119,8 +119,8 @@ export class EvidenceController {
   }
 
   @Post(':id/review')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
-  @ApiOperation({ summary: 'Xét duyệt minh chứng NCKH (endpoint tương thích ngược)' })
+  @Roles(RoleCode.QUAN_LY_BO_MON)
+  @ApiOperation({ summary: 'Quản lý bộ môn xét duyệt minh chứng NCKH (endpoint tương thích ngược)' })
   review(
     @CurrentUser() user: { id: string },
     @Param('id') id: string,

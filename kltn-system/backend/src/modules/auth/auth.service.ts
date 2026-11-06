@@ -182,6 +182,10 @@ export class AuthService {
     this.clearFailedAttempt(identifier);
 
     const roles = user.roles.map(({ role }) => role.code);
+    // Trưởng bộ môn kế thừa toàn bộ chức năng của Giảng viên
+    if (roles.includes('TRUONG_BO_MON') && !roles.includes('GIANG_VIEN')) {
+      roles.push('GIANG_VIEN');
+    }
     const isStudent = roles.includes('SINH_VIEN');
 
     // 5. Kiểm tra điều kiện đăng ký KLTN & Trạng thái KLTN hiện tại
@@ -298,6 +302,10 @@ export class AuthService {
         throw new UnauthorizedException('Refresh token không hợp lệ');
       }
       const roles = user.roles.map(({ role }) => role.code);
+      // Trưởng bộ môn kế thừa toàn bộ chức năng của Giảng viên
+      if (roles.includes('TRUONG_BO_MON') && !roles.includes('GIANG_VIEN')) {
+        roles.push('GIANG_VIEN');
+      }
       const isStudent = roles.includes('SINH_VIEN');
       let duDieuKienDangKyKLTN = true;
       let trangThaiKLTN = 'KHONG_AP_DUNG';

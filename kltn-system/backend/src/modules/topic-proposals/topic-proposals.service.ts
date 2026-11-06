@@ -81,7 +81,7 @@ export class TopicProposalsService {
       throw new NotFoundException('Giảng viên hướng dẫn không tồn tại trong hệ thống');
     }
 
-    // 4. Create TopicProposal with status CHO_GV_XAC_NHAN
+    // 4. Create TopicProposal with status CHO_GV_XAC_NHAN (Chờ GVHD xác nhận trước khi trình Trưởng bộ môn)
     const proposal = await this.prisma.topicProposal.create({
       data: {
         studentId: student.id,
@@ -104,7 +104,7 @@ export class TopicProposalsService {
     await this.notifications.create(
       lecturer.userId,
       'Đề xuất đề tài KLTN mới từ sinh viên',
-      `Sinh viên ${student.user?.fullName} (${student.studentCode}) đã gửi đề xuất đề tài: "${dto.tenDeTai}". Vui lòng xem xét và phản hồi.`,
+      `Sinh viên ${student.user?.fullName} (${student.studentCode}) đã gửi đề xuất đề tài: "${dto.tenDeTai}". Vui lòng xác nhận đồng ý hướng dẫn để chuyển đề tài lên Trưởng bộ môn phê duyệt.`,
       'REGISTRATION',
     );
 
@@ -112,7 +112,7 @@ export class TopicProposalsService {
     await this.notifications.create(
       userId,
       'Đã gửi đề xuất đề tài KLTN',
-      `Đề xuất đề tài "${dto.tenDeTai}" đã được gửi tới GVHD ${lecturer.user?.fullName}. Trạng thái: Chờ GV xác nhận (CHO_GV_XAC_NHAN).`,
+      `Đề xuất đề tài "${dto.tenDeTai}" đã được gửi tới GVHD ${lecturer.user?.fullName}. Sau khi GVHD xác nhận đồng ý, đề tài sẽ được chuyển tới Trưởng bộ môn phê duyệt.`,
       'REGISTRATION',
     );
 
@@ -177,6 +177,16 @@ export class TopicProposalsService {
       throw new ForbiddenException('Bạn không có quyền xét duyệt đề xuất đề tài này');
     }
 
+    // Tìm đề tài tương ứng với đề xuất này (nếu đã tạo khi sinh viên gửi đề xuất)
+    const existingTopic = await this.prisma.topic.findFirst({
+      where: {
+        title: proposal.tenDeTai,
+        semesterId: proposal.semesterId,
+        ownerId: proposal.lecturer.userId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
     if (dto.status === 'GV_DA_DUYET') {
       const semesterQuota = await this.prisma.lecturerQuota.findUnique({
         where: {
@@ -196,18 +206,23 @@ export class TopicProposalsService {
         },
       });
 
-      const activeTopicsCount = await this.prisma.topic.count({
+      const chosenTopicsCount = await this.prisma.topic.count({
         where: {
           ownerId: proposal.lecturer.userId,
           semesterId: proposal.semesterId,
           status: { in: ['CHO_DUYET', 'CHO_TRUONG_BM_DUYET', 'PENDING_APPROVAL', 'APPROVED', 'CAN_CAP_NHAT'] },
+          ...(existingTopic ? { id: { not: existingTopic.id } } : {}),
+          OR: [
+            { groups: { some: { status: { not: 'CANCELLED' } } } },
+            { registrations: { some: { status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] } } } },
+          ],
         },
       });
 
-      const currentLoad = Math.max(guidedGroupsCount, activeTopicsCount);
+      const currentLoad = Math.max(guidedGroupsCount, chosenTopicsCount);
       if (currentLoad >= maxGroups) {
         throw new ForbiddenException(
-          `Bạn đã đạt số nhóm tối đa được phép hướng dẫn trong học kỳ này (hạn mức: ${maxGroups} nhóm). Không thể nhận thêm đề tài/sinh viên.`,
+          `Bạn đã đạt số nhóm tối đa được phép hướng dẫn trong học kỳ này (đang hướng dẫn ${currentLoad}/${maxGroups} nhóm). Không thể nhận thêm đề tài/sinh viên.`,
         );
       }
 
@@ -217,43 +232,79 @@ export class TopicProposalsService {
         data: { status: 'GV_DA_DUYET' },
       });
 
-      // 2. Create Topic for Department Head approval or registration
-      const createdTopic = await this.prisma.topic.create({
-        data: {
-          title: proposal.tenDeTai,
-          summary: proposal.moTa,
-          objectives: proposal.yeuCau,
-          technologies: 'Đề xuất sinh viên',
-          capacity: 2,
-          status: 'APPROVED',
-          ownerId: proposal.lecturer.userId,
-          semesterId: proposal.semesterId,
-          departmentId: proposal.student.departmentId,
-        },
-      });
+      // 2. Đảm bảo có bản ghi Topic ở trạng thái CHO_DUYET chờ Trưởng bộ môn phê duyệt
+      let targetTopic = existingTopic;
+      if (!targetTopic) {
+        targetTopic = await this.prisma.topic.create({
+          data: {
+            title: proposal.tenDeTai,
+            summary: proposal.moTa,
+            objectives: proposal.yeuCau,
+            technologies: 'Đề xuất sinh viên',
+            capacity: 2,
+            status: 'CHO_DUYET',
+            ownerId: proposal.lecturer.userId,
+            semesterId: proposal.semesterId,
+            departmentId: proposal.student.departmentId,
+          },
+        });
+      } else if (targetTopic.status !== 'APPROVED') {
+        targetTopic = await this.prisma.topic.update({
+          where: { id: targetTopic.id },
+          data: {
+            status: 'CHO_DUYET',
+            technologies: targetTopic.technologies || 'Đề xuất sinh viên',
+          },
+        });
+      }
 
-      // 3. Create approved registration
-      await this.prisma.registration.create({
-        data: {
+      // 3. Đảm bảo có bản ghi đăng ký của sinh viên gắn với đề tài này
+      const existingReg = await this.prisma.registration.findFirst({
+        where: {
           studentId: proposal.studentId,
           semesterId: proposal.semesterId,
-          topicId: createdTopic.id,
-          status: 'APPROVED',
+          topicId: targetTopic.id,
         },
       });
+      if (!existingReg) {
+        await this.prisma.registration.create({
+          data: {
+            studentId: proposal.studentId,
+            semesterId: proposal.semesterId,
+            topicId: targetTopic.id,
+            proposal: `Đề xuất từ sinh viên: ${proposal.tenDeTai}`,
+            status: targetTopic.status === 'APPROVED' ? 'APPROVED' : 'CHO_XAC_NHAN',
+          },
+        });
+      }
 
-      // 4. Notify student
+      // 4. Notify student & Department Head
       await this.notifications.create(
         proposal.student.userId,
-        'Đề xuất đề tài KLTN đã được duyệt',
-        `GVHD ${proposal.lecturer.user?.fullName} đã chấp nhận đề xuất đề tài "${proposal.tenDeTai}" của bạn và đưa vào danh mục chính thức!`,
+        'GVHD đã đồng ý hướng dẫn đề tài đề xuất',
+        `GVHD ${proposal.lecturer.user?.fullName} đã đồng ý hướng dẫn đề tài "${proposal.tenDeTai}" của bạn. Đề tài đang chờ Trưởng bộ môn phê duyệt chính thức!`,
         'REGISTRATION',
       );
 
+      const heads = await this.prisma.user.findMany({
+        where: {
+          roles: { some: { role: { name: 'TRUONG_BO_MON' } } },
+        },
+        select: { id: true },
+      });
+      for (const head of heads) {
+        await this.notifications.create(
+          head.id,
+          'GVHD đã xác nhận đề tài do Sinh viên đề xuất',
+          `GVHD ${proposal.lecturer.user?.fullName} đã đồng ý hướng dẫn đề tài "${proposal.tenDeTai}" của SV ${proposal.student.user?.fullName} (${proposal.student.studentCode}). Vui lòng phê duyệt đề tài.`,
+          'REGISTRATION',
+        );
+      }
+
       return {
         proposal: updatedProposal,
-        topic: createdTopic,
-        message: 'Đã chấp nhận đề xuất đề tài thành công',
+        topic: targetTopic,
+        message: 'Đã xác nhận đồng ý hướng dẫn. Đề tài đã được chuyển tới Trưởng bộ môn phê duyệt!',
       };
     } else {
       // Reject proposal
@@ -264,6 +315,27 @@ export class TopicProposalsService {
           rejectionReason: dto.reason || 'Chưa phù hợp định hướng nghiên cứu của GVHD',
         },
       });
+
+      if (existingTopic && existingTopic.status !== 'APPROVED') {
+        await this.prisma.topic.update({
+          where: { id: existingTopic.id },
+          data: {
+            status: 'REJECTED',
+            rejectionReason: dto.reason || 'GVHD từ chối hướng dẫn đề xuất đề tài của sinh viên',
+          },
+        });
+        await this.prisma.registration.updateMany({
+          where: {
+            topicId: existingTopic.id,
+            studentId: proposal.studentId,
+          },
+          data: {
+            status: 'REJECTED',
+            decisionNote: dto.reason || 'GVHD từ chối đề xuất đề tài',
+            decidedAt: new Date(),
+          },
+        });
+      }
 
       // Notify student
       await this.notifications.create(

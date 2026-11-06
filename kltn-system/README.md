@@ -44,7 +44,7 @@
 - **State Management:** `Zustand` (lưu trữ phiên làm việc, hỗ trợ đồng bộ và khôi phục `localStorage`).
 - **HTTP Client:** `Axios` cấu hình tự động gắn Bearer Token và hàng đợi Refresh Token khi nhận mã 401.
 - **Realtime Client:** `socket.io-client` nhận thông báo tức thời và đếm thông báo chưa đọc.
-- **1-Click Test Role Switcher:** Thanh điều hướng tích hợp bộ chuyển vai trò nhanh (Sinh viên, Giảng viên, Trưởng bộ môn, Quản lý).
+- **1-Click Test Demo Login:** Đăng nhập thử nghiệm 1-click tại trang đăng nhập cho 4 vai trò (Sinh viên, Giảng viên, Trưởng bộ môn, Quản lý).
 
 ---
 
@@ -75,7 +75,7 @@ kltn-system/
 │   │   │   │   ├── LecturerWorkspace.tsx  # Không gian Giảng viên
 │   │   │   │   ├── HeadWorkspace.tsx      # Không gian Trưởng bộ môn
 │   │   │   │   └── ManagerWorkspace.tsx   # Không gian Quản lý bộ môn
-│   │   │   ├── Navbar.tsx          # Thanh tiêu đề, thông báo chuông, chuyển vai trò
+│   │   │   ├── Navbar.tsx          # Thanh tiêu đề, thông báo chuông, hồ sơ & đăng xuất
 │   │   │   └── LoginForm.tsx       # Đăng nhập, khôi phục mật khẩu, 1-click demo
 │   │   ├── api.ts                  # Axios client với interceptor refresh token
 │   │   ├── store.ts                # Zustand store cho User Session & Notifications
@@ -95,12 +95,12 @@ Hệ thống đã được nạp sẵn 4 tài khoản tiêu biểu đại diện
 
 | Vai trò | Email đăng nhập | Mã số / Tên hiển thị | Quyền hạn chính |
 | :--- | :--- | :--- | :--- |
-| **SINH_VIEN** | `sinhvien@kltn.edu.vn` | `SV2026001` (Nguyễn Văn An) | Tra cứu đề tài, đề xuất đề tài, nộp tiến độ, nộp NCKH, xem điểm & tải PDF |
-| **GIANG_VIEN** | `giangvien@kltn.edu.vn` | `GV001` (TS. Trần Văn Bình) | Ra đề tài, hướng dẫn nhóm, chấm tiến độ, nhập điểm, xin sửa điểm |
-| **TRUONG_BO_MON** | `truongbomon@kltn.edu.vn` | `TBM001` (PGS. TS. Lê Hoàng Nam) | Duyệt đề tài, phân công phản biện, lập hội đồng, mở khoá điểm, duyệt NCKH |
-| **QUAN_LY_BO_MON** | `quanly@kltn.edu.vn` | `QL001` (ThS. Phạm Thị Mai) | Mở đợt KLTN, quản lý danh sách đủ điều kiện, giám sát tiến độ, xuất Excel |
+| **SINH_VIEN** | `sinhvien@kltn.edu.vn` | `SV2026001` (Nguyễn Minh Sinh) | Tra cứu đề tài, đề xuất đề tài, nộp tiến độ, nộp NCKH, xem điểm & tải PDF |
+| **GIANG_VIEN** | `giangvien@kltn.edu.vn` | `GV001` (Trần Văn Giảng) | Ra đề tài, hướng dẫn nhóm, chấm tiến độ, nhập điểm, xin sửa điểm |
+| **TRUONG_BO_MON** | `truongbomon@kltn.edu.vn` | `TBM001` (Lê Thị Trưởng) | Duyệt đề tài, phân công phản biện, lập hội đồng, mở khoá điểm, duyệt NCKH |
+| **QUAN_LY_BO_MON** | `quanly@kltn.edu.vn` | `QL001` (Phạm Văn Quản) | Mở đợt KLTN, quản lý danh sách đủ điều kiện, giám sát tiến độ, xuất Excel |
 
-*(Mẹo: Tại trang Đăng nhập hoặc Thanh điều hướng trên cùng, bạn có thể click nút chuyển vai trò 1-click để kiểm tra tức thì mà không cần gõ mật khẩu).*
+*(Mẹo: Tại trang Đăng nhập, bạn có thể click nút đăng nhập 1-click để kiểm tra tức thì mà không cần gõ mật khẩu).*
 
 ---
 

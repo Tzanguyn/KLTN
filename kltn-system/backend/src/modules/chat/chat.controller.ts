@@ -12,6 +12,17 @@ import { SendMessageDto } from './dto/send-message.dto';
 export class ChatController {
   constructor(private readonly service: ChatService) {}
 
-  @Get('messages') list(@CurrentUser() user: { id: string }, @Query('groupId') groupId: string) { return this.service.list(user.id, groupId); }
-  @Post('messages') send(@CurrentUser() user: { id: string }, @Body() dto: SendMessageDto) { return this.service.send(user.id, dto); }
+  @Get('messages')
+  list(
+    @CurrentUser() user: { id: string },
+    @Query('groupId') groupId?: string,
+    @Query('topicId') topicId?: string,
+  ) {
+    return this.service.list(user.id, groupId, topicId);
+  }
+
+  @Post('messages')
+  send(@CurrentUser() user: { id: string }, @Body() dto: SendMessageDto) {
+    return this.service.send(user.id, dto);
+  }
 }

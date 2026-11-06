@@ -197,5 +197,21 @@ export class CreateSemesterDto {
   @IsOptional()
   @IsEnum(SemesterStatus)
   trangThai?: SemesterStatus;
+
+  // --- Giai đoạn lộ trình (1 - 5) ---
+  @ApiPropertyOptional({
+    description: 'Bước hiện tại của lộ trình đợt KLTN (1: Đăng ký đề tài, 2: Duyệt & Ghép nhóm, 3: Thực hiện & Giữa kỳ, 4: Báo cáo & Phản biện, 5: Bảo vệ & Tổng kết)',
+    example: 1,
+  })
+  @IsOptional()
+  currentStep?: number;
+
+  @ApiPropertyOptional({
+    description: 'Bước hiện tại của lộ trình (tiếng Việt, 1 - 5)',
+    example: 1,
+  })
+  @IsOptional()
+  giaiDoanHienTai?: number;
 }
+
 

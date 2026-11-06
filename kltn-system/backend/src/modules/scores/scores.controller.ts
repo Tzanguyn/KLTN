@@ -147,7 +147,19 @@ export class ScoresController {
   @Patch('groups/:groupId/unlock')
   @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
   @ApiOperation({ summary: 'Trưởng bộ môn trực tiếp mở khóa điểm cho nhóm' })
-  unlock(@Param('groupId') groupId: string) {
-    return this.service.unlock(groupId);
+  unlock(
+    @CurrentUser() user: { id: string },
+    @Param('groupId') groupId: string,
+    @Body('hours') hours?: number,
+    @Body('reason') reason?: string,
+  ) {
+    return this.service.unlock(groupId, hours, reason, user?.id);
+  }
+
+  @Patch('groups/:groupId/lock')
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  @ApiOperation({ summary: 'Trưởng bộ môn trực tiếp khóa lại điểm cho nhóm' })
+  lock(@Param('groupId') groupId: string) {
+    return this.service.lock(groupId);
   }
 }

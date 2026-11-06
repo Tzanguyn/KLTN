@@ -301,7 +301,11 @@ export class GroupsService {
         OR: [{ topic: { ownerId: userId } }, { members: { some: { student: { userId } } } }],
       },
       include: {
-        topic: true,
+        topic: {
+          include: {
+            owner: { select: { id: true, fullName: true, email: true, phone: true } },
+          },
+        },
         semester: true,
         members: {
           include: {
@@ -332,13 +336,13 @@ export class GroupsService {
     });
     if (!group) throw new NotFoundException('Không tìm thấy nhóm');
 
-    // Phân quyền: Manager hoặc GVHD hoặc Trưởng nhóm sinh viên (khi nhóm FORMING)
+    // Phân quyền: Chỉ GVHD của nhóm, Quản lý bộ môn, hoặc Trưởng nhóm SV (khi nhóm đang lập FORMING) mới được thao tác
     const isManager = await this.isManager(userId);
     const isAdvisor = group.topic?.ownerId === userId;
     const isLeader = group.members.some((m) => m.student.userId === userId && m.isLeader);
 
-    if (!isManager && !isAdvisor && !isLeader) {
-      throw new ForbiddenException('Bạn không có quyền quản lý nhóm này');
+    if (!isManager && !isAdvisor && !(isLeader && group.status === 'FORMING')) {
+      throw new ForbiddenException('Chỉ Giảng viên hướng dẫn của nhóm hoặc Quản lý bộ môn mới có quyền thêm thành viên vào nhóm này');
     }
 
     if (group.status === 'CANCELLED' || group.status === 'COMPLETED') {
@@ -393,7 +397,7 @@ export class GroupsService {
       });
     }
 
-    return this.prisma.groupMember.create({
+    const createdMember = await this.prisma.groupMember.create({
       data: {
         groupId,
         studentId: dto.studentId,
@@ -407,6 +411,19 @@ export class GroupsService {
         },
       },
     });
+
+    if (group.topicId) {
+      await this.prisma.registration.updateMany({
+        where: {
+          studentId: dto.studentId,
+          topicId: group.topicId,
+          status: { in: ['APPROVED', 'CHO_XAC_NHAN'] },
+        },
+        data: { groupId },
+      });
+    }
+
+    return createdMember;
   }
 
   async update(userId: string, groupId: string, dto: UpdateGroupDto) {
@@ -697,6 +714,130 @@ export class GroupsService {
     return this.findById(groupId, userId);
   }
 
+  async removeMember(userId: string, groupId: string, studentId: string) {
+    return this.update(userId, groupId, { removeStudentId: studentId } as UpdateGroupDto);
+  }
+
+  async transferMember(
+    userId: string,
+    fromGroupId: string,
+    dto: { studentId: string; targetGroupId: string },
+  ) {
+    if (!dto.studentId || !dto.targetGroupId) {
+      throw new BadRequestException('Vui lòng cung cấp studentId và targetGroupId');
+    }
+    if (fromGroupId === dto.targetGroupId) {
+      throw new BadRequestException('Nhóm chuyển đến phải khác nhóm hiện tại');
+    }
+
+    const [fromGroup, targetGroup] = await Promise.all([
+      this.prisma.group.findUnique({
+        where: { id: fromGroupId },
+        include: {
+          topic: { select: { id: true, ownerId: true, capacity: true, title: true } },
+          members: { include: { student: { include: { user: true } } } },
+        },
+      }),
+      this.prisma.group.findUnique({
+        where: { id: dto.targetGroupId },
+        include: {
+          topic: { select: { id: true, ownerId: true, capacity: true, title: true } },
+          members: { include: { student: { include: { user: true } } } },
+        },
+      }),
+    ]);
+
+    if (!fromGroup) throw new NotFoundException('Không tìm thấy nhóm nguồn');
+    if (!targetGroup) throw new NotFoundException('Không tìm thấy nhóm đích');
+
+    if (fromGroup.semesterId !== targetGroup.semesterId) {
+      throw new BadRequestException('Chỉ có thể chuyển sinh viên giữa các nhóm trong cùng học kỳ');
+    }
+
+    const isManager = await this.isManager(userId);
+    const isAdvisorOfBoth =
+      fromGroup.topic?.ownerId === userId && targetGroup.topic?.ownerId === userId;
+
+    if (!isManager && !isAdvisorOfBoth) {
+      throw new ForbiddenException(
+        'Chỉ Giảng viên hướng dẫn của cả hai nhóm hoặc Quản lý bộ môn mới có quyền chuyển sinh viên giữa các nhóm',
+      );
+    }
+
+    const memberInSource = fromGroup.members.find((m) => m.studentId === dto.studentId);
+    if (!memberInSource) {
+      throw new NotFoundException('Sinh viên không thuộc nhóm nguồn');
+    }
+
+    if (targetGroup.status === 'CANCELLED' || targetGroup.status === 'COMPLETED') {
+      throw new BadRequestException('Không thể chuyển sinh viên vào nhóm đã hủy hoặc đã hoàn thành');
+    }
+
+    const sizeConfig = await this.prisma.systemConfig.findFirst({
+      where: { key: 'MAX_GROUP_SIZE', semesterId: targetGroup.semesterId },
+    });
+    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 3;
+    const effectiveMax = targetGroup.topic?.capacity
+      ? Math.min(targetGroup.topic.capacity, maxSize)
+      : maxSize;
+
+    if (targetGroup.members.length >= effectiveMax) {
+      throw new BadRequestException(
+        `Nhóm đích (${targetGroup.code}) đã đủ số lượng thành viên tối đa (${effectiveMax} sinh viên)`,
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Xóa khỏi nhóm nguồn
+      await tx.groupMember.delete({
+        where: {
+          groupId_studentId: { groupId: fromGroupId, studentId: dto.studentId },
+        },
+      });
+
+      // Nếu là trưởng nhóm nguồn, chuyển quyền trưởng nhóm cho thành viên còn lại
+      if (memberInSource.isLeader) {
+        const remaining = fromGroup.members.find((m) => m.studentId !== dto.studentId);
+        if (remaining) {
+          await tx.groupMember.update({
+            where: {
+              groupId_studentId: { groupId: fromGroupId, studentId: remaining.studentId },
+            },
+            data: { isLeader: true },
+          });
+        }
+      }
+
+      // 2. Thêm vào nhóm đích
+      await tx.groupMember.create({
+        data: {
+          groupId: dto.targetGroupId,
+          studentId: dto.studentId,
+          isLeader: targetGroup.members.length === 0,
+        },
+      });
+
+      // 3. Đồng bộ đơn đăng ký đề tài (Registration)
+      await tx.registration.updateMany({
+        where: {
+          studentId: dto.studentId,
+          semesterId: targetGroup.semesterId,
+          status: { in: ['APPROVED', 'CHO_XAC_NHAN', 'PENDING'] },
+        },
+        data: {
+          groupId: dto.targetGroupId,
+          ...(targetGroup.topicId ? { topicId: targetGroup.topicId } : {}),
+        },
+      });
+    });
+
+    return {
+      message: `Đã chuyển sinh viên sang nhóm ${targetGroup.code} thành công`,
+      fromGroup: await this.findById(fromGroupId, userId),
+      targetGroup: await this.findById(dto.targetGroupId, userId),
+    };
+  }
+
   async midterm(userId: string, groupId: string, dto: MidtermDto) {
     const group = await this.prisma.group.findUnique({
       where: { id: groupId },
@@ -706,10 +847,318 @@ export class GroupsService {
     if (group.topic?.ownerId !== userId && !(await this.isManager(userId))) {
       throw new ForbiddenException('Bạn không quản lý nhóm này');
     }
-    return this.prisma.group.update({
+    if (group.status === 'CANCELLED') {
+      throw new BadRequestException('Nhóm đã bị hủy, không thể đánh giá giữa kỳ');
+    }
+
+    if (dto.status === 'STOPPED') {
+      const lockedScores = await this.prisma.score.count({
+        where: { groupId, status: 'LOCKED' },
+      });
+      if (lockedScores > 0) {
+        throw new BadRequestException(
+          'Nhóm đã khóa điểm chấm chính thức, không thể xử lý lại giữa kỳ sang Dừng đề tài. Vui lòng mở khóa điểm trước.',
+        );
+      }
+      await this.prisma.reviewerAssignment.deleteMany({ where: { groupId } });
+      await this.prisma.defenseSchedule.deleteMany({
+        where: { groupId, status: { not: 'COMPLETED' } },
+      });
+    }
+
+    const previousMidtermStatus = group.midtermStatus;
+    const isReEvaluation =
+      previousMidtermStatus !== 'PENDING' && previousMidtermStatus !== dto.status;
+    const now = new Date();
+
+    const updated = await this.prisma.group.update({
       where: { id: groupId },
-      data: { midtermStatus: dto.status, midtermNote: dto.note, midtermAt: new Date() },
+      data: {
+        midtermStatus: dto.status,
+        midtermNote: dto.note,
+        midtermAt: now,
+        ...(dto.status === 'CONTINUE' && group.status === 'FORMING' ? { status: 'ACTIVE' } : {}),
+      },
     });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: isReEvaluation ? 'RE_EVALUATE_MIDTERM' : 'MIDTERM_EVALUATION',
+        entity: 'Group',
+        entityId: groupId,
+        metadata: {
+          previousMidtermStatus,
+          midtermStatus: dto.status,
+          isReEvaluation,
+          lyDo: dto.note,
+          confirmedBy: userId,
+          midtermAt: now,
+        },
+      },
+    });
+
+    return updated;
+  }
+
+  async createGroup(userId: string, dto: { topicId: string; name?: string; memberStudentIds?: string[] }) {
+    if (!dto.topicId) {
+      throw new BadRequestException('Vui lòng cung cấp mã đề tài (topicId)');
+    }
+
+    const topic = await this.prisma.topic.findUnique({
+      where: { id: dto.topicId },
+      include: {
+        semester: true,
+        groups: { where: { status: { not: 'CANCELLED' } }, include: { members: true } },
+      },
+    });
+    if (!topic) throw new NotFoundException('Không tìm thấy đề tài');
+
+    const student = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      include: { user: true },
+    });
+
+    if (student) {
+      // Người gọi là Sinh viên
+      const myReg = await this.prisma.registration.findFirst({
+        where: {
+          studentId: student.id,
+          topicId: topic.id,
+          status: { in: ['APPROVED', 'CHO_XAC_NHAN'] },
+        },
+      });
+      if (!myReg) {
+        throw new ForbiddenException('Bạn chưa đăng ký đề tài này để tạo nhóm');
+      }
+
+      const existingMembership = await this.prisma.groupMember.findFirst({
+        where: {
+          studentId: student.id,
+          group: { semesterId: topic.semesterId, status: { not: 'CANCELLED' } },
+        },
+      });
+      if (existingMembership) {
+        throw new ConflictException('Bạn đã thuộc một nhóm KLTN khác trong học kỳ này');
+      }
+
+      let group = topic.groups?.[0] || null;
+      if (group) {
+        if (group.members.length >= topic.capacity) {
+          throw new BadRequestException('Nhóm của đề tài này đã đủ số lượng thành viên tối đa');
+        }
+        await this.prisma.groupMember.create({
+          data: {
+            groupId: group.id,
+            studentId: student.id,
+            isLeader: group.members.length === 0,
+          },
+        });
+        await this.prisma.registration.update({
+          where: { id: myReg.id },
+          data: { groupId: group.id },
+        });
+      } else {
+        const count = await this.prisma.group.count({ where: { semesterId: topic.semesterId } });
+        const semCode = topic.semester?.code || 'KLTN';
+        const groupCode = `GRP-${semCode}-${String(count + 1).padStart(3, '0')}`;
+        const groupName = dto.name || `Nhóm ${topic.title.substring(0, 45)}`;
+
+        group = await this.prisma.group.create({
+          data: {
+            code: groupCode,
+            name: groupName,
+            topicId: topic.id,
+            semesterId: topic.semesterId,
+            status: 'ACTIVE',
+          },
+          include: { members: true },
+        });
+
+        await this.prisma.groupMember.create({
+          data: {
+            groupId: group.id,
+            studentId: student.id,
+            isLeader: true,
+          },
+        });
+
+        await this.prisma.registration.update({
+          where: { id: myReg.id },
+          data: { groupId: group.id },
+        });
+      }
+
+      // Thêm các thành viên được chọn cùng đăng ký đề tài này
+      if (Array.isArray(dto.memberStudentIds) && dto.memberStudentIds.length > 0) {
+        for (const mId of dto.memberStudentIds) {
+          if (mId === student.id) continue;
+          const currentCount = await this.prisma.groupMember.count({ where: { groupId: group.id } });
+          if (currentCount >= topic.capacity) break;
+
+          const targetReg = await this.prisma.registration.findFirst({
+            where: {
+              studentId: mId,
+              topicId: topic.id,
+              status: { in: ['APPROVED', 'CHO_XAC_NHAN'] },
+            },
+          });
+          if (targetReg) {
+            const alreadyInGroup = await this.prisma.groupMember.findFirst({
+              where: { studentId: mId, group: { semesterId: topic.semesterId, status: { not: 'CANCELLED' } } },
+            });
+            if (!alreadyInGroup) {
+              await this.prisma.groupMember.create({
+                data: { groupId: group.id, studentId: mId, isLeader: false },
+              });
+              await this.prisma.registration.update({
+                where: { id: targetReg.id },
+                data: { groupId: group.id },
+              });
+            }
+          }
+        }
+      }
+
+      return this.findById(group.id, userId);
+    } else {
+      // Người gọi là Giảng viên hoặc Quản lý
+      const isManager = await this.isManager(userId);
+      const isOwner = topic.ownerId === userId;
+      if (!isManager && !isOwner) {
+        throw new ForbiddenException('Bạn không có quyền tạo nhóm cho đề tài này');
+      }
+
+      // Kiểm tra hạn mức hướng dẫn của GVHD trước khi tạo nhóm mới
+      if (topic.ownerId) {
+        const lecturer = await this.prisma.lecturerProfile.findUnique({
+          where: { userId: topic.ownerId },
+        });
+        if (lecturer) {
+          const semesterQuota = await this.prisma.lecturerQuota.findUnique({
+            where: {
+              lecturerId_semesterId: {
+                lecturerId: lecturer.id,
+                semesterId: topic.semesterId,
+              },
+            },
+          });
+          const maxGroups = semesterQuota?.maxGroups ?? lecturer.maxGroups ?? 5;
+          const guidedGroupsCount = await this.prisma.group.count({
+            where: {
+              topic: { ownerId: topic.ownerId },
+              semesterId: topic.semesterId,
+              status: { not: 'CANCELLED' },
+            },
+          });
+          if (maxGroups <= 0 || guidedGroupsCount >= maxGroups) {
+            throw new ForbiddenException(
+              `Giảng viên hướng dẫn đã đạt hạn mức số nhóm tối đa trong học kỳ này (${guidedGroupsCount}/${maxGroups} nhóm). Không thể tạo thêm nhóm mới.`,
+            );
+          }
+        }
+      }
+
+      const count = await this.prisma.group.count({ where: { semesterId: topic.semesterId } });
+      const semCode = topic.semester?.code || 'KLTN';
+      const groupCode = `GRP-${semCode}-${String(count + 1).padStart(3, '0')}`;
+      const groupName = dto.name || `Nhóm ${topic.title.substring(0, 45)}`;
+
+      const group = await this.prisma.group.create({
+        data: {
+          code: groupCode,
+          name: groupName,
+          topicId: topic.id,
+          semesterId: topic.semesterId,
+          status: 'ACTIVE',
+        },
+        include: { members: true },
+      });
+
+      if (Array.isArray(dto.memberStudentIds)) {
+        for (let i = 0; i < dto.memberStudentIds.length; i++) {
+          const sId = dto.memberStudentIds[i];
+          if (i >= topic.capacity) break;
+          await this.prisma.groupMember.create({
+            data: {
+              groupId: group.id,
+              studentId: sId,
+              isLeader: i === 0,
+            },
+          });
+          await this.prisma.registration.updateMany({
+            where: {
+              studentId: sId,
+              topicId: topic.id,
+              status: { in: ['APPROVED', 'CHO_XAC_NHAN'] },
+            },
+            data: { groupId: group.id },
+          });
+        }
+      }
+
+      return this.findById(group.id, userId);
+    }
+  }
+
+  async joinGroup(userId: string, groupId: string) {
+    const student = await this.prisma.studentProfile.findUnique({
+      where: { userId },
+      include: { user: true },
+    });
+    if (!student) throw new ForbiddenException('Không tìm thấy thông tin sinh viên');
+
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: { topic: true, members: true },
+    });
+    if (!group) throw new NotFoundException('Không tìm thấy nhóm');
+
+    if (!group.topicId) {
+      throw new BadRequestException('Nhóm chưa được gắn đề tài');
+    }
+
+    const myReg = await this.prisma.registration.findFirst({
+      where: {
+        studentId: student.id,
+        topicId: group.topicId,
+        status: { in: ['APPROVED', 'CHO_XAC_NHAN'] },
+      },
+    });
+    if (!myReg) {
+      throw new ForbiddenException('Bạn phải đăng ký đề tài này trước khi tham gia nhóm');
+    }
+
+    const capacity = group.topic?.capacity ?? 2;
+    if (group.members.length >= capacity) {
+      throw new BadRequestException('Nhóm đã đủ số lượng thành viên tối đa');
+    }
+
+    const existingMembership = await this.prisma.groupMember.findFirst({
+      where: {
+        studentId: student.id,
+        group: { semesterId: group.semesterId, status: { not: 'CANCELLED' } },
+      },
+    });
+    if (existingMembership) {
+      throw new ConflictException('Bạn đã thuộc một nhóm KLTN khác trong học kỳ này');
+    }
+
+    await this.prisma.groupMember.create({
+      data: {
+        groupId: group.id,
+        studentId: student.id,
+        isLeader: group.members.length === 0,
+      },
+    });
+
+    await this.prisma.registration.update({
+      where: { id: myReg.id },
+      data: { groupId: group.id },
+    });
+
+    return this.findById(group.id, userId);
   }
 
   private async isManager(userId: string) {

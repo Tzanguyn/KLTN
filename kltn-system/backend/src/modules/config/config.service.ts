@@ -43,5 +43,9 @@ export class SystemConfigService {
   updateSemester(id: string, dto: Partial<SemesterDto>) {
     return this.semestersService.update(id, dto);
   }
+
+  setTimelineStep(id: string, step?: number, autoSync?: boolean) {
+    return this.semestersService.setTimelineStep(id, step, autoSync);
+  }
 }
 

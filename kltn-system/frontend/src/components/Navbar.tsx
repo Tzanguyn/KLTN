@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../store';
 import { api } from '../api';
 import { io } from 'socket.io-client';
-import { GraduationCap, Bell, LogOut, CheckCircle2, User as UserIcon, ChevronDown } from 'lucide-react';
+import { GraduationCap, Bell, LogOut, User as UserIcon, Building2 } from 'lucide-react';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 
-const roleLabels: Record<string, { label: string; variant: 'primary' | 'success' | 'warning' | 'purple' }> = {
+const roleLabels: Record<string, { label: string; variant: 'primary' | 'success' | 'warning' | 'purple' | 'danger' }> = {
+  ADMIN: { label: 'Quản trị viên', variant: 'danger' },
   SINH_VIEN: { label: 'Sinh viên', variant: 'primary' },
   GIANG_VIEN: { label: 'Giảng viên', variant: 'success' },
   TRUONG_BO_MON: { label: 'Trưởng bộ môn', variant: 'purple' },
@@ -14,13 +15,18 @@ const roleLabels: Record<string, { label: string; variant: 'primary' | 'success'
 };
 
 export const Navbar: React.FC = () => {
-  const { user, accessToken, unreadCount, setUnreadCount, logout, setSession } = useAuthStore();
+  const { user, accessToken, unreadCount, setUnreadCount, logout, activeRole, setActiveRole } = useAuthStore();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotiDropdown, setShowNotiDropdown] = useState(false);
-  const [showRoleMenu, setShowRoleMenu] = useState(false);
 
-  const role = user?.role || user?.roles?.[0] || 'SINH_VIEN';
-  const roleConfig = roleLabels[role] ?? { label: role, variant: 'primary' };
+  const isHead = user?.roles?.includes('TRUONG_BO_MON') || user?.role === 'TRUONG_BO_MON';
+  const isManager = user?.roles?.includes('QUAN_LY_BO_MON') || user?.role === 'QUAN_LY_BO_MON';
+  const effectiveRole = activeRole || user?.role || user?.roles?.[0] || 'SINH_VIEN';
+  const roleConfig = isHead && effectiveRole === 'GIANG_VIEN'
+    ? { label: 'Trưởng BM (Chế độ GV)', variant: 'success' as const }
+    : isManager && effectiveRole === 'GIANG_VIEN'
+    ? { label: 'Quản lý BM (Chế độ GV)', variant: 'success' as const }
+    : (roleLabels[effectiveRole] ?? { label: effectiveRole, variant: 'primary' as const });
 
   // Fetch initial notifications
   const fetchNotifications = async () => {
@@ -77,19 +83,6 @@ export const Navbar: React.FC = () => {
     }
   };
 
-  // Quick switch role demo helper
-  const switchAccount = async (identifier: string) => {
-    try {
-      const res = await api.post('/auth/login', { identifier, password: 'Password@123' });
-      const payload = res.data?.data ?? res.data;
-      setSession(payload.accessToken, payload.user);
-      setShowRoleMenu(false);
-      window.location.reload();
-    } catch (err: any) {
-      alert(err.response?.data?.message ?? 'Đổi tài khoản thất bại');
-    }
-  };
-
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200/80 shadow-xs">
       <div className="max-w-7xl 2xl:max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
@@ -105,50 +98,57 @@ export const Navbar: React.FC = () => {
             </div>
           </div>
 
-          {/* Center / Role Switcher Demo */}
-          <div className="hidden md:flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 text-xs">
-            <span className="px-2 font-medium text-slate-500">Chuyển vai trò:</span>
-            <button
-              onClick={() => switchAccount('sinhvien@kltn.edu.vn')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                role === 'SINH_VIEN' && user?.duDieuKienDangKyKLTN !== false ? 'bg-white shadow-xs text-indigo-700 font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Sinh viên (Đủ ĐK)
-            </button>
-            <button
-              onClick={() => switchAccount('sinhvien2@kltn.edu.vn')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                role === 'SINH_VIEN' && user?.duDieuKienDangKyKLTN === false ? 'bg-white shadow-xs text-rose-700 font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Sinh viên (Chưa đủ ĐK)
-            </button>
-            <button
-              onClick={() => switchAccount('giangvien@kltn.edu.vn')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                role === 'GIANG_VIEN' ? 'bg-white shadow-xs text-emerald-700 font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Giảng viên
-            </button>
-            <button
-              onClick={() => switchAccount('truongbomon@kltn.edu.vn')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                role === 'TRUONG_BO_MON' ? 'bg-white shadow-xs text-purple-700 font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Trưởng bộ môn
-            </button>
-            <button
-              onClick={() => switchAccount('quanly@kltn.edu.vn')}
-              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                role === 'QUAN_LY_BO_MON' ? 'bg-white shadow-xs text-amber-700 font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Quản lý bộ môn
-            </button>
-          </div>
+          {/* Middle: Role Switcher for TRUONG_BO_MON & QUAN_LY_BO_MON (Kế thừa chức năng giảng viên hướng dẫn) */}
+          {(isHead || isManager) && (
+            <div className="flex items-center p-1 bg-slate-100/90 rounded-xl border border-slate-200/80 shadow-2xs">
+              {isHead && (
+                <button
+                  type="button"
+                  onClick={() => setActiveRole('TRUONG_BO_MON')}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    effectiveRole === 'TRUONG_BO_MON'
+                      ? 'bg-purple-700 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                  title="Không gian Điều hành Chuyên môn (Trưởng bộ môn)"
+                >
+                  <Building2 className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Trưởng Bộ môn</span>
+                  <span className="sm:hidden">Trưởng BM</span>
+                </button>
+              )}
+              {isManager && (
+                <button
+                  type="button"
+                  onClick={() => setActiveRole('QUAN_LY_BO_MON')}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    effectiveRole === 'QUAN_LY_BO_MON'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                  }`}
+                  title="Không gian Quản lý Vận hành & Giáo vụ Bộ môn"
+                >
+                  <Building2 className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Quản lý Bộ môn</span>
+                  <span className="sm:hidden">Quản lý BM</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveRole('GIANG_VIEN')}
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  effectiveRole === 'GIANG_VIEN'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+                title="Không gian Nghiệp vụ Giảng viên (Hướng dẫn KLTN, Đề tài, Chấm điểm)"
+              >
+                <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">Nghiệp vụ Giảng viên (GVHD)</span>
+                <span className="sm:hidden">GVHD</span>
+              </button>
+            </div>
+          )}
 
           {/* Right Actions */}
           <div className="flex items-center gap-3">
@@ -167,7 +167,7 @@ export const Navbar: React.FC = () => {
 
               {/* Notification dropdown */}
               {showNotiDropdown && (
-                <div className="absolute right-0 mt-2 w-84 bg-white rounded-2xl shadow-xl border border-slate-100 py-3 z-50 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 mt-2 w-[calc(100vw-2rem)] sm:w-84 max-w-sm bg-white rounded-2xl shadow-xl border border-slate-100 py-3 z-50 animate-in fade-in zoom-in-95 duration-150">
                   <div className="flex items-center justify-between px-4 pb-2 border-b border-slate-100">
                     <h4 className="text-sm font-semibold text-slate-800">Thông báo ({unreadCount} mới)</h4>
                     {unreadCount > 0 && (

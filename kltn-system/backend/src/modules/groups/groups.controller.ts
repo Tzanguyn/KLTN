@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { RoleCode } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -22,6 +22,26 @@ export class GroupsController {
     private readonly service: GroupsService,
     private readonly progressService: ProgressService,
   ) {}
+
+  @ApiOperation({
+    summary: 'Tạo nhóm KLTN mới cho đề tài (Sinh viên hoặc Giảng viên)',
+  })
+  @ApiResponse({ status: 201, description: 'Tạo nhóm thành công' })
+  @Post()
+  @Roles(RoleCode.SINH_VIEN, RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  create(@CurrentUser() user: { id: string }, @Body() dto: any) {
+    return this.service.createGroup(user.id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Sinh viên tham gia / chọn nhóm KLTN của đề tài đã đăng ký',
+  })
+  @ApiResponse({ status: 200, description: 'Tham gia nhóm thành công' })
+  @Post(':id/join')
+  @Roles(RoleCode.SINH_VIEN)
+  join(@CurrentUser() user: { id: string }, @Param('id') id: string) {
+    return this.service.joinGroup(user.id, id);
+  }
 
   @ApiOperation({
     summary: 'Lấy danh sách nhóm KLTN (hỗ trợ lọc semesterId, readyForReview, status, search)',
@@ -76,6 +96,32 @@ export class GroupsController {
     @Body() dto: AddMemberDto,
   ) {
     return this.service.addMember(user.id, id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Xóa sinh viên khỏi nhóm KLTN (GVHD, Quản lý BM hoặc Trưởng nhóm khi FORMING)',
+  })
+  @Delete(':id/members/:studentId')
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.SINH_VIEN)
+  removeMember(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.service.removeMember(user.id, id, studentId);
+  }
+
+  @ApiOperation({
+    summary: 'Chuyển sinh viên sang nhóm KLTN khác (GVHD của 2 nhóm hoặc Quản lý BM)',
+  })
+  @Post(':id/transfer-member')
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  transferMember(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() dto: { studentId: string; targetGroupId: string },
+  ) {
+    return this.service.transferMember(user.id, id, dto);
   }
 
   @Patch(':id/midterm')

@@ -34,7 +34,11 @@ export interface User {
 interface AuthState {
   accessToken: string | null;
   user: User | null;
+  activeRole: string | null;
+  activeTab: string | null;
   unreadCount: number;
+  setActiveRole: (role: string, targetTab?: string) => void;
+  setActiveTab: (tab: string | null) => void;
   setSession: (accessToken: string, user: User) => void;
   setAccessToken: (accessToken: string) => void;
   setUser: (user: User) => void;
@@ -76,18 +80,39 @@ function getInitialUser(): User | null {
   return null;
 }
 
+function getInitialActiveRole(user: User | null): string | null {
+  try {
+    const saved = localStorage.getItem('kltn_active_role');
+    if (saved) return saved;
+  } catch {}
+  return user?.role || user?.roles?.[0] || null;
+}
+
+const initialUser = getInitialUser();
+
 export const useAuthStore = create<AuthState>((set) => ({
   accessToken: getInitialToken(),
-  user: getInitialUser(),
+  user: initialUser,
+  activeRole: getInitialActiveRole(initialUser),
+  activeTab: null,
   unreadCount: 0,
+  setActiveRole: (role, targetTab) => {
+    try {
+      localStorage.setItem('kltn_active_role', role);
+    } catch {}
+    set({ activeRole: role, activeTab: targetTab ?? null });
+  },
+  setActiveTab: (tab) => set({ activeTab: tab }),
   setSession: (accessToken, user) => {
+    const initRole = user.role || user.roles?.[0] || 'SINH_VIEN';
     try {
       localStorage.setItem('kltn_token', accessToken);
       localStorage.setItem('kltn_user', JSON.stringify(user));
+      localStorage.setItem('kltn_active_role', initRole);
     } catch (e) {
       console.warn('Failed to save session to localStorage:', e);
     }
-    set({ accessToken, user });
+    set({ accessToken, user, activeRole: initRole, activeTab: null });
   },
   setAccessToken: (accessToken) => {
     try {
@@ -111,10 +136,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       localStorage.removeItem('kltn_token');
       localStorage.removeItem('kltn_user');
+      localStorage.removeItem('kltn_active_role');
     } catch {
       // ignore
     }
-    set({ accessToken: null, user: null, unreadCount: 0 });
+    set({ accessToken: null, user: null, activeRole: null, activeTab: null, unreadCount: 0 });
   },
 }));
 

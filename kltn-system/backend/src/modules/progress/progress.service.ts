@@ -213,6 +213,23 @@ export class ProgressService {
       throw new BadRequestException('Bạn chưa được phân công nhóm hoặc đề tài KLTN để nộp bài');
     }
 
+    const reqType = (dto.type || '').toUpperCase();
+    const isFinalSubmissionType =
+      reqType === 'BAO_CAO_CUOI_KY' ||
+      reqType === 'MA_NGUON' ||
+      reqType === 'FINAL' ||
+      reqType === 'SOURCE_CODE';
+    if (isFinalSubmissionType && targetGroup.midtermStatus !== 'CONTINUE') {
+      throw new BadRequestException(
+        'Nhóm chưa được Giảng viên hướng dẫn xác nhận Đạt giữa kỳ (Cho làm tiếp), chưa thể nộp Báo cáo cuối kỳ hoặc Mã nguồn.',
+      );
+    }
+    if (targetGroup.midtermStatus === 'STOPPED') {
+      throw new BadRequestException(
+        'Nhóm đã bị dừng đề tài giữa kỳ (DỪNG ĐỀ TÀI). Vui lòng liên hệ GVHD để xử lý lại kết quả giữa kỳ trước khi nộp tiếp.',
+      );
+    }
+
     // 4. Calculate version (version = max(version) + 1)
     const lastSub = await this.prisma.submission.findFirst({
       where: {

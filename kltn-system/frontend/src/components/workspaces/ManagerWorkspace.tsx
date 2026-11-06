@@ -28,8 +28,10 @@ import {
   Layers,
   Filter,
   LayoutDashboard,
+  Edit3,
 } from 'lucide-react';
 import { ManagerWelcomeView } from '../dashboard/ManagerWelcomeView';
+import { WorkspaceSidebar } from './WorkspaceSidebar';
 
 export const ManagerWorkspace: React.FC = () => {
   const { user } = useAuthStore();
@@ -69,6 +71,7 @@ export const ManagerWorkspace: React.FC = () => {
 
   // Modals & form state
   const [showSemesterModal, setShowSemesterModal] = useState(false);
+  const [editingSemesterId, setEditingSemesterId] = useState<string | null>(null);
   const [semCode, setSemCode] = useState('');
   const [semName, setSemName] = useState('');
   const [semYear, setSemYear] = useState('2026-2027');
@@ -77,11 +80,21 @@ export const ManagerWorkspace: React.FC = () => {
   const [semSubTo, setSemSubTo] = useState('');
   const [semDefFrom, setSemDefFrom] = useState('');
   const [semDefTo, setSemDefTo] = useState('');
+  const [semStep, setSemStep] = useState<number>(0);
 
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [configKey, setConfigKey] = useState('MAX_GROUP_SIZE');
   const [configValue, setConfigValue] = useState('3');
   const [configDesc, setConfigDesc] = useState('');
+
+  // Evidence review state (Duyệt NCKH)
+  const [pendingEvidence, setPendingEvidence] = useState<any[]>([]);
+  const [allEvidences, setAllEvidences] = useState<any[]>([]);
+  const [evidenceFilterStatus, setEvidenceFilterStatus] = useState<string>('PENDING');
+  const [selectedEvidence, setSelectedEvidence] = useState<any>(null);
+  const [showEvidenceReviewModal, setShowEvidenceReviewModal] = useState(false);
+  const [evidencePoints, setEvidencePoints] = useState('1.0');
+  const [evidenceNote, setEvidenceNote] = useState('');
 
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
@@ -104,6 +117,8 @@ export const ManagerWorkspace: React.FC = () => {
         progStatRes,
         milesStatRes,
         midStatRes,
+        evPendingRes,
+        evAllRes,
       ] = await Promise.all([
         api.get('/config/semesters'),
         api.get('/config'),
@@ -117,6 +132,8 @@ export const ManagerWorkspace: React.FC = () => {
         api.get(`/statistics/progress${semParam}`).catch(() => null),
         api.get(`/statistics/milestones${semParam}`).catch(() => null),
         api.get(`/statistics/midterm-results${semParam}`).catch(() => null),
+        api.get('/evidences?status=PENDING').catch(() => ({ data: { data: [] } })),
+        api.get('/evidences').catch(() => ({ data: { data: [] } })),
       ]);
 
       setSemesters(semRes.data.data ?? []);
@@ -129,6 +146,8 @@ export const ManagerWorkspace: React.FC = () => {
       setProgressStats(progStatRes?.data?.data ?? null);
       setMilestoneStats(milesStatRes?.data?.data ?? null);
       setMidtermStats(midStatRes?.data?.data ?? null);
+      setPendingEvidence(evPendingRes?.data?.data ?? []);
+      setAllEvidences(evAllRes?.data?.data ?? []);
     } catch (err: any) {
       console.error('Error loading manager data:', err);
     }
@@ -178,31 +197,72 @@ export const ManagerWorkspace: React.FC = () => {
     }
   }, [activeTab, defenseSubTab, selectedSemesterId, filterReadyForDefense, scoresIncompleteOnly]);
 
-  // Create Semester
-  const handleCreateSemester = async (e: React.FormEvent) => {
+  // Open Create / Edit Semester
+  const handleOpenCreateSemester = () => {
+    setEditingSemesterId(null);
+    setSemCode('');
+    setSemName('');
+    setSemYear('2026-2027');
+    setSemRegFrom('');
+    setSemRegTo('');
+    setSemSubTo('');
+    setSemDefFrom('');
+    setSemDefTo('');
+    setSemStep(0);
+    setShowSemesterModal(true);
+  };
+
+  const handleOpenEditSemester = (sem: any) => {
+    setEditingSemesterId(sem.id);
+    setSemCode(sem.code || '');
+    setSemName(sem.name || '');
+    setSemYear(sem.academicYear || '2026-2027');
+    setSemStep(sem.currentStep || 0);
+    const toInputDate = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 16) : '');
+    setSemRegFrom(toInputDate(sem.registrationFrom));
+    setSemRegTo(toInputDate(sem.registrationTo));
+    setSemSubTo(toInputDate(sem.submissionTo));
+    setSemDefFrom(toInputDate(sem.defenseFrom));
+    setSemDefTo(toInputDate(sem.defenseTo));
+    setShowSemesterModal(true);
+  };
+
+  // Create / Update Semester & Timeline
+  const handleSaveSemester = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // Find department
-      const deptId = semesters[0]?.departmentId;
-      await api.post('/config/semesters', {
+      const payload: any = {
         code: semCode,
         name: semName,
         academicYear: semYear,
-        departmentId: deptId,
-        status: 'OPEN',
+        currentStep: semStep,
         registrationFrom: semRegFrom ? new Date(semRegFrom).toISOString() : undefined,
         registrationTo: semRegTo ? new Date(semRegTo).toISOString() : undefined,
         submissionTo: semSubTo ? new Date(semSubTo).toISOString() : undefined,
         defenseFrom: semDefFrom ? new Date(semDefFrom).toISOString() : undefined,
         defenseTo: semDefTo ? new Date(semDefTo).toISOString() : undefined,
-      });
-      notify('Tạo đợt KLTN mới thành công!');
+      };
+
+      if (editingSemesterId) {
+        await api.patch(`/config/semesters/${editingSemesterId}`, payload);
+        notify('Cập nhật mốc lộ trình Đợt KLTN thành công!');
+      } else {
+        const deptId = semesters[0]?.departmentId;
+        await api.post('/config/semesters', {
+          ...payload,
+          departmentId: deptId,
+          status: 'OPEN',
+        });
+        notify('Tạo đợt KLTN mới thành công!');
+      }
+
       setShowSemesterModal(false);
+      setEditingSemesterId(null);
       setSemCode('');
       setSemName('');
       loadData();
     } catch (err: any) {
-      notify(err.response?.data?.message ?? 'Lỗi tạo học kỳ', 'error');
+      notify(err.response?.data?.message ?? 'Lỗi lưu học kỳ', 'error');
     }
   };
 
@@ -283,6 +343,40 @@ export const ManagerWorkspace: React.FC = () => {
     }
   };
 
+  // Review NCKH Evidence (Quản lý bộ môn)
+  const handleReviewEvidence = async (action: 'approve' | 'reject' | 'request_more_info') => {
+    if (!selectedEvidence) return;
+    try {
+      if (action === 'approve') {
+        const res = await api.post(`/evidences/${selectedEvidence.id}/approve`, {
+          points: Number(evidencePoints),
+          note: evidenceNote,
+        });
+        notify(
+          res.data?.data?.message ||
+            res.data?.message ||
+            `Đã phê duyệt minh chứng NCKH (+${evidencePoints} điểm)!`,
+        );
+      } else if (action === 'reject') {
+        await api.post(`/evidences/${selectedEvidence.id}/reject`, {
+          lyDo: evidenceNote || 'Minh chứng NCKH chưa đạt yêu cầu',
+        });
+        notify('Đã từ chối hồ sơ NCKH.');
+      } else {
+        await api.post(`/evidences/${selectedEvidence.id}/request-more-info`, {
+          note: evidenceNote || 'Vui lòng bổ sung thêm tài liệu minh chứng rõ ràng hơn.',
+        });
+        notify('Đã gửi yêu cầu bổ sung thông tin minh chứng cho sinh viên.');
+      }
+      setShowEvidenceReviewModal(false);
+      setSelectedEvidence(null);
+      setEvidenceNote('');
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi duyệt minh chứng NCKH', 'error');
+    }
+  };
+
   const navItems = [
     { id: 'welcome', label: 'Tổng quan & Chào mừng', icon: LayoutDashboard },
     { id: 'semesters', label: 'Đợt KLTN & Học kỳ', icon: Calendar, count: semesters.length },
@@ -290,6 +384,7 @@ export const ManagerWorkspace: React.FC = () => {
     { id: 'students', label: 'Danh sách sinh viên', icon: Users, count: students.length },
     { id: 'progress', label: 'Tiến độ & Giữa kỳ', icon: Clock },
     { id: 'defenses', label: 'Hội đồng & Bảo vệ', icon: Award, count: schedules.length },
+    { id: 'evidence', label: 'Duyệt NCKH', icon: Award, count: pendingEvidence.length },
     { id: 'reports', label: 'Dashboard & Thống kê', icon: FileSpreadsheet },
   ];
 
@@ -308,73 +403,42 @@ export const ManagerWorkspace: React.FC = () => {
 
       {/* Main 2-Column Layout: Left Sidebar + Right Content */}
       <div className="flex flex-col lg:flex-row gap-6 items-start">
-        {/* THANH CHỨC NĂNG BÊN TRÁI (LEFT SIDEBAR) */}
-        <aside className="w-full lg:w-64 xl:w-72 shrink-0 lg:sticky lg:top-20 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-3 space-y-1">
-            <div className="px-3 py-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between">
-              <span>Quản trị Đợt KLTN</span>
-              <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-bold">
-                {navItems.length} mục
-              </span>
-            </div>
-            <nav className="space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
-                      isActive
-                        ? 'bg-amber-600 text-white shadow-sm shadow-amber-200 font-bold'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                      <span className="truncate">{item.label}</span>
-                    </div>
-                    {item.count !== undefined && item.count > 0 && (
-                      <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-1.5 shrink-0 ${
-                          isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}
-                      >
-                        {item.count}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          </div>
-
-          {/* Mini System Overview Card */}
-          <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50/70 to-orange-50/50 border border-amber-100/80 text-xs text-amber-950 space-y-2">
-            <div className="font-bold flex items-center gap-1.5 text-amber-800">
-              <Settings className="w-4 h-4 text-amber-600" />
-              <span>Tổng quan vận hành</span>
-            </div>
-            <div className="space-y-1 text-[11px] text-slate-600">
-              <div className="flex justify-between">
-                <span>Sinh viên đợt này:</span>
-                <strong className="text-amber-700 font-bold">{dashboardStats?.students ?? 0}</strong>
+        <WorkspaceSidebar
+          title="Quản trị Đợt KLTN"
+          navItems={navItems}
+          activeTab={activeTab}
+          onTabChange={(tabId) => setActiveTab(tabId)}
+          themeColor="amber"
+          infoCard={
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50/70 to-orange-50/50 border border-amber-100/80 text-xs text-amber-950 space-y-2">
+              <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                <Settings className="w-4 h-4 text-amber-600" />
+                <span>Tổng quan vận hành</span>
               </div>
-              <div className="flex justify-between">
-                <span>Nhóm KLTN:</span>
-                <strong className="text-amber-700 font-bold">{dashboardStats?.groups ?? 0}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span>Đợt bảo vệ:</span>
-                <strong className="text-amber-700 font-bold">{dashboardStats?.defenses ?? 0}</strong>
+              <div className="space-y-1 text-[11px] text-slate-600">
+                <div className="flex justify-between">
+                  <span>Sinh viên đợt này:</span>
+                  <strong className="text-amber-700 font-bold">{dashboardStats?.students ?? 0}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>Nhóm KLTN:</span>
+                  <strong className="text-amber-700 font-bold">{dashboardStats?.groups ?? 0}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>Minh chứng NCKH chờ:</span>
+                  <strong className="text-amber-700 font-bold">{pendingEvidence.length}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>Đợt bảo vệ:</span>
+                  <strong className="text-amber-700 font-bold">{dashboardStats?.defenses ?? 0}</strong>
+                </div>
               </div>
             </div>
-          </div>
-        </aside>
+          }
+        />
 
         {/* NỘI DUNG CHÍNH BÊN PHẢI (MAIN CONTENT AREA) */}
-        <div className="flex-1 min-w-0 space-y-6">
+        <div className="flex-1 min-w-0 w-full space-y-6">
           {/* Tab 0: Welcome Dashboard */}
           {activeTab === 'welcome' && (
             <ManagerWelcomeView
@@ -386,6 +450,7 @@ export const ManagerWorkspace: React.FC = () => {
                 groups,
                 schedules,
                 dashboardStats,
+                pendingEvidence,
               }}
             />
           )}
@@ -393,7 +458,7 @@ export const ManagerWorkspace: React.FC = () => {
           {activeTab !== 'welcome' && (
             <>
               {/* Header Banner */}
-              <div className="bg-gradient-to-r from-amber-700 via-orange-800 to-amber-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+              <div className="bg-gradient-to-r from-amber-700 via-orange-800 to-amber-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 text-amber-200 text-xs font-semibold uppercase tracking-wider">
@@ -401,24 +466,28 @@ export const ManagerWorkspace: React.FC = () => {
                       <span>•</span>
                       <span>Vận hành & Kỹ thuật đợt KLTN</span>
                     </div>
-                    <h2 className="text-2xl font-bold mt-1 text-white">{user?.fullName}</h2>
-                    <p className="text-amber-100 text-sm mt-1">
-                      Quản lý học kỳ, thời hạn đăng ký, điều kiện sinh viên và điều phối hệ thống
+                    <h2 className="text-xl sm:text-2xl font-bold mt-1 text-white">{user?.fullName}</h2>
+                    <p className="text-amber-100 text-xs sm:text-sm mt-1">
+                      Quản lý học kỳ, thời hạn đăng ký, điều kiện sinh viên, duyệt minh chứng NCKH và điều phối hệ thống
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-3 bg-white/10 backdrop-blur border border-white/20 p-3 rounded-xl text-xs">
-                    <div className="text-center px-2">
-                      <div className="text-amber-200">Tổng sinh viên</div>
-                      <div className="text-lg font-bold text-white">{dashboardStats?.students ?? 0}</div>
+                  <div className="grid grid-cols-4 gap-2 w-full md:w-auto bg-white/10 backdrop-blur border border-white/20 p-2.5 sm:p-3 rounded-xl text-xs">
+                    <div className="text-center px-1 sm:px-2">
+                      <div className="text-amber-200 text-[10px] sm:text-xs">Tổng sinh viên</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{dashboardStats?.students ?? 0}</div>
                     </div>
-                    <div className="text-center px-2 border-l border-white/20">
-                      <div className="text-amber-200">Nhóm KLTN</div>
-                      <div className="text-lg font-bold text-white">{dashboardStats?.groups ?? 0}</div>
+                    <div className="text-center px-1 sm:px-2 border-l border-white/20">
+                      <div className="text-amber-200 text-[10px] sm:text-xs">Nhóm KLTN</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{dashboardStats?.groups ?? 0}</div>
                     </div>
-                    <div className="text-center px-2 border-l border-white/20">
-                      <div className="text-amber-200">Đợt bảo vệ</div>
-                      <div className="text-lg font-bold text-white">{dashboardStats?.defenses ?? 0}</div>
+                    <div className="text-center px-1 sm:px-2 border-l border-white/20">
+                      <div className="text-amber-200 text-[10px] sm:text-xs">NCKH chờ duyệt</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{pendingEvidence.length}</div>
+                    </div>
+                    <div className="text-center px-1 sm:px-2 border-l border-white/20">
+                      <div className="text-amber-200 text-[10px] sm:text-xs">Đợt bảo vệ</div>
+                      <div className="text-base sm:text-lg font-bold text-white">{dashboardStats?.defenses ?? 0}</div>
                     </div>
                   </div>
                 </div>
@@ -428,72 +497,82 @@ export const ManagerWorkspace: React.FC = () => {
 
       {/* TAB 1: Semesters / Đợt KLTN */}
       {activeTab === 'semesters' && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-amber-600" />
-                Danh sách Học kỳ & Đợt KLTN
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Cấu hình các mốc thời gian mở đăng ký, hạn nộp bài và thời gian bảo vệ
-              </p>
-            </div>
-            <Button size="sm" variant="primary" className="bg-amber-700 hover:bg-amber-800" onClick={() => setShowSemesterModal(true)}>
-              <PlusCircle className="w-4 h-4 mr-1.5" /> Thêm đợt KLTN mới
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <div className="divide-y divide-slate-100">
-              {semesters.map((sem) => (
-                <div key={sem.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={sem.status === 'OPEN' ? 'success' : 'neutral'}>
-                        {sem.status}
-                      </Badge>
-                      <span className="font-mono font-bold text-slate-900 text-sm">{sem.code}</span>
-                      <span className="text-xs text-slate-500 font-medium">({sem.academicYear})</span>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-amber-600" />
+                  Danh sách Học kỳ & Đợt KLTN
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Cấu hình các mốc thời gian mở đăng ký, hạn nộp bài và thời gian bảo vệ
+                </p>
+              </div>
+              <Button size="sm" variant="primary" className="bg-amber-700 hover:bg-amber-800" onClick={handleOpenCreateSemester}>
+                <PlusCircle className="w-4 h-4 mr-1.5" /> Thêm đợt KLTN mới
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="divide-y divide-slate-100">
+                {semesters.map((sem) => (
+                  <div key={sem.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={sem.status === 'OPEN' ? 'success' : 'neutral'}>
+                          {sem.status}
+                        </Badge>
+                        <span className="font-mono font-bold text-slate-900 text-sm">{sem.code}</span>
+                        <span className="text-xs text-slate-500 font-medium">({sem.academicYear})</span>
+                      </div>
+                      <h4 className="text-base font-bold text-slate-800">{sem.name}</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-500 pt-1">
+                        <div>
+                          Đăng ký:{' '}
+                          <b className="text-slate-700">
+                            {sem.registrationFrom ? new Date(sem.registrationFrom).toLocaleDateString('vi-VN') : '—'}
+                            {' đến '}
+                            {sem.registrationTo ? new Date(sem.registrationTo).toLocaleDateString('vi-VN') : '—'}
+                          </b>
+                        </div>
+                        <div>
+                          Hạn nộp bài:{' '}
+                          <b className="text-slate-700">
+                            {sem.submissionTo ? new Date(sem.submissionTo).toLocaleDateString('vi-VN') : '—'}
+                          </b>
+                        </div>
+                        <div>
+                          Lịch bảo vệ:{' '}
+                          <b className="text-slate-700">
+                            {sem.defenseFrom ? new Date(sem.defenseFrom).toLocaleDateString('vi-VN') : '—'}
+                          </b>
+                        </div>
+                      </div>
                     </div>
-                    <h4 className="text-base font-bold text-slate-800">{sem.name}</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-500 pt-1">
-                      <div>
-                        Đăng ký:{' '}
-                        <b className="text-slate-700">
-                          {sem.registrationFrom ? new Date(sem.registrationFrom).toLocaleDateString('vi-VN') : '—'}
-                          {' đến '}
-                          {sem.registrationTo ? new Date(sem.registrationTo).toLocaleDateString('vi-VN') : '—'}
-                        </b>
-                      </div>
-                      <div>
-                        Hạn nộp bài:{' '}
-                        <b className="text-slate-700">
-                          {sem.submissionTo ? new Date(sem.submissionTo).toLocaleDateString('vi-VN') : '—'}
-                        </b>
-                      </div>
-                      <div>
-                        Lịch bảo vệ:{' '}
-                        <b className="text-slate-700">
-                          {sem.defenseFrom ? new Date(sem.defenseFrom).toLocaleDateString('vi-VN') : '—'}
-                        </b>
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="flex items-center gap-2 self-start md:self-center">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleToggleSemesterStatus(sem.id, sem.status)}
-                    >
-                      {sem.status === 'OPEN' ? 'Đóng đăng ký' : 'Mở đăng ký'}
-                    </Button>
+                    <div className="flex items-center gap-2 self-start md:self-center">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                        onClick={() => handleOpenEditSemester(sem)}
+                      >
+                        <Edit3 className="w-3.5 h-3.5 mr-1" /> Sửa mốc lộ trình
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleToggleSemesterStatus(sem.id, sem.status)}
+                      >
+                        {sem.status === 'OPEN' ? 'Đóng đăng ký' : 'Mở đăng ký'}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* TAB 2: System Configs */}
@@ -510,7 +589,7 @@ export const ManagerWorkspace: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[600px] text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
                   <tr>
                     <th className="p-3">Mã tham số (Key)</th>
@@ -571,7 +650,7 @@ export const ManagerWorkspace: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[700px] text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
                   <tr>
                     <th className="p-3">MSSV</th>
@@ -698,7 +777,7 @@ export const ManagerWorkspace: React.FC = () => {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[700px] text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
                     <tr>
                       <th className="p-3">Mã nhóm</th>
@@ -1169,7 +1248,7 @@ export const ManagerWorkspace: React.FC = () => {
                     Bảng Điểm KLTN Toàn diện & Cảnh báo Chưa đầy đủ ({scoresData.length} nhóm)
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Quản lý điểm thành phần (GVHD 30%, GVPB 30%, Hội đồng 40%, NCKH) và phát hiện các nhóm còn thiếu điểm.
+                    Quản lý điểm thành phần (Trung bình cộng GVHD, GVPB, Hội đồng, NCKH) và phát hiện các nhóm còn thiếu điểm.
                   </p>
                 </div>
               </CardHeader>
@@ -1211,9 +1290,9 @@ export const ManagerWorkspace: React.FC = () => {
                     <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200 text-[11px]">
                       <tr>
                         <th className="p-3">Nhóm / Đề tài</th>
-                        <th className="p-3 text-center">Điểm GVHD (30%)</th>
-                        <th className="p-3 text-center">Điểm GVPB (30%)</th>
-                        <th className="p-3 text-center">Điểm Hội đồng (40%)</th>
+                        <th className="p-3 text-center">Điểm GVHD</th>
+                        <th className="p-3 text-center">Điểm GVPB</th>
+                        <th className="p-3 text-center">Điểm Hội đồng</th>
                         <th className="p-3 text-center">NCKH</th>
                         <th className="p-3 text-center">Tổng kết</th>
                         <th className="p-3">Tình trạng & Cảnh báo</th>
@@ -1226,19 +1305,48 @@ export const ManagerWorkspace: React.FC = () => {
                         const isComplete = sc.isComplete;
                         const hasWarning = sc.hasWarning;
                         const warnings = sc.warnings || [];
+                        const groupMidterm = item.midtermStatus || item.group?.midtermStatus || 'PENDING';
+                        const isGroupMidtermPassed = groupMidterm === 'CONTINUE' || groupMidterm === 'CHO_LAM_TIEP';
 
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="p-3 min-w-[200px]">
-                              <span className="font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded text-[11px]">
-                                {item.code}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded text-[11px]">
+                                  {item.code}
+                                </span>
+                                <Badge
+                                  size="sm"
+                                  variant={
+                                    isGroupMidtermPassed
+                                      ? 'success'
+                                      : groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                      ? 'danger'
+                                      : 'warning'
+                                  }
+                                >
+                                  {isGroupMidtermPassed
+                                    ? 'Qua GK'
+                                    : groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                    ? 'Đã dừng GK'
+                                    : 'Chờ xác nhận GK'}
+                                </Badge>
+                              </div>
                               <div className="font-semibold text-slate-800 mt-1 line-clamp-2">
                                 {item.topic?.title || item.name}
                               </div>
                             </td>
                             <td className="p-3 text-center">
-                              {item.scores?.gvhd !== null && item.scores?.gvhd !== undefined ? (
+                              {!isGroupMidtermPassed ? (
+                                <Badge
+                                  variant={groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI' ? 'danger' : 'warning'}
+                                  size="sm"
+                                >
+                                  {groupMidterm === 'STOPPED' || groupMidterm === 'DUNG_DE_TAI'
+                                    ? 'Đã dừng GK'
+                                    : 'Chờ qua GK'}
+                                </Badge>
+                              ) : item.scores?.gvhd !== null && item.scores?.gvhd !== undefined ? (
                                 <div className="space-y-0.5">
                                   <span className="font-bold text-slate-900">{item.scores.gvhd}</span>
                                   <div>
@@ -1353,6 +1461,122 @@ export const ManagerWorkspace: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* TAB: Review NCKH Evidence (Duyệt NCKH) */}
+      {activeTab === 'evidence' && (() => {
+        const evidencesToRender =
+          evidenceFilterStatus === 'PENDING'
+            ? pendingEvidence
+            : allEvidences.filter((ev) =>
+                evidenceFilterStatus === 'ALL' ? true : ev.status === evidenceFilterStatus,
+              );
+
+        return (
+          <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Award className="w-5 h-5 text-amber-600" />
+                  Xét duyệt Minh chứng NCKH & Cộng điểm thưởng ({pendingEvidence.length} chờ duyệt)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Quản lý bộ môn thẩm định bài báo khoa học, đề tài NCKH của sinh viên và duyệt cộng điểm thưởng (tối đa +2.0 điểm) vào kết quả KLTN.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+                {[
+                  { id: 'PENDING', label: `Chờ duyệt (${pendingEvidence.length})` },
+                  {
+                    id: 'APPROVED',
+                    label: `Đã duyệt (${allEvidences.filter((e) => e.status === 'APPROVED').length})`,
+                  },
+                  {
+                    id: 'REJECTED',
+                    label: `Đã từ chối (${allEvidences.filter((e) => e.status === 'REJECTED').length})`,
+                  },
+                  { id: 'ALL', label: `Tất cả (${allEvidences.length})` },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setEvidenceFilterStatus(tab.id)}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                      evidenceFilterStatus === tab.id
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="divide-y divide-slate-100">
+                {evidencesToRender.map((ev) => (
+                  <div key={ev.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge
+                          variant={
+                            ev.status === 'APPROVED'
+                              ? 'success'
+                              : ev.status === 'REJECTED'
+                              ? 'danger'
+                              : 'warning'
+                          }
+                        >
+                          {ev.status === 'APPROVED'
+                            ? `ĐÃ DUYỆT (+${ev.points ?? 0}đ)`
+                            : ev.status === 'REJECTED'
+                            ? 'TỪ CHỐI'
+                            : ev.status === 'REQUEST_MORE_INFO'
+                            ? 'YÊU CẦU BỔ SUNG'
+                            : 'CHỜ DUYỆT'}
+                        </Badge>
+                        <span className="text-xs font-semibold text-slate-700">
+                          Sinh viên: {ev.user?.fullName} ({ev.user?.email})
+                        </span>
+                      </div>
+                      <h4 className="text-sm font-bold text-slate-900">{ev.title}</h4>
+                      <p className="text-xs text-slate-600">{ev.description || 'Không có mô tả'}</p>
+                      {ev.fileName && (
+                        <span className="text-xs text-indigo-600 font-medium block">
+                          Tệp đính kèm: {ev.fileName}
+                        </span>
+                      )}
+                      {ev.reviewNote && (
+                        <span className="text-xs text-amber-800 bg-amber-50 px-2 py-0.5 rounded block mt-1 font-medium">
+                          Phản hồi: {ev.reviewNote}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="shrink-0">
+                      <Button
+                        size="sm"
+                        variant={ev.status === 'PENDING' ? 'primary' : 'outline'}
+                        onClick={() => {
+                          setSelectedEvidence(ev);
+                          setEvidencePoints(ev.points ? String(ev.points) : '1.0');
+                          setEvidenceNote(ev.reviewNote || '');
+                          setShowEvidenceReviewModal(true);
+                        }}
+                      >
+                        {ev.status === 'PENDING' ? 'Duyệt & Cộng điểm' : 'Cập nhật xét duyệt'}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {evidencesToRender.length === 0 && (
+                  <div className="p-8 text-center text-xs text-slate-400">
+                    Không có hồ sơ minh chứng NCKH nào ở trạng thái này.
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* TAB 6: Dashboard & Reports */}
       {activeTab === 'reports' && (
@@ -1657,9 +1881,16 @@ export const ManagerWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* MODAL: Create Semester */}
-      <Modal isOpen={showSemesterModal} onClose={() => setShowSemesterModal(false)} title="Tạo Đợt KLTN / Học kỳ mới">
-        <form onSubmit={handleCreateSemester} className="space-y-4 text-sm">
+      {/* MODAL: Create / Edit Semester */}
+      <Modal
+        isOpen={showSemesterModal}
+        onClose={() => {
+          setShowSemesterModal(false);
+          setEditingSemesterId(null);
+        }}
+        title={editingSemesterId ? 'Chỉnh sửa mốc lộ trình Đợt KLTN' : 'Tạo Đợt KLTN / Học kỳ mới'}
+      >
+        <form onSubmit={handleSaveSemester} className="space-y-4 text-sm">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="Mã đợt KLTN" placeholder="VD: 2026-KLTN-2" value={semCode} onChange={(e) => setSemCode(e.target.value)} required />
             <Input label="Năm học" placeholder="VD: 2026-2027" value={semYear} onChange={(e) => setSemYear(e.target.value)} required />
@@ -1674,9 +1905,41 @@ export const ManagerWorkspace: React.FC = () => {
             <Input type="datetime-local" label="Thời gian bảo vệ từ" value={semDefFrom} onChange={(e) => setSemDefFrom(e.target.value)} />
             <Input type="datetime-local" label="Thời gian bảo vệ đến" value={semDefTo} onChange={(e) => setSemDefTo(e.target.value)} />
           </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Giai đoạn lộ trình hiện tại của Đợt KLTN
+            </label>
+            <select
+              value={semStep}
+              onChange={(e) => setSemStep(Number(e.target.value))}
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+            >
+              <option value={0}>Tự động đồng bộ theo tiến độ thực tế (Khuyên dùng)</option>
+              <option value={1}>Bước 1: Đăng ký đề tài (Tuần 1 - 3)</option>
+              <option value={2}>Bước 2: Duyệt & Ghép nhóm (Tuần 3 - 4)</option>
+              <option value={3}>Bước 3: Thực hiện & Giữa kỳ (Tuần 5 - 10)</option>
+              <option value={4}>Bước 4: Báo cáo & Phản biện (Tuần 11 - 13)</option>
+              <option value={5}>Bước 5: Bảo vệ & Tổng kết (Tuần 14 - 15)</option>
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Lựa chọn này sẽ đồng bộ bước lộ trình tức thời cho tất cả các bên (Sinh viên, Giảng viên, Trưởng BM).
+            </p>
+          </div>
           <div className="flex justify-end gap-3 pt-3">
-            <Button type="button" variant="outline" onClick={() => setShowSemesterModal(false)}>Hủy</Button>
-            <Button type="submit" variant="primary">Lưu đợt KLTN</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShowSemesterModal(false);
+                setEditingSemesterId(null);
+              }}
+            >
+              Hủy
+            </Button>
+            <Button type="submit" variant="primary">
+              {editingSemesterId ? 'Cập nhật lộ trình' : 'Lưu đợt KLTN'}
+            </Button>
           </div>
         </form>
       </Modal>
@@ -1705,6 +1968,65 @@ export const ManagerWorkspace: React.FC = () => {
         </form>
       </Modal>
 
+      {/* MODAL: Evidence Review (Duyệt NCKH) */}
+      <Modal
+        isOpen={showEvidenceReviewModal}
+        onClose={() => setShowEvidenceReviewModal(false)}
+        title="Xét duyệt Minh chứng NCKH & Cộng điểm thưởng"
+      >
+        <div className="space-y-4 text-sm">
+          <div>
+            <div className="font-bold text-slate-900">{selectedEvidence?.title}</div>
+            <div className="text-xs text-slate-500">
+              Sinh viên: {selectedEvidence?.user?.fullName} ({selectedEvidence?.user?.email})
+            </div>
+            <p className="text-xs text-slate-600 mt-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+              {selectedEvidence?.description || 'Không có mô tả'}
+            </p>
+            {selectedEvidence?.fileName && (
+              <div className="text-xs text-indigo-600 font-medium mt-1.5">
+                Tệp minh chứng: {selectedEvidence.fileName}
+              </div>
+            )}
+          </div>
+
+          <Input
+            type="number"
+            step="0.1"
+            min="0"
+            max="2"
+            label="Điểm thưởng NCKH cộng thêm (Tối đa 2.0 điểm)"
+            value={evidencePoints}
+            onChange={(e) => setEvidencePoints(e.target.value)}
+          />
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Ghi chú / Nhận xét thẩm định
+            </label>
+            <textarea
+              rows={2}
+              placeholder="Ghi chú đánh giá bài báo/giải thưởng hoặc lý do từ chối..."
+              value={evidenceNote}
+              onChange={(e) => setEvidenceNote(e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={() => handleReviewEvidence('request_more_info')}>
+              Yêu cầu bổ sung
+            </Button>
+            <Button variant="danger" onClick={() => handleReviewEvidence('reject')}>
+              Từ chối
+            </Button>
+            <Button variant="success" onClick={() => handleReviewEvidence('approve')}>
+              Phê duyệt & Cộng điểm
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* MODAL: Score Details */}
       <Modal
         isOpen={!!selectedScoreDetails}
@@ -1717,7 +2039,7 @@ export const ManagerWorkspace: React.FC = () => {
               <div className="text-sm font-bold text-slate-900">
                 {selectedScoreDetails.topic?.title || selectedScoreDetails.name}
               </div>
-              <div className="grid grid-cols-2 gap-2 text-slate-600 pt-1 border-t border-slate-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 pt-1 border-t border-slate-200">
                 <div>
                   <span className="font-semibold text-slate-700">GVHD:</span>{' '}
                   {selectedScoreDetails.topic?.owner?.fullName || 'Chưa cập nhật'}
@@ -1731,7 +2053,7 @@ export const ManagerWorkspace: React.FC = () => {
 
             <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200 space-y-1">
               <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
-                Công thức & Trọng số tính điểm
+                Công thức tính điểm tổng kết
               </div>
               <p className="text-xs text-amber-950 font-mono">
                 {selectedScoreDetails.congThucTinh || 'Chưa có công thức'}
@@ -1748,8 +2070,8 @@ export const ManagerWorkspace: React.FC = () => {
                 <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
                   Điểm từng Thành viên Hội đồng bảo vệ
                 </div>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-left text-xs">
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full min-w-[500px] text-left text-xs">
                     <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                       <tr>
                         <th className="p-2">Thành viên</th>

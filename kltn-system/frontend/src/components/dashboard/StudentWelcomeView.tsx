@@ -4,7 +4,6 @@ import { useAuthStore } from '../../store';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { WelcomeTimeline } from './WelcomeTimeline';
 import {
   GraduationCap,
   BookOpen,
@@ -25,6 +24,7 @@ import {
   ShieldAlert,
   FileText,
 } from 'lucide-react';
+import { WelcomeTimeline } from './WelcomeTimeline';
 
 interface StudentWelcomeViewProps {
   onNavigate: (tab: string) => void;
@@ -85,7 +85,13 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
 
   // Determine current timeline step
   let currentStep = 1;
-  if (defenseSchedule) {
+  if (
+    typeof dashboardData?.semester?.currentStep === 'number' &&
+    dashboardData.semester.currentStep >= 1 &&
+    dashboardData.semester.currentStep <= 5
+  ) {
+    currentStep = dashboardData.semester.currentStep;
+  } else if (defenseSchedule) {
     currentStep = 5;
   } else if (group?.midtermStatus === 'CONTINUE' || group?.midtermStatus === 'CHO_LAM_TIEP') {
     currentStep = 4;
@@ -96,17 +102,32 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   }
 
   // Action items
-  const actionItems: string[] = dashboardData?.actionItems?.length
-    ? dashboardData.actionItems
+  let actionItems: string[] = dashboardData?.actionItems?.length
+    ? [...dashboardData.actionItems]
     : [];
+
+  const hasGroupOrDefense = Boolean(group || defenseSchedule || registration?.status === 'APPROVED' || group?.topic);
+
+  // Lọc bỏ thông báo đăng ký đề tài mâu thuẫn nếu sinh viên đã có nhóm hoặc đã có lịch bảo vệ
+  if (hasGroupOrDefense) {
+    actionItems = actionItems.filter(
+      (item) =>
+        !item.includes('Chưa đăng ký đề tài') &&
+        !item.includes('chưa đăng ký đề tài') &&
+        !item.includes('Đã hết hạn đăng ký đề tài')
+    );
+  }
 
   if (!actionItems.length) {
     if (!isEligible) {
       actionItems.push('Hồ sơ học tập hiện tại chưa đủ 110 tín chỉ để đăng ký KLTN');
-    } else if (!group && !registration) {
+    } else if (!hasGroupOrDefense && !registration) {
       actionItems.push('Bạn chưa đăng ký đề tài KLTN. Hãy xem danh mục đề tài hoặc đề xuất đề tài mới');
     } else if (registration && !group) {
       actionItems.push('Đơn đăng ký đề tài đang chờ Giảng viên hướng dẫn xét duyệt');
+    } else if (defenseSchedule) {
+      const startsAtStr = new Date(defenseSchedule.startsAt).toLocaleString('vi-VN');
+      actionItems.push(`Lịch bảo vệ chính thức: ${startsAtStr} tại Phòng ${defenseSchedule.room || 'Chưa xếp'}`);
     } else if (group) {
       actionItems.push('Nhớ cập nhật báo cáo tiến độ tuần và họp trao đổi với GVHD định kỳ');
     }
@@ -115,7 +136,7 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   return (
     <div className="space-y-6">
       {/* 1. HERO BANNER CHÀO MỪNG */}
-      <div className="bg-gradient-to-r from-indigo-800 via-indigo-700 to-indigo-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-indigo-800 via-indigo-700 to-indigo-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-12 -translate-y-8 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
@@ -149,7 +170,7 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
           </div>
 
           {/* Status Box */}
-          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-5 rounded-2xl flex flex-col gap-2 min-w-[240px]">
+          <div className="shrink-0 bg-white/10 backdrop-blur border border-white/20 p-4 sm:p-5 rounded-2xl flex flex-col gap-2 w-full sm:w-auto sm:min-w-[240px]">
             <span className="text-xs text-indigo-200 uppercase tracking-wider font-semibold">
               Tình trạng xét điều kiện
             </span>
@@ -383,10 +404,7 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
         </div>
       </div>
 
-      {/* 5. LỘ TRÌNH KLTN 5 BƯỚC */}
-      <WelcomeTimeline currentStep={currentStep} />
-
-      {/* 6. THÔNG TIN ĐỀ TÀI & NHÓM KLTN CỦA TÔI */}
+      {/* 5. THÔNG TIN ĐỀ TÀI & NHÓM KLTN CỦA TÔI */}
       {group ? (
         <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs">
           <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
@@ -459,6 +477,15 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
           </div>
         </div>
       )}
+
+      {/* 5. LỘ TRÌNH KLTN 5 GIAI ĐOẠN ĐỒNG BỘ TOÀN HỆ THỐNG */}
+      <WelcomeTimeline
+        currentStep={currentStep}
+        semesterInfo={dashboardData?.semester}
+        role="SINH_VIEN"
+        onNavigate={onNavigate}
+        canManageTimeline={false}
+      />
     </div>
   );
 };

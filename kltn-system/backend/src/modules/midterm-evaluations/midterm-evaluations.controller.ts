@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RoleCode } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -24,9 +24,16 @@ export class MidtermEvaluationsController {
 
   @Post()
   @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
-  @ApiOperation({ summary: 'GVHD xác nhận kết quả đánh giá giữa kỳ: CHO_LAM_TIEP hoặc DUNG_DE_TAI' })
+  @ApiOperation({ summary: 'GVHD xác nhận hoặc xử lý lại kết quả đánh giá giữa kỳ: CHO_LAM_TIEP hoặc DUNG_DE_TAI' })
   evaluate(@CurrentUser() user: { id: string }, @Body() dto: MidtermEvaluationDto) {
     return this.service.evaluate(user.id, dto);
+  }
+
+  @Get('history/:groupId')
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.SINH_VIEN)
+  @ApiOperation({ summary: 'Xem lịch sử đánh giá & xử lý lại giữa kỳ của nhóm' })
+  history(@Param('groupId') groupId: string) {
+    return this.service.getHistory(groupId);
   }
 }
 

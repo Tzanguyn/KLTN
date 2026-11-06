@@ -135,16 +135,33 @@ export class RegistrationsService {
       if (uniqueOccupiedStudents.size >= topic.capacity) {
         throw new ConflictException('Đề tài đã đủ số lượng sinh viên');
       }
+      if (topic.ownerId && uniqueOccupiedStudents.size === 0) {
+        const lecturer = await this.prisma.lecturerProfile.findUnique({ where: { userId: topic.ownerId } });
+        if (lecturer) {
+          const semesterQuota = await this.prisma.lecturerQuota.findUnique({
+            where: { lecturerId_semesterId: { lecturerId: lecturer.id, semesterId } },
+          });
+          const maxGroups = semesterQuota?.maxGroups ?? lecturer.maxGroups ?? 5;
+          const guidedGroupsCount = await this.prisma.group.count({
+            where: { topic: { ownerId: topic.ownerId }, semesterId, status: { not: 'CANCELLED' }, NOT: { topicId: topic.id } },
+          });
+          if (maxGroups <= 0 || guidedGroupsCount >= maxGroups) {
+            throw new ConflictException(`Giảng viên hướng dẫn đã đạt hạn mức số nhóm tối đa trong học kỳ này (${maxGroups} nhóm).`);
+          }
+        }
+      }
     }
 
-    // 5. Post-condition: Create Registration with status CHO_XAC_NHAN
+    // 5. Post-condition: Create Registration with status APPROVED (mặc định được xác nhận)
     const created = await this.prisma.registration.create({
       data: {
         studentId: student.id,
         semesterId,
         topicId: dto.topicId,
         proposal: dto.proposal,
-        status: 'CHO_XAC_NHAN',
+        status: 'APPROVED',
+        decidedAt: new Date(),
+        decisionNote: 'Tự động xác nhận đăng ký đề tài',
       },
       include: {
         topic: {
@@ -166,15 +183,15 @@ export class RegistrationsService {
     await this.notifications.create(
       userId,
       'Đăng ký đề tài KLTN thành công',
-      `Bạn đã gửi yêu cầu đăng ký đề tài "${topicTitle}". Trạng thái hiện tại: Chờ xác nhận (CHO_XAC_NHAN).`,
+      `Bạn đã đăng ký thành công đề tài "${topicTitle}". Đề tài đã được tự động xác nhận. Bạn có thể xem danh sách sinh viên cùng đăng ký và tiến hành chọn nhóm!`,
       'REGISTRATION',
     );
 
     if (topic?.ownerId) {
       await this.notifications.create(
         topic.ownerId,
-        'Có sinh viên đăng ký đề tài hướng dẫn',
-        `Sinh viên ${student.user?.fullName} (${student.studentCode}) đã đăng ký đề tài "${topicTitle}". Vui lòng kiểm tra và xác nhận.`,
+        'Sinh viên đăng ký đề tài hướng dẫn',
+        `Sinh viên ${student.user?.fullName} (${student.studentCode}) đã đăng ký đề tài "${topicTitle}" (Đã xác nhận).`,
         'REGISTRATION',
       );
     }
@@ -385,13 +402,13 @@ export class RegistrationsService {
       throw new ForbiddenException('Bạn không có quyền thao tác trên đơn đăng ký này');
     }
 
-    // Ngoại lệ: GV đã xác nhận chính thức -> 403 "Vui lòng liên hệ GVHD/Quản lý"
-    if (registration.status === 'APPROVED') {
-      throw new ForbiddenException('Vui lòng liên hệ GVHD/Quản lý');
+    // Nếu sinh viên đã vào nhóm KLTN chính thức -> 403
+    if (registration.status === 'APPROVED' && registration.groupId) {
+      throw new ForbiddenException('Bạn đã thuộc nhóm KLTN chính thức, vui lòng liên hệ GVHD/Quản lý để hủy đề tài');
     }
 
-    // Tiền điều kiện: status cho phép hủy (CHO_XAC_NHAN hoặc PENDING)
-    if (!['CHO_XAC_NHAN', 'PENDING'].includes(registration.status)) {
+    // Tiền điều kiện: status cho phép hủy (CHO_XAC_NHAN, PENDING hoặc APPROVED khi chưa vào nhóm)
+    if (!['CHO_XAC_NHAN', 'PENDING', 'APPROVED'].includes(registration.status)) {
       throw new BadRequestException('Đơn đăng ký không ở trạng thái cho phép hủy');
     }
 

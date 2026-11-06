@@ -860,6 +860,18 @@ export class DefenseService {
     if (committee && committee.members && committee.members.length > 0) {
       const committeeMemberUserIds = committee.members.map((m: any) => m.userId);
 
+      // 2a. Check Anti-Conflict: GVHD không được nằm trong Hội đồng chấm chính nhóm mình hướng dẫn
+      for (const group of groups) {
+        const advisorUserId = group.topic?.ownerId;
+        if (advisorUserId && committeeMemberUserIds.includes(advisorUserId)) {
+          const conflictingMember = committee.members.find((m: any) => m.userId === advisorUserId);
+          const advisorName = conflictingMember?.user?.fullName || group.topic?.owner?.fullName || 'Giảng viên hướng dẫn';
+          throw new BadRequestException(
+            `Xung đột vai trò: Giảng viên ${advisorName} là Giảng viên hướng dẫn của nhóm ${group.code} ("${group.topic?.title || group.name}"), không thể xếp nhóm này vào Hội đồng "${committee.name}" có chính GVHD làm thành viên!`,
+          );
+        }
+      }
+
       const overlappingSchedules = await this.prisma.defenseSchedule.findMany({
         where: {
           committeeId: { not: committee.id },

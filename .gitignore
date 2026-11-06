@@ -61,3 +61,10 @@ lerna-debug.log*
 Thumbs.db
 ehthumbs.db
 [Dd]esktop.ini
+
+# Archives & Database dumps
+*.rar
+*.zip
+*.sql
+
+

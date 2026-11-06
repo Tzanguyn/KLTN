@@ -115,6 +115,44 @@ export class UsersService {
   async updateLecturerQuota(lecturerProfileId: string, dto: UpdateQuotaDto) {
     const lecturer = await this.prisma.lecturerProfile.findUnique({ where: { id: lecturerProfileId } });
     if (!lecturer) throw new NotFoundException('Không tìm thấy giảng viên');
+    if (dto.maxGroups < 0) {
+      throw new BadRequestException('Hạn mức hướng dẫn không được là số âm (phải >= 0)');
+    }
+
+    const activeSem = await this.prisma.semester.findFirst({
+      where: { status: 'OPEN' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (activeSem) {
+      const activeGuidedGroups = await this.prisma.group.count({
+        where: {
+          topic: { ownerId: lecturer.userId },
+          semesterId: activeSem.id,
+          status: { not: 'CANCELLED' },
+        },
+      });
+      if (dto.maxGroups < activeGuidedGroups) {
+        throw new BadRequestException(
+          `Không thể đặt hạn mức (${dto.maxGroups}) thấp hơn số nhóm giảng viên đang hướng dẫn thực tế (${activeGuidedGroups} nhóm)`,
+        );
+      }
+      await this.prisma.lecturerQuota.upsert({
+        where: {
+          lecturerId_semesterId: {
+            lecturerId: lecturer.id,
+            semesterId: activeSem.id,
+          },
+        },
+        update: { maxGroups: dto.maxGroups },
+        create: {
+          lecturerId: lecturer.id,
+          semesterId: activeSem.id,
+          maxGroups: dto.maxGroups,
+        },
+      });
+    }
+
     return this.prisma.lecturerProfile.update({
       where: { id: lecturerProfileId },
       data: { maxGroups: dto.maxGroups },
@@ -476,50 +514,126 @@ export class UsersService {
       throw new NotFoundException('Không tìm thấy hồ sơ sinh viên');
     }
 
-    // 1. Tìm nhóm KLTN hoặc đăng ký của sinh viên
-    const groupMember = await this.prisma.groupMember.findFirst({
-      where: { studentId: student.id },
-      include: {
-        group: {
+    // 1. Tìm đợt KLTN đang mở / hoạt động chính thức
+    let activeSemester = await this.prisma.semester.findFirst({
+      where: { status: 'OPEN' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!activeSemester) {
+      activeSemester = await this.prisma.semester.findFirst({
+        where: { status: { not: 'ARCHIVED' } },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    if (!activeSemester) {
+      activeSemester = await this.prisma.semester.findFirst({
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    // Ưu tiên tìm nhóm KLTN của sinh viên trong đợt đang mở
+    let groupMember = activeSemester
+      ? await this.prisma.groupMember.findFirst({
+          where: {
+            studentId: student.id,
+            group: {
+              semesterId: activeSemester.id,
+              status: { not: 'CANCELLED' },
+            },
+          },
           include: {
-            topic: { include: { owner: { include: { lecturerProfile: true } } } },
-            semester: true,
-            reports: {
+            group: {
               include: {
+                topic: { include: { owner: { include: { lecturerProfile: true } } } },
+                semester: true,
+                reports: {
+                  include: {
+                    submissions: {
+                      include: { feedbacks: true, submitter: true },
+                      orderBy: { submittedAt: 'desc' },
+                    },
+                  },
+                },
                 submissions: {
-                  include: { feedbacks: true, submitter: true },
+                  include: {
+                    feedbacks: { include: { author: { select: { fullName: true } } } },
+                    submitter: true,
+                    report: true,
+                  },
                   orderBy: { submittedAt: 'desc' },
+                },
+                reviewerAssignments: {
+                  include: { lecturer: { include: { user: true } } },
+                },
+                defenses: {
+                  include: { committee: true },
+                },
+                scores: {
+                  include: { criterion: true },
                 },
               },
             },
-            submissions: {
-              include: { feedbacks: true, submitter: true, report: true },
-              orderBy: { submittedAt: 'desc' },
-            },
-            reviewerAssignments: {
-              include: { lecturer: { include: { user: true } } },
-            },
-            defenses: {
-              include: { committee: true },
-            },
-            scores: {
-              include: { criterion: true },
+          },
+          orderBy: { joinedAt: 'desc' },
+        })
+      : null;
+
+    if (!groupMember) {
+      groupMember = await this.prisma.groupMember.findFirst({
+        where: {
+          studentId: student.id,
+          group: {
+            status: { not: 'CANCELLED' },
+            semester: { status: { not: 'ARCHIVED' } },
+          },
+        },
+        include: {
+          group: {
+            include: {
+              topic: { include: { owner: { include: { lecturerProfile: true } } } },
+              semester: true,
+              reports: {
+                include: {
+                  submissions: {
+                    include: { feedbacks: true, submitter: true },
+                    orderBy: { submittedAt: 'desc' },
+                  },
+                },
+              },
+              submissions: {
+                include: {
+                  feedbacks: { include: { author: { select: { fullName: true } } } },
+                  submitter: true,
+                  report: true,
+                },
+                orderBy: { submittedAt: 'desc' },
+              },
+              reviewerAssignments: {
+                include: { lecturer: { include: { user: true } } },
+              },
+              defenses: {
+                include: { committee: true },
+              },
+              scores: {
+                include: { criterion: true },
+              },
             },
           },
         },
-      },
-      orderBy: { joinedAt: 'desc' },
-    });
+        orderBy: { joinedAt: 'desc' },
+      });
+    }
 
     let registration: any = null;
     let semester: any = groupMember?.group?.semester || null;
     let topic: any = groupMember?.group?.topic || null;
-    const group = groupMember?.group || null;
+    let group = groupMember?.group || null;
 
-    if (!topic) {
+    if (!topic && activeSemester) {
       registration = await this.prisma.registration.findFirst({
         where: {
           studentId: student.id,
+          semesterId: activeSemester.id,
           status: { in: ['APPROVED', 'CHO_XAC_NHAN', 'PENDING'] },
         },
         include: {
@@ -537,57 +651,133 @@ export class UsersService {
         },
         orderBy: { createdAt: 'desc' },
       });
-
-      if (registration) {
-        topic = registration.topic;
-        semester = registration.semester;
-      }
     }
 
-    if (!semester) {
-      semester = await this.prisma.semester.findFirst({
-        where: { status: 'OPEN' },
+    if (!registration && !topic) {
+      registration = await this.prisma.registration.findFirst({
+        where: {
+          studentId: student.id,
+          status: { in: ['APPROVED', 'CHO_XAC_NHAN', 'PENDING'] },
+          semester: { status: { not: 'ARCHIVED' } },
+        },
+        include: {
+          topic: { include: { owner: { include: { lecturerProfile: true } } } },
+          semester: true,
+          group: {
+            include: {
+              reports: { include: { submissions: true } },
+              submissions: { include: { feedbacks: true, submitter: true } },
+              reviewerAssignments: true,
+              defenses: true,
+              scores: true,
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
       });
     }
 
+    if (registration) {
+      topic = registration.topic;
+      if (!semester) semester = registration.semester;
+      if (!group && registration.group) group = registration.group;
+    }
+
+    if (!semester) {
+      semester = activeSemester;
+    }
+
     const now = new Date();
 
-    // 2. Xác định các mốc deadline quan trọng
+    const isValidDateObj = (d: Date | null): boolean => {
+      return Boolean(d && !isNaN(d.getTime()) && d.getFullYear() > 1970);
+    };
+
+    // 2. Xác định mốc thời gian và bước lộ trình đồng bộ từ cấu hình Trưởng BM / Quản lý BM
     const regTo = semester?.registrationTo ? new Date(semester.registrationTo) : null;
     const subTo = semester?.submissionTo ? new Date(semester.submissionTo) : null;
     const defFrom = semester?.defenseFrom ? new Date(semester.defenseFrom) : null;
     const defTo = semester?.defenseTo ? new Date(semester.defenseTo) : null;
 
-    // Giữa kỳ deadline
+    let midFrom: Date | null = null;
+    let midTo: Date | null = null;
+    if (regTo && subTo) {
+      midFrom = new Date(regTo.getTime() + 7 * 86400000);
+      midTo = new Date((regTo.getTime() + subTo.getTime()) / 2);
+    }
+
+    let semesterStep = 1;
+    if (semester?.id) {
+      const semConfig = await this.prisma.systemConfig.findFirst({
+        where: {
+          OR: [
+            { key: `SEMESTER_TIMELINE_STEP_${semester.id}` },
+            { key: 'SEMESTER_TIMELINE_STEP', semesterId: semester.id },
+          ],
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (
+        semConfig?.value &&
+        !isNaN(Number(semConfig.value)) &&
+        Number(semConfig.value) >= 1 &&
+        Number(semConfig.value) <= 5
+      ) {
+        semesterStep = Number(semConfig.value);
+      } else {
+        if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+          semesterStep = 5;
+        } else if (defFrom && now >= defFrom) {
+          semesterStep = 5;
+        } else if (subTo && now >= subTo) {
+          semesterStep = 4;
+        } else if (midTo && now >= midTo) {
+          semesterStep = 3;
+        } else if (regTo && now > regTo) {
+          semesterStep = 2;
+        } else {
+          semesterStep = 1;
+        }
+      }
+    }
+
+    // 3. Xác định các mốc deadline quan trọng
     const midtermReport = group?.reports?.find((r: any) => r.reportType === 'MIDTERM');
     let midtermDue: Date | null = midtermReport?.dueAt ? new Date(midtermReport.dueAt) : null;
-    if (!midtermDue && regTo && subTo) {
-      const midTime = (regTo.getTime() + subTo.getTime()) / 2;
+    if (!isValidDateObj(midtermDue) && isValidDateObj(regTo) && isValidDateObj(subTo)) {
+      const midTime = (regTo!.getTime() + subTo!.getTime()) / 2;
       midtermDue = new Date(midTime);
     }
+    if (!isValidDateObj(midtermDue)) {
+      midtermDue = null;
+    }
 
-    // Xác nhận giữa kỳ deadline: sau hạn nộp giữa kỳ 7 ngày
     let midtermConfirmDue: Date | null = null;
-    if (midtermDue) {
-      midtermConfirmDue = new Date(midtermDue.getTime() + 7 * 24 * 60 * 60 * 1000);
+    if (isValidDateObj(midtermDue)) {
+      midtermConfirmDue = new Date(midtermDue!.getTime() + 7 * 24 * 60 * 60 * 1000);
     }
 
-    // Nộp cuối deadline
     const finalReport = group?.reports?.find((r: any) => r.reportType === 'FINAL');
-    const finalDue: Date | null = finalReport?.dueAt ? new Date(finalReport.dueAt) : subTo;
-
-    // Phản biện deadline
-    let reviewerDue: Date | null = null;
-    if (subTo && defFrom) {
-      reviewerDue = new Date((subTo.getTime() + defFrom.getTime()) / 2);
-    } else if (defFrom) {
-      reviewerDue = new Date(defFrom.getTime() - 3 * 24 * 60 * 60 * 1000);
+    let finalDue: Date | null = finalReport?.dueAt ? new Date(finalReport.dueAt) : subTo;
+    if (!isValidDateObj(finalDue)) {
+      finalDue = null;
     }
 
-    // Bảo vệ deadline
+    let reviewerDue: Date | null = null;
+    if (isValidDateObj(subTo) && isValidDateObj(defFrom)) {
+      reviewerDue = new Date((subTo!.getTime() + defFrom!.getTime()) / 2);
+    } else if (isValidDateObj(defFrom)) {
+      reviewerDue = new Date(defFrom!.getTime() - 3 * 24 * 60 * 60 * 1000);
+    }
+    if (!isValidDateObj(reviewerDue)) {
+      reviewerDue = null;
+    }
+
     const defenseSchedule = group?.defenses?.[0];
-    const defenseDue: Date | null = defenseSchedule?.startsAt ? new Date(defenseSchedule.startsAt) : defTo || defFrom;
+    let defenseDue: Date | null = defenseSchedule?.startsAt ? new Date(defenseSchedule.startsAt) : defTo || defFrom;
+    if (!isValidDateObj(defenseDue)) {
+      defenseDue = null;
+    }
 
     // Kiểm tra bài nộp thực tế
     const allSubmissions = group?.submissions || [];
@@ -601,77 +791,98 @@ export class UsersService {
         s.type === 'BAO_CAO_CUOI_KY' ||
         s.type === 'MA_NGUON',
     );
-
-    const isTopicApproved =
-      Boolean(group) || (registration && registration.status === 'APPROVED');
-
-    // 3. Đánh giá trạng thái từng mốc
-    // Mốc 1: Nộp giữa kỳ
-    let m1Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
-    if (hasMidtermSubmission || group?.midtermStatus === 'CONTINUE' || group?.midtermStatus === 'STOPPED') {
-      m1Status = 'HOAN_THANH';
-    } else if (!isTopicApproved) {
-      m1Status = 'CHUA_BAT_DAU';
-    } else if (midtermDue && now > midtermDue) {
-      m1Status = 'QUA_HAN';
-    } else {
-      m1Status = 'DANG_THUC_HIEN';
-    }
-
-    // Mốc 2: Xác nhận giữa kỳ
-    let m2Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
-    if (group?.midtermStatus === 'CONTINUE' || group?.midtermStatus === 'STOPPED') {
-      m2Status = 'HOAN_THANH';
-    } else if (m1Status === 'CHUA_BAT_DAU') {
-      m2Status = 'CHUA_BAT_DAU';
-    } else if (midtermConfirmDue && now > midtermConfirmDue) {
-      m2Status = 'QUA_HAN';
-    } else if (m1Status === 'HOAN_THANH') {
-      m2Status = 'DANG_THUC_HIEN';
-    } else {
-      m2Status = 'CHUA_BAT_DAU';
-    }
-
-    // Mốc 3: Nộp cuối (báo cáo cuối & mã nguồn)
-    let m3Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
-    if (hasFinalSubmission) {
-      m3Status = 'HOAN_THANH';
-    } else if (m2Status !== 'HOAN_THANH') {
-      m3Status = 'CHUA_BAT_DAU';
-    } else if (finalDue && now > finalDue) {
-      m3Status = 'QUA_HAN';
-    } else {
-      m3Status = 'DANG_THUC_HIEN';
-    }
-
-    // Mốc 4: Phản biện
-    let m4Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
     const hasReviewers = (group?.reviewerAssignments?.length || 0) > 0;
     const hasScores = (group?.scores?.length || 0) > 0;
-    if (hasScores || (hasReviewers && (group?.defenses?.length || 0) > 0)) {
-      m4Status = 'HOAN_THANH';
-    } else if (m3Status !== 'HOAN_THANH') {
-      m4Status = 'CHUA_BAT_DAU';
-    } else if (reviewerDue && now > reviewerDue) {
-      m4Status = 'QUA_HAN';
-    } else if (hasReviewers) {
-      m4Status = 'DANG_THUC_HIEN';
-    } else {
-      m4Status = 'DANG_THUC_HIEN';
-    }
+    const isMidtermConfirmed = group?.midtermStatus === 'CONTINUE' || group?.midtermStatus === 'STOPPED';
+    const isDefenseCompleted = group?.defenses?.some((d: any) => d.status === 'COMPLETED');
+    const isTopicApproved = Boolean(group) || (registration && registration.status === 'APPROVED');
 
-    // Mốc 5: Bảo vệ
+    // 4. Đánh giá trạng thái từng mốc gắn liền với thực tế nhóm & điều kiện tiên quyết Giữa kỳ (GK Gate)
+    const isMidtermPassed = group?.midtermStatus === 'CONTINUE';
+    const isMidtermStopped = group?.midtermStatus === 'STOPPED';
+
+    let m1Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
+    let m2Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
+    let m3Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
+    let m4Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
     let m5Status: 'CHUA_BAT_DAU' | 'DANG_THUC_HIEN' | 'HOAN_THANH' | 'QUA_HAN' = 'CHUA_BAT_DAU';
-    if (group?.defenses?.some((d: any) => d.status === 'COMPLETED')) {
-      m5Status = 'HOAN_THANH';
-    } else if (m4Status !== 'HOAN_THANH' && m3Status !== 'HOAN_THANH') {
+
+    if (!isTopicApproved) {
+      m1Status = 'CHUA_BAT_DAU';
+      m2Status = 'CHUA_BAT_DAU';
+      m3Status = 'CHUA_BAT_DAU';
+      m4Status = 'CHUA_BAT_DAU';
       m5Status = 'CHUA_BAT_DAU';
-    } else if (defenseDue && now > defenseDue) {
-      m5Status = 'QUA_HAN';
-    } else if (group?.defenses?.some((d: any) => d.status === 'SCHEDULED')) {
-      m5Status = 'DANG_THUC_HIEN';
     } else {
-      m5Status = 'CHUA_BAT_DAU';
+      // Mốc 1: Nộp báo cáo tiến độ & giữa kỳ
+      if (hasMidtermSubmission || isMidtermConfirmed || allSubmissions.some((s: any) => s.status === 'ACCEPTED')) {
+        m1Status = 'HOAN_THANH';
+      } else if (midtermDue && now > midtermDue) {
+        m1Status = 'QUA_HAN';
+      } else if (group || semesterStep >= 3) {
+        m1Status = 'DANG_THUC_HIEN';
+      } else {
+        m1Status = 'CHUA_BAT_DAU';
+      }
+
+      // Mốc 2: Xác nhận Đánh giá Giữa kỳ (GK Gate)
+      if (isMidtermPassed) {
+        m2Status = 'HOAN_THANH';
+      } else if (isMidtermStopped) {
+        m2Status = 'QUA_HAN';
+      } else if (m1Status === 'HOAN_THANH' || semesterStep >= 3) {
+        if (midtermConfirmDue && now > midtermConfirmDue) {
+          m2Status = 'QUA_HAN';
+        } else {
+          m2Status = 'DANG_THUC_HIEN';
+        }
+      } else {
+        m2Status = 'CHUA_BAT_DAU';
+      }
+
+      // CHỐT CHẶN GIỮA KỲ: Chỉ khi GVHD đã xác nhận CHO LÀM TIẾP (midtermStatus === 'CONTINUE')
+      // mới mở các mốc Cuối kỳ (m3), Phản biện (m4) và Bảo vệ Hội đồng (m5)
+      if (!isMidtermPassed) {
+        m3Status = 'CHUA_BAT_DAU';
+        m4Status = 'CHUA_BAT_DAU';
+        m5Status = 'CHUA_BAT_DAU';
+      } else {
+        // Mốc 3: Nộp báo cáo cuối kỳ & Mã nguồn
+        if (hasFinalSubmission || isDefenseCompleted || hasScores) {
+          m3Status = 'HOAN_THANH';
+        } else if (finalDue && now > finalDue) {
+          m3Status = 'QUA_HAN';
+        } else {
+          m3Status = 'DANG_THUC_HIEN';
+        }
+
+        // Mốc 4: Đánh giá Phản biện
+        if (hasScores || isDefenseCompleted) {
+          m4Status = 'HOAN_THANH';
+        } else if (m3Status === 'HOAN_THANH' || hasReviewers) {
+          if (reviewerDue && now > reviewerDue) {
+            m4Status = 'QUA_HAN';
+          } else {
+            m4Status = 'DANG_THUC_HIEN';
+          }
+        } else {
+          m4Status = 'CHUA_BAT_DAU';
+        }
+
+        // Mốc 5: Bảo vệ Hội đồng & Điểm tổng kết
+        const hasLockedScores = group?.scores?.some((s: any) => s.status === 'LOCKED');
+        if (isDefenseCompleted || hasLockedScores) {
+          m5Status = 'HOAN_THANH';
+        } else if ((group?.defenses?.length || 0) > 0 || m4Status === 'HOAN_THANH') {
+          if (defenseDue && now > defenseDue) {
+            m5Status = 'QUA_HAN';
+          } else {
+            m5Status = 'DANG_THUC_HIEN';
+          }
+        } else {
+          m5Status = 'CHUA_BAT_DAU';
+        }
+      }
     }
 
     // 4. Danh sách 5 deadline quan trọng
@@ -689,10 +900,15 @@ export class UsersService {
       {
         id: 'xac_nhan_giua_ky',
         key: 'XAC_NHAN_GIUA_KY',
-        title: 'Xác nhận giữa kỳ',
-        description: 'GVHD và bộ môn đánh giá tiếp tục hay dừng đề tài',
+        title: 'Xác nhận giữa kỳ (GK)',
+        description: isMidtermStopped
+          ? `Đã dừng đề tài giữa kỳ${group?.midtermNote ? `: ${group.midtermNote}` : ''}`
+          : isMidtermPassed
+          ? `Đạt giữa kỳ - Cho làm tiếp${group?.midtermNote ? `: ${group.midtermNote}` : ''}`
+          : 'GVHD và bộ môn đánh giá tiếp tục hay dừng đề tài (Bắt buộc đạt để mở Cuối kỳ & Chấm điểm)',
         dueDate: midtermConfirmDue ? midtermConfirmDue.toISOString() : null,
         status: m2Status,
+        midtermStatus: group?.midtermStatus ?? 'PENDING',
         isOverdue: m2Status === 'QUA_HAN',
         daysRemaining: midtermConfirmDue ? Math.ceil((midtermConfirmDue.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       },
@@ -700,9 +916,12 @@ export class UsersService {
         id: 'nop_cuoi',
         key: 'NOP_CUOI_KY',
         title: 'Nộp báo cáo cuối kỳ & Mã nguồn',
-        description: 'Nộp toàn bộ quyển báo cáo hoàn chỉnh, tệp mã nguồn và link demo',
+        description: !isMidtermPassed
+          ? 'Yêu cầu GVHD xác nhận Đạt giữa kỳ (Cho làm tiếp) trước khi nộp báo cáo cuối kỳ'
+          : 'Nộp toàn bộ quyển báo cáo hoàn chỉnh, tệp mã nguồn và link demo',
         dueDate: finalDue ? finalDue.toISOString() : null,
         status: m3Status,
+        lockedByMidterm: !isMidtermPassed,
         isOverdue: m3Status === 'QUA_HAN',
         daysRemaining: finalDue ? Math.ceil((finalDue.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       },
@@ -710,9 +929,12 @@ export class UsersService {
         id: 'phan_bien',
         key: 'PHAN_BIEN',
         title: 'Đánh giá Phản biện',
-        description: 'Giảng viên phản biện thẩm định quyển báo cáo và chấm điểm điều kiện',
+        description: !isMidtermPassed
+          ? 'Chỉ phân công phản biện và nhập điểm sau khi nhóm qua Giữa kỳ'
+          : 'Giảng viên phản biện thẩm định quyển báo cáo và chấm điểm điều kiện',
         dueDate: reviewerDue ? reviewerDue.toISOString() : null,
         status: m4Status,
+        lockedByMidterm: !isMidtermPassed,
         isOverdue: m4Status === 'QUA_HAN',
         daysRemaining: reviewerDue ? Math.ceil((reviewerDue.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       },
@@ -720,9 +942,12 @@ export class UsersService {
         id: 'bao_ve',
         key: 'BAO_VE',
         title: 'Bảo vệ Khóa luận tốt nghiệp',
-        description: 'Trình bày và bảo vệ đề tài trước Hội đồng chuyên môn',
+        description: !isMidtermPassed
+          ? 'Chỉ xếp lịch hội đồng bảo vệ cho nhóm đã qua Giữa kỳ'
+          : 'Trình bày và bảo vệ đề tài trước Hội đồng chuyên môn',
         dueDate: defenseDue ? defenseDue.toISOString() : null,
         status: m5Status,
+        lockedByMidterm: !isMidtermPassed,
         isOverdue: m5Status === 'QUA_HAN',
         daysRemaining: defenseDue ? Math.ceil((defenseDue.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       },
@@ -737,7 +962,7 @@ export class UsersService {
         title: 'Đăng ký đề tài KLTN',
         description: 'Đăng ký đề tài có sẵn hoặc đề xuất đề tài riêng với GVHD',
         dueDate: regTo ? regTo.toISOString() : null,
-        status: isTopicApproved ? 'HOAN_THANH' : 'DANG_THUC_HIEN',
+        status: isTopicApproved ? 'HOAN_THANH' : regTo && now > regTo ? 'QUA_HAN' : 'DANG_THUC_HIEN',
         completedAt: registration?.decidedAt || registration?.createdAt || null,
       },
       ...deadlines.map((d, index) => ({
@@ -748,52 +973,191 @@ export class UsersService {
         description: d.description,
         dueDate: d.dueDate,
         status: d.status,
+        lockedByMidterm: (d as any).lockedByMidterm ?? false,
         completedAt: d.status === 'HOAN_THANH' ? (group?.midtermAt || now.toISOString()) : null,
       })),
     ];
 
-    // Tính percentComplete
+    const stageTitles = [
+      'Đăng ký đề tài',
+      'Duyệt & Ghép nhóm',
+      'Thực hiện & Giữa kỳ',
+      'Báo cáo & Phản biện',
+      'Bảo vệ & Tổng kết',
+    ];
+
+    // Tính bước thực tế của nhóm/sinh viên (không vượt quá Bước 3 nếu chưa qua Giữa kỳ!)
+    let effectiveStep = 1;
     let percentComplete = 0;
-    if (isTopicApproved) percentComplete += 10;
-    if (m1Status === 'HOAN_THANH') percentComplete += 20;
-    else if (m1Status === 'DANG_THUC_HIEN') percentComplete += 10;
 
-    if (m2Status === 'HOAN_THANH') percentComplete += 20;
-    else if (m2Status === 'DANG_THUC_HIEN') percentComplete += 10;
-
-    if (m3Status === 'HOAN_THANH') percentComplete += 25;
-    else if (m3Status === 'DANG_THUC_HIEN') percentComplete += 10;
-
-    if (m4Status === 'HOAN_THANH') percentComplete += 10;
-    else if (m4Status === 'DANG_THUC_HIEN') percentComplete += 5;
-
-    if (m5Status === 'HOAN_THANH') percentComplete += 15;
-    else if (m5Status === 'DANG_THUC_HIEN') percentComplete += 5;
-
-    percentComplete = Math.min(100, Math.max(0, percentComplete));
-
-    // Xác định giai đoạn hiện tại (currentStage)
-    let currentStage = 'Chuẩn bị đăng ký đề tài';
-    if (m5Status === 'HOAN_THANH') {
-      currentStage = 'Đã hoàn thành Khóa luận Tốt nghiệp';
-    } else if (m5Status === 'DANG_THUC_HIEN' || m5Status === 'QUA_HAN') {
-      currentStage = 'Bảo vệ Khóa luận';
-    } else if (m4Status === 'DANG_THUC_HIEN' || m4Status === 'QUA_HAN') {
-      currentStage = 'Đánh giá Phản biện';
-    } else if (m3Status === 'DANG_THUC_HIEN' || m3Status === 'QUA_HAN') {
-      currentStage = 'Hoàn thiện & Nộp báo cáo cuối';
-    } else if (m2Status === 'DANG_THUC_HIEN' || m2Status === 'QUA_HAN') {
-      currentStage = 'Chờ xác nhận giữa kỳ';
-    } else if (m1Status === 'DANG_THUC_HIEN' || m1Status === 'QUA_HAN') {
-      currentStage = 'Thực hiện & Nộp báo cáo giữa kỳ';
-    } else if (isTopicApproved) {
-      currentStage = 'Bắt đầu nghiên cứu đề tài';
+    if (!isTopicApproved) {
+      effectiveStep = 1;
+      percentComplete = registration ? 10 : 5;
+    } else if (!group) {
+      effectiveStep = 2;
+      percentComplete = 20;
+    } else if (!isMidtermPassed) {
+      effectiveStep = 3;
+      if (isMidtermStopped) {
+        percentComplete = 40;
+      } else {
+        percentComplete = m1Status === 'HOAN_THANH' ? 40 : 30;
+      }
+    } else {
+      // Đã qua Giữa kỳ (midtermStatus === 'CONTINUE')
+      if (m5Status === 'HOAN_THANH') {
+        effectiveStep = 5;
+        percentComplete = 100;
+      } else if ((group?.defenses?.length || 0) > 0 || m4Status === 'HOAN_THANH') {
+        effectiveStep = 5;
+        percentComplete = 90;
+      } else if (m3Status === 'HOAN_THANH' || hasReviewers) {
+        effectiveStep = 4;
+        percentComplete = 75;
+      } else {
+        effectiveStep = 4;
+        percentComplete = 55;
+      }
     }
+
+    const currentStage = isMidtermStopped
+      ? 'Đã dừng đề tài ở Giữa kỳ (Chờ xử lý lại GK nếu có)'
+      : `Bước ${effectiveStep}/5: ${stageTitles[effectiveStep - 1] || 'Đăng ký đề tài'}`;
+
+    // 5. Tổng hợp Lịch sử thay đổi tiến độ (progressHistory)
+    const progressHistory: Array<{
+      id: string;
+      type: string;
+      title: string;
+      description: string;
+      actor?: string;
+      status?: string;
+      timestamp: string;
+    }> = [];
+
+    if (registration) {
+      progressHistory.push({
+        id: `reg-${registration.id}`,
+        type: 'REGISTRATION',
+        title: 'Đăng ký đề tài KLTN',
+        description: `Đề tài: "${topic?.title || registration.proposal || 'KLTN'}" (${registration.status})`,
+        actor: student.user.fullName,
+        status: registration.status,
+        timestamp: new Date(registration.createdAt).toISOString(),
+      });
+    }
+
+    if (group) {
+      for (const sub of allSubmissions) {
+        progressHistory.push({
+          id: `sub-${sub.id}`,
+          type: 'SUBMISSION',
+          title: `Nộp bài: ${sub.fileName || sub.type || 'Báo cáo'} (v${sub.version || 1})`,
+          description: sub.note || `Loại báo cáo: ${sub.type || sub.report?.reportType || 'PROGRESS'}`,
+          actor: sub.submitter?.fullName || student.user.fullName,
+          status: sub.status,
+          timestamp: new Date(sub.submittedAt).toISOString(),
+        });
+
+        for (const fb of sub.feedbacks || []) {
+          progressHistory.push({
+            id: `fb-${fb.id}`,
+            type: 'FEEDBACK',
+            title: `GVHD nhận xét bài nộp v${sub.version || 1}`,
+            description: fb.content,
+            actor: (fb as any).author?.fullName || topic?.owner?.fullName || 'Giảng viên hướng dẫn',
+            status: sub.status,
+            timestamp: new Date(fb.createdAt).toISOString(),
+          });
+        }
+      }
+
+      // Lịch sử đánh giá & xử lý lại Giữa kỳ từ AuditLog
+      const midtermLogs = await this.prisma.auditLog.findMany({
+        where: {
+          entity: 'Group',
+          entityId: group.id,
+          action: { in: ['MIDTERM_EVALUATION', 'RE_EVALUATE_MIDTERM'] },
+        },
+        include: { user: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (midtermLogs.length > 0) {
+        for (const log of midtermLogs) {
+          const meta = (log.metadata as any) || {};
+          const isReEval = Boolean(meta.isReEvaluation || log.action === 'RE_EVALUATE_MIDTERM');
+          const statusLabel = meta.midtermStatus === 'CONTINUE' ? 'CHO LÀM TIẾP' : 'DỪNG ĐỀ TÀI';
+          progressHistory.push({
+            id: `mid-${log.id}`,
+            type: isReEval ? 'MIDTERM_REEVALUATION' : 'MIDTERM_EVALUATION',
+            title: isReEval
+              ? `Xử lý lại Giữa kỳ (${meta.previousMidtermStatus} → ${meta.midtermStatus})`
+              : `Xác nhận Đánh giá Giữa kỳ: ${statusLabel}`,
+            description: meta.lyDo || `Kết quả giữa kỳ: ${statusLabel}`,
+            actor: log.user?.fullName || topic?.owner?.fullName || 'Giảng viên hướng dẫn',
+            status: meta.midtermStatus,
+            timestamp: new Date(log.createdAt).toISOString(),
+          });
+        }
+      } else if (group.midtermStatus !== 'PENDING' && group.midtermAt) {
+        const statusLabel = group.midtermStatus === 'CONTINUE' ? 'CHO LÀM TIẾP' : 'DỪNG ĐỀ TÀI';
+        progressHistory.push({
+          id: `mid-group-${group.id}`,
+          type: 'MIDTERM_EVALUATION',
+          title: `Xác nhận Đánh giá Giữa kỳ: ${statusLabel}`,
+          description: group.midtermNote || `Kết quả giữa kỳ: ${statusLabel}`,
+          actor: topic?.owner?.fullName || 'Giảng viên hướng dẫn',
+          status: group.midtermStatus,
+          timestamp: new Date(group.midtermAt).toISOString(),
+        });
+      }
+
+      for (const ra of group.reviewerAssignments || []) {
+        progressHistory.push({
+          id: `rev-${ra.id}`,
+          type: 'REVIEWER_ASSIGNMENT',
+          title: 'Phân công Giảng viên Phản biện',
+          description: `GVPB: ${ra.lecturer?.user?.fullName || 'Giảng viên'} (${ra.type})`,
+          actor: 'Bộ môn',
+          status: 'ASSIGNED',
+          timestamp: new Date(ra.assignedAt).toISOString(),
+        });
+      }
+
+      for (const def of group.defenses || []) {
+        progressHistory.push({
+          id: `def-${def.id}`,
+          type: 'DEFENSE_SCHEDULE',
+          title: `Lịch bảo vệ Hội đồng (${def.committee?.name || 'Hội đồng KLTN'})`,
+          description: `Phòng: ${def.room} • Thời gian: ${new Date(def.startsAt).toLocaleString('vi-VN')}`,
+          actor: 'Hội đồng bảo vệ',
+          status: def.status,
+          timestamp: new Date(def.startsAt).toISOString(),
+        });
+      }
+    }
+
+    progressHistory.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // Badge cảnh báo (alerts)
     const alerts: Array<{ type: 'danger' | 'warning' | 'info' | 'success'; message: string; deadlineKey?: string }> = [];
+    if (isMidtermStopped) {
+      alerts.push({
+        type: 'danger',
+        message: `Đề tài của nhóm đã bị dừng tại đợt Đánh giá Giữa kỳ (DỪNG ĐỀ TÀI)${group?.midtermNote ? ` - Lý do: ${group.midtermNote}` : ''}. Các bước nộp cuối kỳ và chấm điểm đã bị khóa. Liên hệ GVHD nếu cần xử lý lại GK.`,
+        deadlineKey: 'XAC_NHAN_GIUA_KY',
+      });
+    } else if (group && !isMidtermPassed) {
+      alerts.push({
+        type: 'info',
+        message: 'Nhóm cần được GVHD xác nhận Đạt Giữa kỳ (Cho làm tiếp) trước khi mở bước Nộp báo cáo cuối kỳ, Phản biện và Nhập điểm.',
+        deadlineKey: 'XAC_NHAN_GIUA_KY',
+      });
+    }
+
     for (const d of deadlines) {
-      if (d.status === 'QUA_HAN') {
+      if (d.status === 'QUA_HAN' && !(isMidtermStopped && d.key === 'XAC_NHAN_GIUA_KY')) {
         alerts.push({
           type: 'danger',
           message: `Cảnh báo: Mốc "${d.title}" đã quá hạn!`,
@@ -820,13 +1184,43 @@ export class UsersService {
         studentCode: student.studentCode,
         fullName: student.user.fullName,
       },
-      semester: semester ? { id: semester.id, code: semester.code, name: semester.name, status: semester.status } : null,
+      semester: semester
+        ? {
+            id: semester.id,
+            code: semester.code,
+            name: semester.name,
+            academicYear: semester.academicYear,
+            status: semester.status,
+            registrationFrom: semester.registrationFrom,
+            registrationTo: semester.registrationTo,
+            submissionTo: semester.submissionTo || (finalDue ? finalDue.toISOString() : null),
+            defenseFrom: semester.defenseFrom || (defenseDue ? defenseDue.toISOString() : null),
+            defenseTo: semester.defenseTo || (defenseSchedule?.endsAt ? new Date(defenseSchedule.endsAt).toISOString() : null),
+            currentStep: effectiveStep,
+            semesterStep,
+            currentStage: stageTitles[effectiveStep - 1] || currentStage,
+          }
+        : null,
       topic: topic ? { id: topic.id, title: topic.title } : null,
-      group: group ? { id: group.id, code: group.code, name: group.name } : null,
+      group: group
+        ? {
+            id: group.id,
+            code: group.code,
+            name: group.name,
+            status: group.status,
+            midtermStatus: group.midtermStatus,
+            midtermNote: group.midtermNote,
+            midtermAt: group.midtermAt,
+            isMidtermPassed,
+          }
+        : null,
       percentComplete,
+      currentStep: effectiveStep,
+      semesterStep,
       currentStage,
       milestones,
       deadlines,
+      progressHistory,
       alerts,
     };
   }
@@ -1100,22 +1494,50 @@ export class UsersService {
         (s: any) => s.scorerId !== topic?.ownerId && !reviewerUserIds.has(s.scorerId),
       );
 
+      const extractStudentScoreAndNote = (s: any) => {
+        let cleanNote: string | null = s.note || null;
+        let resolvedScore = Number(s.value) || 0;
+        if (s.note && typeof s.note === 'string' && s.note.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(s.note.trim());
+            if (parsed && typeof parsed === 'object' && ('studentScores' in parsed || '__perStudent' in parsed)) {
+              cleanNote = parsed.note || null;
+              const stScores = parsed.studentScores || {};
+              const myVal =
+                stScores[userId] ?? stScores[student.id] ?? stScores[student.studentCode];
+              if (myVal !== undefined && myVal !== null && !isNaN(Number(myVal))) {
+                resolvedScore = Number(myVal);
+              }
+            }
+          } catch {
+            // keep plain note
+          }
+        }
+        return { score: resolvedScore, note: cleanNote };
+      };
+
       // A. Điểm Hướng Dẫn
       let diemHuongDan: any = null;
       if (gvhdScores.length > 0) {
-        const tieuChi = gvhdScores.map((s: any) => ({
-          maTieuChi: s.criterion.code,
-          tenTieuChi: s.criterion.name,
-          trongSo: Number(s.criterion.weight),
-          diem: Number(s.value),
-          diemToiDa: Number(s.criterion.maxScore),
-          ghiChu: s.note,
-        }));
-        const tong = Number(
-          gvhdScores
-            .reduce((sum: number, s: any) => sum + (Number(s.value) * Number(s.criterion.weight)) / 100, 0)
-            .toFixed(2),
-        );
+        const tieuChi = gvhdScores.map((s: any) => {
+          const { score, note } = extractStudentScoreAndNote(s);
+          return {
+            maTieuChi: s.criterion.code,
+            tenTieuChi: s.criterion.name,
+            trongSo: Number(s.criterion.weight),
+            diem: score,
+            diemToiDa: Number(s.criterion.maxScore),
+            ghiChu: note,
+          };
+        });
+        const tong =
+          tieuChi.length > 0
+            ? Number(
+                (
+                  tieuChi.reduce((sum: number, c: any) => sum + Number(c.diem), 0) / tieuChi.length
+                ).toFixed(2),
+              )
+            : 0;
         diemHuongDan = {
           tieuChi,
           tong,
@@ -1126,19 +1548,25 @@ export class UsersService {
       // B. Điểm Phản Biện
       let diemPhanBien: any = null;
       if (gvpbScores.length > 0) {
-        const tieuChi = gvpbScores.map((s: any) => ({
-          maTieuChi: s.criterion.code,
-          tenTieuChi: s.criterion.name,
-          trongSo: Number(s.criterion.weight),
-          diem: Number(s.value),
-          diemToiDa: Number(s.criterion.maxScore),
-          ghiChu: s.note,
-        }));
-        const tong = Number(
-          gvpbScores
-            .reduce((sum: number, s: any) => sum + (Number(s.value) * Number(s.criterion.weight)) / 100, 0)
-            .toFixed(2),
-        );
+        const tieuChi = gvpbScores.map((s: any) => {
+          const { score, note } = extractStudentScoreAndNote(s);
+          return {
+            maTieuChi: s.criterion.code,
+            tenTieuChi: s.criterion.name,
+            trongSo: Number(s.criterion.weight),
+            diem: score,
+            diemToiDa: Number(s.criterion.maxScore),
+            ghiChu: note,
+          };
+        });
+        const tong =
+          tieuChi.length > 0
+            ? Number(
+                (
+                  tieuChi.reduce((sum: number, c: any) => sum + Number(c.diem), 0) / tieuChi.length
+                ).toFixed(2),
+              )
+            : 0;
         diemPhanBien = {
           tieuChi,
           tong,
@@ -1151,8 +1579,9 @@ export class UsersService {
       if (councilScores.length > 0) {
         const criteriaMap = new Map<string, { criterion: any; scores: number[] }>();
         for (const s of councilScores) {
+          const { score } = extractStudentScoreAndNote(s);
           const existing = criteriaMap.get(s.criterionId) || { criterion: s.criterion, scores: [] };
-          existing.scores.push(Number(s.value));
+          existing.scores.push(score);
           criteriaMap.set(s.criterionId, existing);
         }
 
@@ -1167,9 +1596,14 @@ export class UsersService {
           };
         });
 
-        const tong = Number(
-          tieuChi.reduce((sum: number, c: any) => sum + (c.diem * c.trongSo) / 100, 0).toFixed(2),
-        );
+        const tong =
+          tieuChi.length > 0
+            ? Number(
+                (
+                  tieuChi.reduce((sum: number, c: any) => sum + Number(c.diem), 0) / tieuChi.length
+                ).toFixed(2),
+              )
+            : 0;
 
         const scorerMap = new Map<string, { hoTen: string; scores: any[] }>();
         for (const s of councilScores) {
@@ -1183,11 +1617,17 @@ export class UsersService {
 
         const thanhVien = Array.from(scorerMap.values()).map((sc) => ({
           hoTen: sc.hoTen,
-          tongDiem: Number(
-            sc.scores
-              .reduce((sum: number, s: any) => sum + (Number(s.value) * Number(s.criterion.weight)) / 100, 0)
-              .toFixed(2),
-          ),
+          tongDiem:
+            sc.scores.length > 0
+              ? Number(
+                  (
+                    sc.scores.reduce(
+                      (sum: number, s: any) => sum + extractStudentScoreAndNote(s).score,
+                      0,
+                    ) / sc.scores.length
+                  ).toFixed(2),
+                )
+              : 0,
         }));
 
         diemHoiDong = {
@@ -1197,37 +1637,38 @@ export class UsersService {
         };
       }
 
-      // D. Tính Điểm Tổng Kết
+      // D. Tính Điểm Tổng Kết (Tính trung bình cộng, không áp dụng tỉ lệ trọng số)
       let diemTongKet: number | null = null;
       let congThucTinh = '';
 
-      if (diemHuongDan?.tong !== undefined && diemPhanBien?.tong !== undefined && diemHoiDong?.tong !== undefined) {
-        diemTongKet = Number(
-          (diemHuongDan.tong * 0.3 + diemPhanBien.tong * 0.3 + diemHoiDong.tong * 0.4).toFixed(2),
-        );
-        congThucTinh = 'Điểm tổng kết = (Điểm GVHD × 30%) + (Điểm GVPB × 30%) + (Điểm Hội đồng × 40%)';
-      } else if (diemHuongDan?.tong !== undefined && diemPhanBien?.tong !== undefined) {
-        diemTongKet = Number(((diemHuongDan.tong + diemPhanBien.tong) / 2).toFixed(2));
-        congThucTinh = 'Điểm tổng kết = (Điểm GVHD × 50%) + (Điểm GVPB × 50%)';
-      } else if (diemHuongDan?.tong !== undefined && diemHoiDong?.tong !== undefined) {
-        diemTongKet = Number(
-          (diemHuongDan.tong * 0.4 + diemHoiDong.tong * 0.6).toFixed(2),
-        );
-        congThucTinh = 'Điểm tổng kết = (Điểm GVHD × 40%) + (Điểm Hội đồng × 60%)';
-      } else if (diemHoiDong?.tong !== undefined) {
-        diemTongKet = diemHoiDong.tong;
-        congThucTinh = 'Điểm tổng kết = Điểm Hội đồng bảo vệ';
-      } else if (diemHuongDan?.tong !== undefined) {
-        diemTongKet = diemHuongDan.tong;
-        congThucTinh = 'Điểm tổng kết = Điểm đánh giá GVHD';
+      const studentScoreParts: Array<{ name: string; score: number }> = [];
+      if (diemHuongDan?.tong !== undefined && diemHuongDan.tong !== null) {
+        studentScoreParts.push({ name: 'Điểm GVHD', score: Number(diemHuongDan.tong) });
+      }
+      if (diemPhanBien?.tong !== undefined && diemPhanBien.tong !== null) {
+        studentScoreParts.push({ name: 'Điểm GVPB', score: Number(diemPhanBien.tong) });
+      }
+      if (diemHoiDong?.tong !== undefined && diemHoiDong.tong !== null) {
+        studentScoreParts.push({ name: 'Điểm Hội đồng', score: Number(diemHoiDong.tong) });
+      }
+
+      if (studentScoreParts.length > 0) {
+        const sum = studentScoreParts.reduce((acc, p) => acc + p.score, 0);
+        diemTongKet = Number((sum / studentScoreParts.length).toFixed(2));
+        if (studentScoreParts.length === 1) {
+          congThucTinh = `Điểm tổng kết = ${studentScoreParts[0].name}`;
+        } else {
+          const names = studentScoreParts.map((p) => p.name).join(' + ');
+          congThucTinh = `Điểm tổng kết = (${names}) / ${studentScoreParts.length}`;
+        }
       } else {
-        // Điểm chung theo trọng số tiêu chí
-        const totalWeighted = publishedScores.reduce(
-          (sum: number, s: any) => sum + (Number(s.value) * Number(s.criterion.weight)) / 100,
-          0,
-        );
-        diemTongKet = Number(totalWeighted.toFixed(2));
-        congThucTinh = 'Điểm tổng kết = Tổng trọng số các tiêu chí đánh giá KLTN';
+        const avg = publishedScores.length > 0
+          ? publishedScores.reduce((acc: number, s: any) => acc + (Number(s.value) || 0), 0) / publishedScores.length
+          : 0;
+        diemTongKet = Number(avg.toFixed(2));
+        congThucTinh = publishedScores.length > 0
+          ? `Điểm tổng kết = Trung bình cộng ${publishedScores.length} tiêu chí đánh giá KLTN`
+          : 'Chưa có điểm đánh giá';
       }
 
       // Cộng điểm NCKH (nếu có minh chứng được duyệt)
@@ -1264,13 +1705,208 @@ export class UsersService {
     };
   }
 
+  /**
+   * Helper format và đồng bộ lộ trình 5 giai đoạn cho đợt KLTN
+   */
+  async formatSemesterWithTimeline(semester: any) {
+    if (!semester) return null;
+
+    const now = new Date();
+    const regFrom = semester.registrationFrom ? new Date(semester.registrationFrom) : null;
+    const regTo = semester.registrationTo ? new Date(semester.registrationTo) : null;
+    const subTo = semester.submissionTo ? new Date(semester.submissionTo) : null;
+    const defFrom = semester.defenseFrom ? new Date(semester.defenseFrom) : null;
+    const defTo = semester.defenseTo ? new Date(semester.defenseTo) : null;
+
+    let midFrom: Date | null = null;
+    let midTo: Date | null = null;
+    if (regTo && subTo) {
+      const midTime = (regTo.getTime() + subTo.getTime()) / 2;
+      midFrom = new Date(regTo.getTime() + 7 * 86400000);
+      midTo = new Date(midTime);
+    }
+
+    const manualConfig = await this.prisma.systemConfig.findFirst({
+      where: {
+        OR: [
+          { key: 'SEMESTER_TIMELINE_STEP', semesterId: semester.id },
+          { key: `SEMESTER_TIMELINE_STEP_${semester.id}` },
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    let currentStep = manualConfig?.value ? Number(manualConfig.value) : 0;
+
+    if (!manualConfig?.value || isNaN(currentStep) || currentStep < 1 || currentStep > 5) {
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        currentStep = 5;
+      } else {
+        let stepFromDate = 1;
+        if (defFrom && now >= defFrom) {
+          stepFromDate = 5;
+        } else if (subTo && now >= subTo) {
+          stepFromDate = 4;
+        } else if (midTo && now >= midTo) {
+          stepFromDate = 3;
+        } else if (regTo && now > regTo) {
+          stepFromDate = 2;
+        } else {
+          stepFromDate = 1;
+        }
+
+        let stepFromData = 1;
+        if (semester.id) {
+          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                midtermStatus: 'CONTINUE',
+                status: { not: 'CANCELLED' },
+              },
+            }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+              },
+            }),
+            this.prisma.registration.count({
+              where: {
+                semesterId: semester.id,
+                status: 'APPROVED',
+              },
+            }),
+          ]);
+
+          if (defCount > 0 || scoreCount > 0) {
+            stepFromData = 5;
+          } else if (revCount > 0 || contGroupCount > 0) {
+            stepFromData = 4;
+          } else if (grpCount > 0) {
+            stepFromData = 3;
+          } else if (regApprovedCount > 0) {
+            stepFromData = 2;
+          } else {
+            stepFromData = 1;
+          }
+        }
+
+        currentStep = Math.max(stepFromDate, stepFromData);
+      }
+    }
+
+    const stageTitles = [
+      'Đăng ký đề tài',
+      'Duyệt & Ghép nhóm',
+      'Thực hiện & Giữa kỳ',
+      'Báo cáo & Phản biện',
+      'Bảo vệ & Tổng kết',
+    ];
+
+    const timelineSteps = [
+      {
+        number: 1,
+        title: 'Đăng ký đề tài',
+        subtitle: 'Mở đợt, chọn hoặc đề xuất đề tài mới',
+        phase: 'Tuần 1 - 3',
+        startDate: regFrom ? regFrom.toISOString() : null,
+        endDate: regTo ? regTo.toISOString() : null,
+      },
+      {
+        number: 2,
+        title: 'Duyệt & Ghép nhóm',
+        subtitle: 'GVHD duyệt, thành lập nhóm KLTN',
+        phase: 'Tuần 3 - 4',
+        startDate: regTo ? regTo.toISOString() : null,
+        endDate: midFrom ? midFrom.toISOString() : null,
+      },
+      {
+        number: 3,
+        title: 'Thực hiện & Giữa kỳ',
+        subtitle: 'Báo cáo tiến độ, đánh giá giữa kỳ',
+        phase: 'Tuần 5 - 10',
+        startDate: midFrom ? midFrom.toISOString() : null,
+        endDate: subTo ? subTo.toISOString() : null,
+      },
+      {
+        number: 4,
+        title: 'Báo cáo & Phản biện',
+        subtitle: 'Nộp báo cáo hoàn chỉnh, GV phản biện',
+        phase: 'Tuần 11 - 13',
+        startDate: subTo ? subTo.toISOString() : null,
+        endDate: defFrom ? defFrom.toISOString() : null,
+      },
+      {
+        number: 5,
+        title: 'Bảo vệ & Tổng kết',
+        subtitle: 'Hội đồng chấm điểm 10 tiêu chí, NCKH',
+        phase: 'Tuần 14 - 15',
+        startDate: defFrom ? defFrom.toISOString() : null,
+        endDate: defTo ? defTo.toISOString() : null,
+      },
+    ];
+
+    return {
+      id: semester.id,
+      code: semester.code,
+      name: semester.name,
+      academicYear: semester.academicYear,
+      status: semester.status,
+      registrationFrom: semester.registrationFrom,
+      registrationTo: semester.registrationTo,
+      submissionTo: semester.submissionTo,
+      defenseFrom: semester.defenseFrom,
+      defenseTo: semester.defenseTo,
+      currentStep,
+      currentStage: stageTitles[currentStep - 1] || 'Đăng ký đề tài',
+      timelineSteps,
+    };
+  }
+
   async getLecturerDashboard(userId: string) {
     const lecturerProfile = await this.prisma.lecturerProfile.findUnique({
       where: { userId },
       include: { department: true },
     });
 
-    const maxGroupsQuota = lecturerProfile?.maxGroups ?? 5;
+    let maxGroupsQuota = lecturerProfile?.maxGroups ?? 5;
+
+    // Tìm đợt KLTN chính thức đang mở
+    const officialSemester = (await this.prisma.semester.findFirst({
+      where: {
+        status: 'OPEN',
+        NOT: { code: { startsWith: 'SEM_DEF_' } },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { department: true },
+    })) || (await this.prisma.semester.findFirst({
+      where: { status: 'OPEN' },
+      orderBy: { createdAt: 'desc' },
+      include: { department: true },
+    })) || (await this.prisma.semester.findFirst({
+      orderBy: { createdAt: 'desc' },
+      include: { department: true },
+    }));
+
+    if (lecturerProfile && officialSemester) {
+      const semQuota = await this.prisma.lecturerQuota.findUnique({
+        where: {
+          lecturerId_semesterId: {
+            lecturerId: lecturerProfile.id,
+            semesterId: officialSemester.id,
+          },
+        },
+      });
+      if (semQuota) {
+        maxGroupsQuota = semQuota.maxGroups;
+      }
+    }
+
+    const formattedSemester = officialSemester ? await this.formatSemesterWithTimeline(officialSemester) : null;
 
     // Lấy tất cả nhóm mà giảng viên này hướng dẫn
     const groups = await this.prisma.group.findMany({
@@ -1362,14 +1998,15 @@ export class UsersService {
 
       if (group.midtermStatus === 'CONTINUE') {
         progressPct += 25;
+        if (group.scores.length > 0) {
+          const isLocked = group.scores.some((s) => s.status === 'LOCKED');
+          progressPct += isLocked ? 20 : 10;
+        }
+        progressPct = Math.min(100, progressPct);
+      } else {
+        // Chưa qua Giữa kỳ hoặc bị Dừng đề tài: tiến độ tối đa dừng ở giai đoạn Giữa kỳ (45%)
+        progressPct = Math.min(45, progressPct);
       }
-
-      if (group.scores.length > 0) {
-        const isLocked = group.scores.some((s) => s.status === 'LOCKED');
-        progressPct += isLocked ? 20 : 10;
-      }
-
-      progressPct = Math.min(100, progressPct);
 
       // Cảnh báo chậm tiến độ
       if (groupSubmissions.length === 0) {
@@ -1455,6 +2092,7 @@ export class UsersService {
         : 0;
 
     return {
+      semester: formattedSemester,
       soNhomHuongDan,
       maxGroupsQuota,
       choTrong: Math.max(0, maxGroupsQuota - soNhomHuongDan),

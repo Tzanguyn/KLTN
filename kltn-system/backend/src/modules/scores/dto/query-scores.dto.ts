@@ -17,9 +17,19 @@ export class QueryScoresDto {
   @IsBooleanString()
   incompleteOnly?: string;
 
-  @ApiPropertyOptional({ description: 'Từ khóa tìm kiếm (mã nhóm, tên nhóm, tên đề tài)' })
+  @ApiPropertyOptional({ description: 'Từ khóa tìm kiếm (mã nhóm, tên nhóm, tên đề tài, tên GVHD, tên SV)' })
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: 'Lọc theo ID Giảng viên hướng dẫn (userId hoặc lecturerProfileId)' })
+  @IsOptional()
+  @IsString()
+  lecturerId?: string;
+
+  @ApiPropertyOptional({ description: 'Lọc theo ID Giảng viên hướng dẫn (gvhdId)' })
+  @IsOptional()
+  @IsString()
+  gvhdId?: string;
 }
 
