@@ -29,12 +29,13 @@ async function bootstrap() {
       const isAllowed =
         allowedOrigins.includes('*') ||
         allowedOrigins.includes(cleanOrigin) ||
-        /\.vercel\.app$/.test(cleanOrigin) ||
+        cleanOrigin.includes('vercel.app') ||
+        cleanOrigin.includes('infinityfree') ||
         /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin);
       if (isAllowed) {
         callback(null, true);
       } else {
-        callback(new Error(`CORS blocked for origin: ${origin}`));
+        callback(null, false);
       }
     },
     credentials: true,
