@@ -86,7 +86,7 @@ export function LoginForm() {
         apiMessage ||
         (error.response
           ? 'Đăng nhập không thành công. Vui lòng kiểm tra lại thông tin.'
-          : 'Đăng nhập không thành công. Hãy kiểm tra kết nối máy chủ backend (http://localhost:3000).');
+          : `Đăng nhập không thành công. Hãy kiểm tra kết nối máy chủ backend (${import.meta.env.VITE_API_URL || 'chưa nhận VITE_API_URL'}).`);
 
       if (status === 401) {
         setServerError({ message, type: 'auth' });
