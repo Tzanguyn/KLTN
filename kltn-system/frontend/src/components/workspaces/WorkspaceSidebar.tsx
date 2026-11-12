@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LucideIcon, Menu, X, ChevronRight, Layers } from 'lucide-react';
+import { LucideIcon, Menu, X, ChevronRight, Layers, Sparkles } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -19,34 +19,39 @@ export interface WorkspaceSidebarProps {
 
 const colorMap = {
   indigo: {
-    activeBg: 'bg-indigo-600 text-white shadow-sm shadow-indigo-200 font-bold',
-    badge: 'bg-indigo-50 text-indigo-700',
+    activeBg: 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/25 font-bold',
+    badge: 'bg-indigo-50 text-indigo-700 border-indigo-200/60',
     mobilePillActive: 'bg-indigo-600 text-white shadow-sm font-bold',
     accentText: 'text-indigo-600',
+    dotBg: 'bg-indigo-500',
   },
   emerald: {
-    activeBg: 'bg-emerald-700 text-white shadow-sm shadow-emerald-200 font-bold',
-    badge: 'bg-emerald-50 text-emerald-700',
+    activeBg: 'bg-emerald-700 text-white shadow-sm shadow-emerald-500/25 font-bold',
+    badge: 'bg-emerald-50 text-emerald-700 border-emerald-200/60',
     mobilePillActive: 'bg-emerald-700 text-white shadow-sm font-bold',
     accentText: 'text-emerald-700',
+    dotBg: 'bg-emerald-500',
   },
   purple: {
-    activeBg: 'bg-purple-700 text-white shadow-sm shadow-purple-200 font-bold',
-    badge: 'bg-purple-50 text-purple-700',
+    activeBg: 'bg-purple-700 text-white shadow-sm shadow-purple-500/25 font-bold',
+    badge: 'bg-purple-50 text-purple-700 border-purple-200/60',
     mobilePillActive: 'bg-purple-700 text-white shadow-sm font-bold',
     accentText: 'text-purple-700',
+    dotBg: 'bg-purple-500',
   },
   amber: {
-    activeBg: 'bg-amber-600 text-white shadow-sm shadow-amber-200 font-bold',
-    badge: 'bg-amber-50 text-amber-700',
+    activeBg: 'bg-amber-600 text-white shadow-sm shadow-amber-500/25 font-bold',
+    badge: 'bg-amber-50 text-amber-800 border-amber-200/60',
     mobilePillActive: 'bg-amber-600 text-white shadow-sm font-bold',
     accentText: 'text-amber-700',
+    dotBg: 'bg-amber-500',
   },
   rose: {
-    activeBg: 'bg-rose-600 text-white shadow-sm shadow-rose-200 font-bold',
-    badge: 'bg-rose-50 text-rose-700',
+    activeBg: 'bg-rose-600 text-white shadow-sm shadow-rose-500/25 font-bold',
+    badge: 'bg-rose-50 text-rose-700 border-rose-200/60',
     mobilePillActive: 'bg-rose-600 text-white shadow-sm font-bold',
     accentText: 'text-rose-700',
+    dotBg: 'bg-rose-500',
   },
 };
 
@@ -78,7 +83,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   return (
     <>
       {/* 1. MOBILE & TABLET NAVIGATION (< lg) */}
-      <div className="block lg:hidden w-full sticky top-16 z-30 bg-slate-50/95 backdrop-blur-md pt-2 pb-2.5 -mx-4 px-4 sm:-mx-6 sm:px-6 border-b border-slate-200/80 shadow-xs mb-4">
+      <div className="block lg:hidden w-full sticky top-16 z-30 bg-slate-50/95 backdrop-blur-md pt-2 pb-2.5 -mx-4 px-4 sm:-mx-6 sm:px-6 border-b border-slate-200/80 shadow-2xs mb-4">
         {/* Mobile Header Bar: Active tab indicator + Menu expander */}
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 truncate">
@@ -101,7 +106,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           <button
             type="button"
             onClick={() => setShowMobileDrawer(!showMobileDrawer)}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 shadow-xs hover:bg-slate-50 transition-colors shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-xl bg-white border border-slate-200 text-slate-700 shadow-2xs hover:bg-slate-50 transition-colors shrink-0 cursor-pointer"
             aria-expanded={showMobileDrawer}
           >
             {showMobileDrawer ? <X className="w-3.5 h-3.5" /> : <Menu className="w-3.5 h-3.5" />}
@@ -122,13 +127,15 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   onTabChange(item.id);
                   setShowMobileDrawer(false);
                 }}
-                className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-150 cursor-pointer ${
                   isActive
                     ? theme.mobilePillActive
                     : 'bg-white text-slate-700 border border-slate-200/80 hover:bg-slate-100 hover:text-slate-900 shadow-2xs'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                <Icon
+                  className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`}
+                />
                 <span>{item.label}</span>
                 {item.count !== undefined && item.count > 0 && (
                   <span
@@ -146,13 +153,15 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
 
         {/* Mobile Full Dropdown Menu (When user clicks 'Tất cả mục') */}
         {showMobileDrawer && (
-          <div className="mt-2.5 p-3 bg-white rounded-2xl border border-slate-200 shadow-xl space-y-3 animate-in fade-in duration-150">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs font-bold text-slate-700">
-              <span>{title} ({navItems.length} mục)</span>
+          <div className="mt-2.5 p-3.5 bg-white rounded-3xl border border-slate-200 shadow-2xl space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs font-bold text-slate-800">
+              <span>
+                {title} ({navItems.length} mục)
+              </span>
               <button
                 type="button"
                 onClick={() => setShowMobileDrawer(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -169,14 +178,16 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                       onTabChange(item.id);
                       setShowMobileDrawer(false);
                     }}
-                    className={`flex items-center justify-between p-2.5 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
+                    className={`flex items-center justify-between p-2.5 rounded-2xl text-xs font-semibold transition-all duration-150 text-left cursor-pointer ${
                       isActive
                         ? theme.activeBg
                         : 'text-slate-700 bg-slate-50/70 hover:bg-slate-100 border border-slate-100'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 truncate">
-                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                      <Icon
+                        className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`}
+                      />
                       <span className="truncate">{item.label}</span>
                     </div>
                     {item.count !== undefined && item.count > 0 && (
@@ -193,21 +204,19 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
               })}
             </div>
 
-            {infoCard && (
-              <div className="pt-2 border-t border-slate-100">
-                {infoCard}
-              </div>
-            )}
+            {infoCard && <div className="pt-2 border-t border-slate-100">{infoCard}</div>}
           </div>
         )}
       </div>
 
       {/* 2. DESKTOP STICKY SIDEBAR (>= lg) */}
       <aside className="hidden lg:block lg:w-64 xl:w-72 shrink-0 lg:sticky lg:top-20 space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-3 space-y-1">
+        <div className="bg-white rounded-3xl border border-slate-200/85 shadow-xs p-3 space-y-1">
           <div className="px-3 py-2 text-[11px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between">
             <span>{title}</span>
-            <span className={`text-[10px] ${theme.badge} px-1.5 py-0.5 rounded font-bold`}>
+            <span
+              className={`text-[10px] ${theme.badge} px-2 py-0.5 rounded-md font-bold border`}
+            >
               {navItems.length} mục
             </span>
           </div>
@@ -219,20 +228,26 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                 <button
                   key={item.id}
                   onClick={() => onTabChange(item.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs font-semibold transition-all duration-150 text-left cursor-pointer ${
                     isActive
                       ? theme.activeBg
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 active:bg-slate-100'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 truncate">
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                    <Icon
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-600'
+                      }`}
+                    />
                     <span className="truncate">{item.label}</span>
                   </div>
                   {item.count !== undefined && item.count > 0 && (
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-1.5 shrink-0 ${
-                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        isActive
+                          ? 'bg-white/20 text-white'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
                       }`}
                     >
                       {item.count}
@@ -249,4 +264,3 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
     </>
   );
 };
-

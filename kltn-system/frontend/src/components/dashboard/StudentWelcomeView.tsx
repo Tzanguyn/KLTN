@@ -18,7 +18,6 @@ import {
   Clock,
   Users,
   Mail,
-  Phone,
   UserCheck,
   Sparkles,
   ShieldAlert,

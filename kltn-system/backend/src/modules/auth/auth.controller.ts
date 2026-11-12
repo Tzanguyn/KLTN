@@ -14,6 +14,19 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @ApiOperation({
+    summary: 'Tạo mã CAPTCHA hình ảnh cho màn hình đăng nhập',
+    description: 'Tạo mã xác thực ngẫu nhiên dạng vector SVG kèm captchaId để người dùng nhập đối soát',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Tạo mã CAPTCHA thành công, trả về captchaId và hình ảnh SVG',
+  })
+  @Get('captcha')
+  getCaptcha() {
+    return this.authService.generateCaptcha();
+  }
+
+  @ApiOperation({
     summary: 'Đăng nhập hệ thống (MSSV/Email + Mật khẩu)',
     description: 'Xác thực tài khoản, kiểm tra điều kiện KLTN và trả về Access Token + Refresh Token (kèm HttpOnly cookie)',
   })

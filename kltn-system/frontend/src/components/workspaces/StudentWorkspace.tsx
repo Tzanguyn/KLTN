@@ -41,6 +41,9 @@ import {
   RefreshCw,
   Sparkles,
   LayoutDashboard,
+  ArrowRight,
+  Video,
+  Crown,
 } from 'lucide-react';
 import { StudentWelcomeView } from '../dashboard/StudentWelcomeView';
 import { WelcomeTimeline } from '../dashboard/WelcomeTimeline';
@@ -100,7 +103,7 @@ const kltnStatusMap: Record<string, { label: string; badgeClass: string; desc: s
 };
 
 export const StudentWorkspace: React.FC = () => {
-  const { user } = useAuthStore();
+  const { user, setUser } = useAuthStore();
   const [activeTab, setActiveTab] = useState<string>('welcome');
 
   // Data states
@@ -192,7 +195,9 @@ export const StudentWorkspace: React.FC = () => {
   const [editPersonalEmail, setEditPersonalEmail] = useState('');
   const [editAddress, setEditAddress] = useState('');
   const [editContactInfo, setEditContactInfo] = useState('');
-  const [profileErrors, setProfileErrors] = useState<{ phone?: string; email?: string }>({});
+  const [profileErrors, setProfileErrors] = useState<{ phone?: string; email?: string; address?: string }>({});
+  const [showFirstLoginModal, setShowFirstLoginModal] = useState<boolean>(false);
+  const [isSubmittingFirstUpdate, setIsSubmittingFirstUpdate] = useState<boolean>(false);
 
   const validatePhone = (val: string) => {
     if (!val || !val.trim()) return '';
@@ -274,6 +279,23 @@ export const StudentWorkspace: React.FC = () => {
         setEditPersonalEmail(sData.emailCaNhan || sData.personalEmail || '');
         setEditAddress(sData.diaChi || sData.address || '');
         setEditContactInfo(sData.thongTinKhac || sData.contactInfo || '');
+
+        const phoneVal = (sData.soDienThoai || sData.phone || '').trim();
+        const emailVal = (sData.emailCaNhan || sData.personalEmail || '').trim();
+        const addressVal = (sData.diaChi || sData.address || '').trim();
+        const isProfileMissing = !phoneVal || !emailVal || !addressVal;
+        const needsUpdate = user?.isFirstLogin || user?.requireProfileUpdate || sData?.requireProfileUpdate || isProfileMissing;
+
+        if (needsUpdate) {
+          setShowFirstLoginModal(true);
+        }
+      } else if (user?.role === 'SINH_VIEN' || user?.roles?.includes('SINH_VIEN')) {
+        const phoneVal = (user?.phone || '').trim();
+        const emailVal = (user?.studentProfile?.personalEmail || '').trim();
+        const addressVal = (user?.studentProfile?.address || '').trim();
+        if (!phoneVal || !emailVal || !addressVal || user?.isFirstLogin || user?.requireProfileUpdate) {
+          setShowFirstLoginModal(true);
+        }
       }
 
       const prof = pRes.data.data;
@@ -449,6 +471,23 @@ export const StudentWorkspace: React.FC = () => {
       });
       const updated = res.data?.data ?? res.data;
       setStudentData(updated);
+      if (user) {
+        setUser({
+          ...user,
+          phone: editPhone.trim(),
+          isFirstLogin: false,
+          requireProfileUpdate: false,
+          hasContactInfo: true,
+          studentProfile: user.studentProfile
+            ? {
+                ...user.studentProfile,
+                personalEmail: editPersonalEmail.trim(),
+                address: editAddress.trim(),
+                contactInfo: editContactInfo.trim(),
+              }
+            : undefined,
+        });
+      }
       notify('Cập nhật thông tin liên lạc thành công! Giảng viên hướng dẫn sẽ thấy thông tin mới của bạn.');
       loadData();
     } catch (err: any) {
@@ -458,8 +497,77 @@ export const StudentWorkspace: React.FC = () => {
     }
   };
 
+  // Handle first-time compulsory profile update
+  const handleFirstLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const phoneErr = validatePhone(editPhone);
+    const emailErr = validateEmail(editPersonalEmail);
+    let addressErr = '';
+    if (!editAddress || !editAddress.trim()) {
+      addressErr = 'Vui lòng nhập địa chỉ nơi ở / thường trú hiện tại';
+    }
+
+    if (phoneErr || emailErr || addressErr) {
+      setProfileErrors({
+        phone: phoneErr,
+        email: emailErr,
+        address: addressErr,
+      });
+      return;
+    }
+
+    setProfileErrors({});
+    try {
+      setIsSubmittingFirstUpdate(true);
+      const res = await api.put('/students/me', {
+        soDienThoai: editPhone.trim(),
+        emailCaNhan: editPersonalEmail.trim(),
+        diaChi: editAddress.trim(),
+        thongTinKhac: editContactInfo.trim() || undefined,
+      });
+      const updated = res.data?.data ?? res.data;
+      setStudentData(updated);
+
+      if (user) {
+        setUser({
+          ...user,
+          phone: editPhone.trim(),
+          isFirstLogin: false,
+          requireProfileUpdate: false,
+          hasContactInfo: true,
+          studentProfile: user.studentProfile
+            ? {
+                ...user.studentProfile,
+                personalEmail: editPersonalEmail.trim(),
+                address: editAddress.trim(),
+                contactInfo: editContactInfo.trim(),
+              }
+            : undefined,
+        });
+      }
+
+      setShowFirstLoginModal(false);
+      notify('Kích hoạt tài khoản thành công! Thông tin cá nhân của bạn đã được cập nhật.');
+      loadData();
+    } catch (err: any) {
+      const msg = err.response?.data?.message;
+      const errorText = Array.isArray(msg) ? msg.join('; ') : (msg || 'Lỗi lưu thông tin sinh viên');
+      notify(errorText, 'error');
+    } finally {
+      setIsSubmittingFirstUpdate(false);
+    }
+  };
+
   // Open confirm registration modal
   const handleOpenRegisterModal = (topic: any) => {
+    if (!topicsMeta?.registrationOpen) {
+      if (topicsMeta?.lecturerTopicOpen || (topicsMeta?.registrationFrom && new Date() < new Date(topicsMeta.registrationFrom))) {
+        notify('Chưa đến đợt sinh viên đăng ký đề tài. Hệ thống đang trong giai đoạn Giảng viên đề xuất & thẩm định đề tài.', 'error');
+      } else {
+        notify('Đợt KLTN hiện đang ngoài thời gian mở đăng ký đề tài.', 'error');
+      }
+      return;
+    }
     setTopicToRegister(topic);
     setShowConfirmRegisterModal(true);
   };
@@ -1342,23 +1450,6 @@ export const StudentWorkspace: React.FC = () => {
                           <span className="text-slate-400">Chưa cập nhật</span>
                         )}
                       </div>
-
-                      <div className="flex items-center justify-between p-2.5 rounded-lg bg-white border border-slate-200">
-                        <span className="text-slate-500 flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-slate-400" />
-                          Số điện thoại:
-                        </span>
-                        {kltnProfile.gvhd?.soDienThoai && kltnProfile.gvhd.soDienThoai !== 'Chưa cập nhật' ? (
-                          <a
-                            href={`tel:${kltnProfile.gvhd.soDienThoai}`}
-                            className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
-                          >
-                            {kltnProfile.gvhd.soDienThoai}
-                          </a>
-                        ) : (
-                          <span className="text-slate-400">Chưa cập nhật</span>
-                        )}
-                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 pt-1">
@@ -1723,12 +1814,17 @@ export const StudentWorkspace: React.FC = () => {
               {topicsMeta?.registrationOpen ? (
                 <span className="px-3 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Đợt đăng ký KLTN: ĐANG MỞ</span>
+                  <span>Cổng SV đăng ký đề tài: ĐANG MỞ</span>
+                </span>
+              ) : topicsMeta?.lecturerTopicOpen || (topicsMeta?.registrationFrom && new Date() < new Date(topicsMeta.registrationFrom)) ? (
+                <span className="px-3 py-1 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Giai đoạn 1: Giảng viên đề xuất & thẩm định đề tài</span>
                 </span>
               ) : (
                 <span className="px-3 py-1 rounded-lg text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  <span>Đợt đăng ký KLTN: NGOÀI THỜI GIAN ĐĂNG KÝ</span>
+                  <span>Cổng đăng ký KLTN: NGOÀI THỜI GIAN ĐĂNG KÝ</span>
                 </span>
               )}
 
@@ -1784,6 +1880,28 @@ export const StudentWorkspace: React.FC = () => {
               )}
             </div>
           </div>
+
+          {/* Phase 1 Informational Notice for Students */}
+          {!topicsMeta?.registrationOpen && (topicsMeta?.lecturerTopicOpen || (topicsMeta?.registrationFrom && new Date() < new Date(topicsMeta.registrationFrom))) && (
+            <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-4 flex items-start gap-3 text-amber-900 shadow-xs animate-in fade-in">
+              <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1 text-xs">
+                <div className="font-bold text-sm text-amber-950 flex items-center gap-2">
+                  <span>Học kỳ đang trong Giai đoạn 1: Giảng viên đăng ký đề tài</span>
+                  <span className="px-2 py-0.5 bg-amber-200/80 text-amber-900 rounded font-semibold text-[10px]">Chờ duyệt & mở cổng SV</span>
+                </div>
+                <p className="text-amber-800 leading-relaxed">
+                  Hiện tại các Giảng viên đang gửi danh mục đề tài lên Trưởng bộ môn thẩm định và phê duyệt.
+                  {topicsMeta?.registrationFrom ? (
+                    <> Cổng đăng ký nguyện vọng cho Sinh viên sẽ chính thức mở vào ngày <strong>{new Date(topicsMeta.registrationFrom).toLocaleDateString('vi-VN')}</strong>.</>
+                  ) : (
+                    <> Cổng đăng ký nguyện vọng cho Sinh viên sẽ sớm được mở sau khi hoàn tất duyệt đề tài.</>
+                  )}
+                  {' '}Sinh viên chỉ được đăng ký vào các đề tài đã được Trưởng bộ môn phê duyệt chính thức (APPROVED).
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Main Content: Filter Sidebar + Topic List */}
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -2045,6 +2163,17 @@ export const StudentWorkspace: React.FC = () => {
                             <span className="text-xs font-semibold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
                               Đã đủ số lượng
                             </span>
+                          ) : !topicsMeta?.registrationOpen ? (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled
+                              className="text-xs opacity-80 cursor-not-allowed bg-amber-100/70 text-amber-800 border border-amber-200"
+                              title="Chưa đến đợt sinh viên đăng ký đề tài"
+                            >
+                              <Clock className="w-3 h-3 mr-1 text-amber-600" />
+                              Chờ mở cổng SV
+                            </Button>
                           ) : isEligible ? (
                             <Button
                               size="sm"
@@ -2176,6 +2305,10 @@ export const StudentWorkspace: React.FC = () => {
                                   ) : isFull ? (
                                     <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-2 py-1 rounded">
                                       Đủ SV
+                                    </span>
+                                  ) : !topicsMeta?.registrationOpen ? (
+                                    <span className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded font-medium flex items-center gap-1" title="Chưa đến đợt SV đăng ký">
+                                      <Clock className="w-2.5 h-2.5 text-amber-600" /> Chờ mở
                                     </span>
                                   ) : isEligible ? (
                                     <Button
@@ -2358,7 +2491,6 @@ export const StudentWorkspace: React.FC = () => {
 
                     <div className="text-[11px] text-slate-600 space-y-0.5 sm:text-right">
                       <div>Email: <a href={`mailto:${selectedTopicDetail.gvhd?.email || selectedTopicDetail.owner?.email}`} className="text-indigo-600 hover:underline">{selectedTopicDetail.gvhd?.email || selectedTopicDetail.owner?.email}</a></div>
-                      <div>SĐT: <span className="font-medium text-slate-700">{selectedTopicDetail.gvhd?.soDienThoai || selectedTopicDetail.owner?.phone || 'Chưa cập nhật'}</span></div>
                     </div>
                   </div>
                 </div>
@@ -2402,7 +2534,12 @@ export const StudentWorkspace: React.FC = () => {
                     Đóng
                   </Button>
 
-                  {isEligible ? (
+                  {!topicsMeta?.registrationOpen ? (
+                    <Button variant="secondary" disabled className="opacity-80 cursor-not-allowed bg-amber-50 text-amber-800 border border-amber-200">
+                      <Clock className="w-3.5 h-3.5 mr-1 text-amber-600" />
+                      Chờ mở cổng đăng ký SV
+                    </Button>
+                  ) : isEligible ? (
                     <Button
                       variant="primary"
                       onClick={() => {
@@ -3567,7 +3704,29 @@ export const StudentWorkspace: React.FC = () => {
                         )}
                       </div>
                     )}
-                    <p className="text-xs text-slate-600">Địa điểm / Link: {appt.location || appt.meetingUrl || 'Google Meet'}</p>
+                    {appt.mode === 'ONLINE' ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-slate-500 font-medium">Họp trực tuyến:</span>
+                        {appt.meetingUrl || (appt.location && (appt.location.startsWith('http://') || appt.location.startsWith('https://'))) ? (
+                          <a
+                            href={appt.meetingUrl || appt.location}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md font-medium text-xs border border-emerald-200 transition-colors"
+                          >
+                            <Video className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Vào phòng Google Meet</span>
+                            <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-400 italic">Chưa có link họp</span>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-600 mt-1">
+                        Địa điểm: <span className="font-medium text-slate-800">{appt.location || 'Văn phòng bộ môn'}</span>
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
@@ -3606,7 +3765,86 @@ export const StudentWorkspace: React.FC = () => {
 
       {/* Tab 7: Defense & Reviewer View */}
       {activeTab === 'defense' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          {/* Defense Format Classification Banner */}
+          {myGroup && (
+            <div
+              className={`p-4 rounded-2xl border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                myGroup.defenseFormat === 'HOI_DONG'
+                  ? 'bg-gradient-to-r from-purple-50 via-indigo-50 to-white border-purple-200'
+                  : myGroup.defenseFormat === 'POSTER'
+                  ? 'bg-gradient-to-r from-amber-50 via-orange-50 to-white border-amber-200'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="flex items-start sm:items-center gap-3">
+                <div
+                  className={`p-2.5 rounded-xl ${
+                    myGroup.defenseFormat === 'HOI_DONG'
+                      ? 'bg-purple-100 text-purple-700'
+                      : myGroup.defenseFormat === 'POSTER'
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-200 text-slate-600'
+                  }`}
+                >
+                  {myGroup.defenseFormat === 'HOI_DONG' ? (
+                    <Crown className="w-6 h-6" />
+                  ) : myGroup.defenseFormat === 'POSTER' ? (
+                    <FileText className="w-6 h-6" />
+                  ) : (
+                    <Clock className="w-6 h-6" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Hình thức bảo vệ:
+                    </span>
+                    {myGroup.defenseFormat === 'HOI_DONG' ? (
+                      <Badge variant="purple" size="sm" className="font-bold">
+                        Báo cáo Hội đồng (Top 20%)
+                      </Badge>
+                    ) : myGroup.defenseFormat === 'POSTER' ? (
+                      <Badge variant="warning" size="sm" className="font-bold">
+                        Báo cáo Poster (80%)
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        Chờ điểm phản biện
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-sm font-bold text-slate-900 mt-1">
+                    {myGroup.defenseFormat === 'HOI_DONG'
+                      ? `Chúc mừng! Đề tài "${myGroup.topic?.title || myGroup.name}" thuộc Top 20% điểm phản biện cao nhất (${myGroup.reviewerScore ?? 'N/A'}đ) và được phân công bảo vệ trước Hội đồng chuyên môn.`
+                      : myGroup.defenseFormat === 'POSTER'
+                      ? `Đề tài "${myGroup.topic?.title || myGroup.name}" được phân công báo cáo theo hình thức Poster tại sảnh/khu vực triển lãm KLTN (${myGroup.reviewerScore ?? 'N/A'}đ).`
+                      : 'Đề tài đang chờ hoàn thành chấm điểm phản biện để phân luồng (Top 20% Hội đồng - 80% Poster).'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {myGroup.reviewerScore !== null && myGroup.reviewerScore !== undefined && (
+                  <div className="text-right px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                    <div className="text-[10px] uppercase font-semibold text-slate-500">Điểm phản biện</div>
+                    <div className="text-base font-black text-indigo-700 font-mono">
+                      {Number(myGroup.reviewerScore).toFixed(2)}đ
+                    </div>
+                  </div>
+                )}
+                {myGroup.defenseFormatRank && (
+                  <div className="text-right px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                    <div className="text-[10px] uppercase font-semibold text-slate-500">Xếp hạng</div>
+                    <div className="text-base font-black text-purple-700 font-mono">
+                      #{myGroup.defenseFormatRank}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card>
             <CardHeader>
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -3714,6 +3952,7 @@ export const StudentWorkspace: React.FC = () => {
             </CardContent>
           </Card>
         </div>
+      </div>
       )}
 
       {/* Tab 8: Scores & NCKH Evidence */}
@@ -4563,6 +4802,159 @@ export const StudentWorkspace: React.FC = () => {
             </Button>
             <Button type="submit" variant="primary">
               Gửi đề xuất
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL: Bắt buộc cập nhật thông tin khi đăng nhập lần đầu */}
+      <Modal
+        isOpen={showFirstLoginModal}
+        onClose={() => {
+          // Bắt buộc, không cho phép đóng khi chưa cập nhật
+        }}
+        preventClose={true}
+        title="CẬP NHẬT THÔNG TIN SINH VIÊN (BẮT BUỘC)"
+        subtitle="Vui lòng hoàn tất thông tin cá nhân trong lần đăng nhập đầu tiên để kích hoạt tài khoản"
+        maxWidth="2xl"
+      >
+        <form onSubmit={handleFirstLoginSubmit} className="space-y-5">
+          {/* Announcement banner */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200/80 text-xs text-indigo-950 flex items-start gap-3 shadow-xs">
+            <div className="p-2 bg-indigo-600 text-white rounded-xl shrink-0 mt-0.5 shadow-sm">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-bold text-indigo-900 text-sm mb-0.5">
+                Kích hoạt tài khoản sinh viên lần đầu đăng nhập
+              </div>
+              <p className="text-indigo-800 leading-relaxed">
+                Chào mừng bạn đến với Cổng thông tin Khóa luận Tốt nghiệp Khoa Công nghệ Thông tin (IUH)! Theo quy định đào tạo,
+                sinh viên trong lần đăng nhập đầu tiên <b>bắt buộc phải cập nhật và xác thực thông tin liên lạc cá nhân</b> (Số điện thoại, Email cá nhân, Địa chỉ thường trú) để Nhà trường, Bộ môn và Giảng viên hướng dẫn có thể phối hợp, liên hệ và quản lý hồ sơ xuyên suốt đợt khóa luận.
+              </p>
+            </div>
+          </div>
+
+          {/* Readonly info from school */}
+          <div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
+              <span>Thông tin định danh do Nhà trường quản lý (Cố định)</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Mã số sinh viên (MSSV)</label>
+                <div className="text-xs font-bold text-slate-800 bg-white px-3 py-2 rounded-xl border border-slate-200">
+                  {studentData?.mssv || studentData?.studentCode || user?.mssv || user?.studentProfile?.studentCode || 'N/A'}
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Họ và tên</label>
+                <div className="text-xs font-bold text-slate-800 bg-white px-3 py-2 rounded-xl border border-slate-200">
+                  {studentData?.hoTen || studentData?.fullName || user?.fullName || 'N/A'}
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Lớp sinh hoạt</label>
+                <div className="text-xs font-medium text-slate-700 bg-white px-3 py-2 rounded-xl border border-slate-200">
+                  {studentData?.lop || studentData?.className || user?.studentProfile?.className || 'CNTT K2026'}
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Email trường cấp</label>
+                <div className="text-xs font-medium text-slate-700 bg-white px-3 py-2 rounded-xl border border-slate-200 truncate">
+                  {studentData?.emailTruong || studentData?.email || user?.email || 'N/A'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Editable contact inputs */}
+          <div className="space-y-3.5">
+            <div className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider flex items-center justify-between">
+              <span>Thông tin liên lạc bắt buộc cập nhật</span>
+              <span className="text-[10px] text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full font-semibold border border-rose-200/60">
+                * Bắt buộc điền đủ
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div>
+                <Input
+                  label="Số điện thoại di động (10 số, bắt đầu bằng 0) *"
+                  value={editPhone}
+                  onChange={(e) => {
+                    setEditPhone(e.target.value);
+                    setProfileErrors((prev) => ({ ...prev, phone: validatePhone(e.target.value) }));
+                  }}
+                  placeholder="VD: 0987654321"
+                  error={profileErrors.phone}
+                  helperText="Số điện thoại chính để GVHD và Khoa liên hệ khẩn cấp"
+                  required
+                />
+              </div>
+
+              <div>
+                <Input
+                  label="Email cá nhân phụ (Gmail, Outlook...) *"
+                  type="email"
+                  value={editPersonalEmail}
+                  onChange={(e) => {
+                    setEditPersonalEmail(e.target.value);
+                    setProfileErrors((prev) => ({ ...prev, email: validateEmail(e.target.value) }));
+                  }}
+                  placeholder="VD: sinhvien@gmail.com"
+                  error={profileErrors.email}
+                  helperText="Dùng để gửi tài liệu, thông báo đề tài và dự phòng"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <Input
+                  label="Địa chỉ nơi ở / thường trú hiện tại *"
+                  value={editAddress}
+                  onChange={(e) => {
+                    setEditAddress(e.target.value);
+                    if (e.target.value.trim()) {
+                      setProfileErrors((prev) => ({ ...prev, address: '' }));
+                    }
+                  }}
+                  placeholder="VD: 12 Nguyễn Văn Bảo, Phường 4, Quận Gò Vấp, TP.HCM"
+                  error={profileErrors.address}
+                  helperText="Địa chỉ cư trú của bạn trong thời gian làm khóa luận"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Thông tin liên lạc khác (Zalo, Telegram, SĐT người thân...)
+                </label>
+                <input
+                  type="text"
+                  value={editContactInfo}
+                  onChange={(e) => setEditContactInfo(e.target.value)}
+                  placeholder="VD: Zalo: 0987654321, SĐT phụ huynh: 0912345678"
+                  className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all placeholder:text-slate-400 font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <span className="text-[11px] text-slate-500">
+              * Bạn có thể chỉnh sửa lại thông tin này tại tab <b>Hồ sơ cá nhân</b> bất kỳ lúc nào.
+            </span>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              isLoading={isSubmittingFirstUpdate}
+              className="w-full sm:w-auto shrink-0"
+            >
+              <span>Lưu thông tin & Bắt đầu sử dụng</span>
+              <ArrowRight className="w-4 h-4 ml-1.5" />
             </Button>
           </div>
         </form>

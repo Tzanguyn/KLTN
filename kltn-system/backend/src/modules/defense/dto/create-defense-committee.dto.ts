@@ -5,9 +5,10 @@ export class CreateDefenseCommitteeDto {
   @IsUUID('4', { message: 'semesterId phải là UUID hợp lệ' })
   semesterId!: string;
 
+  @IsOptional()
   @IsArray({ message: 'groupIds phải là một mảng' })
   @IsUUID('4', { each: true, message: 'ID nhóm phải là UUID hợp lệ' })
-  groupIds!: string[];
+  groupIds?: string[];
 
   @IsArray({ message: 'memberIds phải là một mảng' })
   @ArrayMinSize(3, { message: 'Hội đồng bảo vệ phải có tối thiểu 3 thành viên' })

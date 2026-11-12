@@ -31,5 +31,35 @@ export class SetRegistrationPeriodDto {
   @IsOptional()
   @IsDateString()
   thoiGianKetThuc?: string;
+
+  @ApiPropertyOptional({
+    description: 'Thời gian bắt đầu mở đợt cho Giảng viên đăng ký đề tài (ISO string)',
+    example: '2026-09-01T00:00:00.000Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  lecturerTopicFrom?: string;
+
+  @ApiPropertyOptional({
+    description: 'Thời gian bắt đầu mở đợt cho Giảng viên đăng ký đề tài (chuẩn tiếng Việt, ISO string)',
+  })
+  @IsOptional()
+  @IsDateString()
+  thoiGianBatDauGVDangKy?: string;
+
+  @ApiPropertyOptional({
+    description: 'Hạn chót Giảng viên đăng ký đề tài (ISO string)',
+    example: '2026-09-15T23:59:59.000Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  lecturerTopicTo?: string;
+
+  @ApiPropertyOptional({
+    description: 'Hạn chót Giảng viên đăng ký đề tài (chuẩn tiếng Việt, ISO string)',
+  })
+  @IsOptional()
+  @IsDateString()
+  thoiGianKetThucGVDangKy?: string;
 }
 

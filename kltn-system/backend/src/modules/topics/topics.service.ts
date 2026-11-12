@@ -17,6 +17,14 @@ export class TopicsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  private formatDate(date?: Date | null): string {
+    if (!date) return 'N/A';
+    const d = new Date(date);
+    return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1)
+      .toString()
+      .padStart(2, '0')}/${d.getFullYear()}`;
+  }
+
   async list(
     query: {
       page?: number | string;
@@ -49,6 +57,7 @@ export class TopicsService {
 
     const now = new Date();
     let registrationOpen = false;
+    let lecturerTopicOpen = false;
     if (currentSemester) {
       const from = currentSemester.registrationFrom ? new Date(currentSemester.registrationFrom) : null;
       const to = currentSemester.registrationTo ? new Date(currentSemester.registrationTo) : null;
@@ -56,6 +65,16 @@ export class TopicsService {
         registrationOpen = now >= from && now <= to;
       } else {
         registrationOpen = currentSemester.status === 'OPEN';
+      }
+
+      const gvFrom = currentSemester.lecturerTopicFrom ? new Date(currentSemester.lecturerTopicFrom) : from;
+      const gvTo = currentSemester.lecturerTopicTo ? new Date(currentSemester.lecturerTopicTo) : null;
+      if (gvFrom && gvTo) {
+        lecturerTopicOpen = now >= gvFrom && now <= gvTo;
+      } else if (gvFrom) {
+        lecturerTopicOpen = now >= gvFrom;
+      } else {
+        lecturerTopicOpen = currentSemester.status === 'OPEN';
       }
     }
 
@@ -126,7 +145,6 @@ export class TopicsService {
             id: true,
             fullName: true,
             email: true,
-            phone: true,
             lecturerProfile: {
               select: {
                 title: true,
@@ -263,7 +281,6 @@ export class TopicsService {
         id: topic.owner?.id,
         hoTen: `${gvhdTitle}${topic.owner?.fullName || 'Chưa phân công'}`,
         email: topic.owner?.email || '',
-        soDienThoai: topic.owner?.phone || 'Chưa cập nhật',
         hocHamHocVi: topic.owner?.lecturerProfile?.title || 'Giảng viên',
         chuyenMon: topic.owner?.lecturerProfile?.specialization || '',
       };
@@ -343,6 +360,11 @@ export class TopicsService {
         total,
         totalPages,
         registrationOpen,
+        lecturerTopicOpen,
+        lecturerTopicFrom: currentSemester?.lecturerTopicFrom,
+        lecturerTopicTo: currentSemester?.lecturerTopicTo,
+        registrationFrom: currentSemester?.registrationFrom,
+        registrationTo: currentSemester?.registrationTo,
       },
       message: total === 0 ? 'Không tìm thấy đề tài nào phù hợp với bộ lọc' : undefined,
     };
@@ -420,10 +442,19 @@ export class TopicsService {
     }
 
     const now = new Date();
-    if (semester.registrationFrom && now < semester.registrationFrom) {
-      throw new ForbiddenException('Chưa đến thời gian mở đăng ký KLTN');
+    const gvFrom = semester.lecturerTopicFrom || semester.registrationFrom;
+    const gvTo = semester.lecturerTopicTo;
+
+    if (gvFrom && now < gvFrom) {
+      throw new ForbiddenException(
+        `Chưa đến thời gian Giảng viên đăng ký đề tài KLTN (bắt đầu từ ${this.formatDate(gvFrom)})`,
+      );
     }
-    if (semester.registrationTo && now > semester.registrationTo) {
+    if (gvTo && now > gvTo) {
+      throw new ForbiddenException(
+        `Đã hết thời gian Giảng viên đăng ký đề tài KLTN (kết thúc lúc ${this.formatDate(gvTo)})`,
+      );
+    } else if (!gvTo && semester.registrationTo && now > semester.registrationTo) {
       throw new ForbiddenException('Đã hết thời gian đăng ký đề tài KLTN');
     }
 
@@ -801,7 +832,6 @@ export class TopicsService {
             id: true,
             fullName: true,
             email: true,
-            phone: true,
             avatarUrl: true,
             lecturerProfile: {
               select: {
@@ -877,7 +907,6 @@ export class TopicsService {
       hoTen: `${gvhdTitle}${topic.owner?.fullName || 'Chưa phân công'}`,
       fullName: topic.owner?.fullName,
       email: topic.owner?.email || '',
-      soDienThoai: topic.owner?.phone || 'Chưa cập nhật',
       hocHamHocVi: topic.owner?.lecturerProfile?.title || 'Giảng viên',
       chuyenMon: topic.owner?.lecturerProfile?.specialization || '',
       lecturerCode: topic.owner?.lecturerProfile?.lecturerCode,

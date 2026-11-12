@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { RoleCode } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -6,6 +6,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AssignReviewersDto } from './dto/assign-reviewers.dto';
+import { AssignThirdReviewerDto } from './dto/assign-third-reviewer.dto';
 import { DefenseService } from './defense.service';
 
 @ApiTags('review-assignments')
@@ -28,6 +29,35 @@ export class ReviewAssignmentsController {
     @Body() dto: AssignReviewersDto,
   ) {
     return this.service.assignTwoReviewers(user.id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Phân công Giảng viên phản biện thứ 3 (GVPB 3) khi có chênh lệch điểm',
+    description:
+      'Trường hợp điểm giữa 2 GVPB chênh nhau >= 4 điểm hoặc điểm của GVPB và GVHD chênh nhau >= 2 điểm, Trưởng bộ môn phân công GVPB thứ 3. Khi đó điểm của GVPB là trung bình của 3 GVPB.',
+  })
+  @ApiResponse({ status: 200, description: 'Phân công GVPB thứ 3 thành công' })
+  @ApiResponse({ status: 400, description: 'Không thỏa điều kiện lệch điểm hoặc trùng giảng viên' })
+  @Post('third-reviewer')
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  assignThirdReviewer(
+    @CurrentUser() user: { id: string },
+    @Body() dto: AssignThirdReviewerDto,
+  ) {
+    return this.service.assignThirdReviewer(user.id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Hủy phân công Giảng viên phản biện thứ 3 của nhóm',
+  })
+  @ApiResponse({ status: 200, description: 'Hủy phân công GVPB thứ 3 thành công' })
+  @Delete('third-reviewer/:groupId')
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  removeThirdReviewer(
+    @CurrentUser() user: { id: string },
+    @Param('groupId', ParseUUIDPipe) groupId: string,
+  ) {
+    return this.service.removeThirdReviewer(user.id, groupId);
   }
 
   @ApiOperation({

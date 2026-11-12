@@ -39,6 +39,7 @@ import {
   LayoutDashboard,
   Building2,
   RefreshCw,
+  Video,
 } from 'lucide-react';
 import { LecturerWelcomeView } from '../dashboard/LecturerWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
@@ -113,6 +114,12 @@ export const LecturerWorkspace: React.FC = () => {
   const [apptStartsAt, setApptStartsAt] = useState('');
   const [apptEndsAt, setApptEndsAt] = useState('');
   const [apptLocation, setApptLocation] = useState('');
+  const [apptMeetingUrl, setApptMeetingUrl] = useState('');
+  const [defaultMeetUrl, setDefaultMeetUrl] = useState(() => {
+    return typeof window !== 'undefined' ? localStorage.getItem('kltn_lecturer_default_meet') || '' : '';
+  });
+  const [saveAsDefaultMeet, setSaveAsDefaultMeet] = useState(false);
+  const [isSavingMeetUrl, setIsSavingMeetUrl] = useState(false);
 
   const [showScoreModal, setShowScoreModal] = useState(false);
   const [scoreCriterionId, setScoreCriterionId] = useState('');
@@ -220,7 +227,7 @@ export const LecturerWorkspace: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [tRes, gRes, subRes, appRes, revRes, comRes, critRes, propRes, midRes, dashRes, officialDashRes] = await Promise.all([
+      const [tRes, gRes, subRes, appRes, revRes, comRes, critRes, propRes, midRes, dashRes, officialDashRes, meetRes] = await Promise.all([
         api.get('/topics/my').catch(() => api.get('/topics/mine')),
         api.get('/groups/mine'),
         api.get('/submissions'),
@@ -232,7 +239,13 @@ export const LecturerWorkspace: React.FC = () => {
         api.get('/midterm-evaluations/my-groups').catch(() => null),
         api.get('/lecturers/me/dashboard').catch(() => null),
         api.get('/dashboard?role=GIANG_VIEN').catch(() => null),
+        api.get('/lecturers/me/meeting-link').catch(() => null),
       ]);
+
+      if (meetRes?.data?.meetingUrl) {
+        setDefaultMeetUrl(meetRes.data.meetingUrl);
+        localStorage.setItem('kltn_lecturer_default_meet', meetRes.data.meetingUrl);
+      }
 
       setMyTopics(tRes.data.data ?? []);
       const groups = gRes.data.data ?? [];
@@ -763,21 +776,58 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
+  // Save default Google Meet url
+  const handleSaveDefaultMeetUrl = async () => {
+    if (!defaultMeetUrl.trim()) {
+      return notify('Vui lòng nhập đường link Google Meet', 'error');
+    }
+    setIsSavingMeetUrl(true);
+    try {
+      await api.post('/lecturers/me/meeting-link', { meetingUrl: defaultMeetUrl.trim() });
+      localStorage.setItem('kltn_lecturer_default_meet', defaultMeetUrl.trim());
+      notify('Đã lưu link Google Meet mặc định thành công!');
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi lưu link Google Meet', 'error');
+    } finally {
+      setIsSavingMeetUrl(false);
+    }
+  };
+
   // Create appointment
   const handleCreateAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroupId) return notify('Vui lòng chọn nhóm trước', 'error');
     try {
+      const finalMeetUrl =
+        apptMode === 'ONLINE'
+          ? apptMeetingUrl.trim() || defaultMeetUrl.trim() || undefined
+          : undefined;
+
       await api.post('/appointments', {
         groupId: selectedGroupId,
         title: apptTitle,
         mode: apptMode,
         startsAt: new Date(apptStartsAt).toISOString(),
         endsAt: new Date(apptEndsAt).toISOString(),
-        location: apptLocation || (apptMode === 'ONLINE' ? 'Google Meet' : 'Phòng làm việc'),
+        location: apptMode === 'OFFLINE' ? apptLocation.trim() || 'Văn phòng bộ môn' : undefined,
+        meetingUrl: finalMeetUrl,
+        linkMeet: finalMeetUrl,
       });
+
+      // Nếu giảng viên tích chọn lưu làm link mặc định
+      if (apptMode === 'ONLINE' && saveAsDefaultMeet && apptMeetingUrl.trim()) {
+        try {
+          await api.post('/lecturers/me/meeting-link', { meetingUrl: apptMeetingUrl.trim() });
+          setDefaultMeetUrl(apptMeetingUrl.trim());
+          localStorage.setItem('kltn_lecturer_default_meet', apptMeetingUrl.trim());
+        } catch {
+          // ignore background save error
+        }
+      }
+
       notify('Đã đặt lịch hẹn với nhóm thành công!');
       setShowApptModal(false);
+      setApptLocation('');
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi đặt lịch', 'error');
@@ -2093,11 +2143,73 @@ export const LecturerWorkspace: React.FC = () => {
                 Quản lý các buổi hẹn, gửi nhắc nhở hoặc hủy lịch hẹn khi có thay đổi.
               </p>
             </div>
-            <Button size="sm" variant="primary" onClick={() => setShowApptModal(true)}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                if (defaultMeetUrl && !apptMeetingUrl) {
+                  setApptMeetingUrl(defaultMeetUrl);
+                }
+                setShowApptModal(true);
+              }}
+            >
               Đặt lịch hẹn mới
             </Button>
           </CardHeader>
           <CardContent>
+            {/* Box cấu hình link Google Meet cá nhân của Giảng viên */}
+            <div className="mb-6 p-4 bg-gradient-to-r from-emerald-50/70 via-slate-50 to-white border border-emerald-200/80 rounded-xl shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0 mt-0.5">
+                    <Video className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                      Cấu hình phòng Google Meet cá nhân
+                      {defaultMeetUrl && (
+                        <span className="text-[11px] font-normal text-emerald-600 bg-emerald-100/60 px-2 py-0.5 rounded-full border border-emerald-200">
+                          Đã kích hoạt
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Link này sẽ tự động điền sẵn mỗi khi thầy/cô lên lịch hẹn trực tuyến với nhóm sinh viên.
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="https://meet.google.com/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-white border border-emerald-300 rounded-lg hover:bg-emerald-50 shadow-xs self-start sm:self-auto shrink-0 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Tạo link mới tại Google Meet
+                </a>
+              </div>
+
+              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                <input
+                  type="url"
+                  value={defaultMeetUrl}
+                  onChange={(e) => setDefaultMeetUrl(e.target.value)}
+                  placeholder="https://meet.google.com/xxx-yyyy-zzz (Dán link phòng Google Meet cá nhân vào đây)"
+                  className="flex-1 px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="primary"
+                  disabled={isSavingMeetUrl}
+                  onClick={handleSaveDefaultMeetUrl}
+                  className="shrink-0 text-xs px-4"
+                >
+                  {isSavingMeetUrl ? 'Đang lưu...' : 'Lưu link mặc định'}
+                </Button>
+              </div>
+            </div>
+
             <div className="divide-y divide-slate-100">
               {appointments.map((appt) => (
                 <div key={appt.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2142,17 +2254,19 @@ export const LecturerWorkspace: React.FC = () => {
                       <span>•</span>
                       <span>
                         {appt.mode === 'ONLINE' ? (
-                          appt.meetingUrl || appt.location ? (
+                          appt.meetingUrl || (appt.location && (appt.location.startsWith('http://') || appt.location.startsWith('https://'))) ? (
                             <a
                               href={appt.meetingUrl || appt.location}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-emerald-600 hover:underline flex items-center gap-1"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md font-medium text-xs border border-emerald-200 transition-colors"
                             >
-                              <ExternalLink className="w-3 h-3" /> Link họp trực tuyến
+                              <Video className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Vào phòng Google Meet</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-70" />
                             </a>
                           ) : (
-                            'Chưa có link họp'
+                            <span className="text-slate-400 italic">Chưa có link họp trực tuyến</span>
                           )
                         ) : (
                           `Phòng: ${appt.location || 'Văn phòng bộ môn'}`
@@ -2281,12 +2395,6 @@ export const LecturerWorkspace: React.FC = () => {
                                 <Mail className="w-3.5 h-3.5" />
                                 <span>{rev.supervisor.email}</span>
                               </a>
-                            )}
-                            {rev.supervisor?.phone && (
-                              <span className="flex items-center gap-1">
-                                <Phone className="w-3.5 h-3.5" />
-                                <span>{rev.supervisor.phone}</span>
-                              </span>
                             )}
                           </div>
                         </div>
@@ -2621,6 +2729,11 @@ export const LecturerWorkspace: React.FC = () => {
                   )
                 ) : (
                   <>
+                    {scoringFormData?.gvhdEligibilityReason && (
+                      <Badge variant="danger" size="sm">
+                        ĐIỂM GVHD CHƯA ĐẠT (&gt;= 6.0)
+                      </Badge>
+                    )}
                     {scoringFormData?.existingScores?.some((s: any) => s.status === 'OPENED') ? (
                       <Badge variant="success" size="sm">
                         <Unlock className="w-3.5 h-3.5 mr-1 inline" /> ĐÃ MỞ KHÓA SỬA
@@ -2796,6 +2909,26 @@ export const LecturerWorkspace: React.FC = () => {
                       </span>
                     )}
                   </div>
+
+                  {/* Cảnh báo khi điểm GVHD chưa đạt yêu cầu >= 6.0 */}
+                  {scoringFormData?.gvhdEligibilityReason && (
+                    <div className="p-4 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-950 space-y-2">
+                      <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <h4 className="font-bold text-sm text-rose-950">
+                            Chưa đủ điều kiện phản biện hoặc ra hội đồng
+                          </h4>
+                          <p className="text-rose-800 leading-relaxed font-medium">
+                            {scoringFormData.gvhdEligibilityReason}
+                          </p>
+                          <div className="text-[11px] text-rose-700">
+                            Quy định KLTN: Điểm đánh giá của Giảng viên hướng dẫn phải đạt từ <b>6.0 trở lên</b> mới đủ điều kiện phản biện hoặc ra hội đồng bảo vệ.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
               {/* Cảnh báo khi yêu cầu bị từ chối */}
               {scoringFormData?.unlockRequest?.status === 'REJECTED' && (
                 <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3372,6 +3505,16 @@ export const LecturerWorkspace: React.FC = () => {
 
       {/* MODAL: Create Topic */}
       <Modal isOpen={showCreateTopicModal} onClose={() => setShowCreateTopicModal(false)} title="Đăng ký Đề tài KLTN mới">
+        <div className="mb-4 p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+          <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="font-bold text-amber-950">Giai đoạn 1: Giảng viên đăng ký đề tài & Bộ môn duyệt</span>
+            <p className="text-amber-800 text-[11px] leading-relaxed">
+              Đề tài sau khi gửi sẽ có trạng thái <strong>Chờ Trưởng bộ môn duyệt</strong>. Khi được phê duyệt chính thức (APPROVED), đề tài mới hiển thị trong danh mục để Sinh viên đăng ký ở giai đoạn tiếp theo.
+            </p>
+          </div>
+        </div>
+
         <form onSubmit={handleCreateTopic} className="space-y-4 text-sm">
           <Input
             label="Tên đề tài"
@@ -3705,15 +3848,39 @@ export const LecturerWorkspace: React.FC = () => {
       {/* MODAL: Appointment */}
       <Modal isOpen={showApptModal} onClose={() => setShowApptModal(false)} title="Đặt lịch hẹn trao đổi với Nhóm">
         <form onSubmit={handleCreateAppointment} className="space-y-4 text-sm">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Chọn nhóm sinh viên
+            </label>
+            <select
+              value={selectedGroupId || ''}
+              onChange={(e) => setSelectedGroupId(e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+              required
+            >
+              <option value="">-- Chọn nhóm trao đổi --</option>
+              {myGroups.map((g: any) => (
+                <option key={g.id} value={g.id}>
+                  {g.code ? `[${g.code}] ` : ''}{g.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <Input label="Tiêu đề cuộc hẹn" value={apptTitle} onChange={(e) => setApptTitle(e.target.value)} required />
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Hình thức</label>
             <select
               value={apptMode}
-              onChange={(e) => setApptMode(e.target.value as any)}
+              onChange={(e) => {
+                const newMode = e.target.value as 'ONLINE' | 'OFFLINE';
+                setApptMode(newMode);
+                if (newMode === 'ONLINE' && defaultMeetUrl && !apptMeetingUrl) {
+                  setApptMeetingUrl(defaultMeetUrl);
+                }
+              }}
               className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
             >
-              <option value="ONLINE">Trực tuyến (Online)</option>
+              <option value="ONLINE">Trực tuyến (Online qua Google Meet)</option>
               <option value="OFFLINE">Trực tiếp tại văn phòng bộ môn (Offline)</option>
             </select>
           </div>
@@ -3721,7 +3888,63 @@ export const LecturerWorkspace: React.FC = () => {
             <Input type="datetime-local" label="Thời gian bắt đầu" value={apptStartsAt} onChange={(e) => setApptStartsAt(e.target.value)} required />
             <Input type="datetime-local" label="Thời gian kết thúc" value={apptEndsAt} onChange={(e) => setApptEndsAt(e.target.value)} required />
           </div>
-          <Input label="Địa điểm / Link Google Meet" value={apptLocation} onChange={(e) => setApptLocation(e.target.value)} placeholder="Phòng BM hoặc link họp" />
+
+          {apptMode === 'ONLINE' ? (
+            <div className="space-y-2 p-3 bg-emerald-50/70 rounded-xl border border-emerald-200">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-emerald-900 flex items-center gap-1.5">
+                  <Video className="w-4 h-4 text-emerald-600" />
+                  Đường link Google Meet (Họp trực tuyến)
+                </label>
+                <a
+                  href="https://meet.google.com/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-emerald-300 shadow-xs"
+                  title="Mở Google Meet trong tab mới để lấy link phòng mới"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Tạo nhanh trên Google Meet
+                </a>
+              </div>
+              <Input
+                value={apptMeetingUrl}
+                onChange={(e) => setApptMeetingUrl(e.target.value)}
+                placeholder="https://meet.google.com/xxx-yyyy-zzz"
+                className="bg-white font-mono text-xs"
+                required
+              />
+              <div className="flex items-center justify-between pt-1 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer text-slate-600 select-none">
+                  <input
+                    type="checkbox"
+                    checked={saveAsDefaultMeet}
+                    onChange={(e) => setSaveAsDefaultMeet(e.target.checked)}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Lưu link này làm Google Meet mặc định cho các lần sau</span>
+                </label>
+                {defaultMeetUrl && defaultMeetUrl !== apptMeetingUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setApptMeetingUrl(defaultMeetUrl)}
+                    className="text-[11px] text-emerald-600 hover:underline font-medium"
+                  >
+                    Dùng link mặc định
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <Input
+              label="Địa điểm / Phòng họp trực tiếp"
+              value={apptLocation}
+              onChange={(e) => setApptLocation(e.target.value)}
+              placeholder="Ví dụ: Văn phòng bộ môn CNTT, Phòng A1-302"
+              required
+            />
+          )}
+
           <div className="flex justify-end gap-3 pt-3">
             <Button type="button" variant="outline" onClick={() => setShowApptModal(false)}>Hủy</Button>
             <Button type="submit" variant="primary">Lưu lịch hẹn</Button>

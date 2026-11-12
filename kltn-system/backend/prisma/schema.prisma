@@ -267,6 +267,8 @@ model Semester {
   name             String            @db.VarChar(150)
   academicYear     String            @map("academic_year") @db.VarChar(20)
   status           SemesterStatus    @default(DRAFT)
+  lecturerTopicFrom DateTime?         @map("lecturer_topic_from")
+  lecturerTopicTo   DateTime?         @map("lecturer_topic_to")
   registrationFrom DateTime?         @map("registration_from")
   registrationTo   DateTime?         @map("registration_to")
   submissionTo     DateTime?         @map("submission_to")

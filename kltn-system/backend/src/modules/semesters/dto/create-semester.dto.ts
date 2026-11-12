@@ -90,9 +90,41 @@ export class CreateSemesterDto {
   thoiGianKetThuc?: string;
 
   // --- Chi tiết các mốc thời gian ---
+  // 1. Giai đoạn Giảng viên đề xuất / đăng ký đề tài
   @ApiPropertyOptional({
-    description: 'Thời gian mở đăng ký đề tài (ISO string)',
+    description: 'Thời gian bắt đầu mở đợt cho Giảng viên đăng ký đề tài (ISO string)',
     example: '2026-09-01T00:00:00.000Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  lecturerTopicFrom?: string;
+
+  @ApiPropertyOptional({
+    description: 'Thời gian bắt đầu mở đợt cho Giảng viên đăng ký đề tài (tiếng Việt, ISO string)',
+  })
+  @IsOptional()
+  @IsDateString()
+  thoiGianBatDauGVDangKy?: string;
+
+  @ApiPropertyOptional({
+    description: 'Hạn chót Giảng viên đăng ký đề tài (ISO string)',
+    example: '2026-09-15T23:59:59.000Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  lecturerTopicTo?: string;
+
+  @ApiPropertyOptional({
+    description: 'Hạn chót Giảng viên đăng ký đề tài (tiếng Việt, ISO string)',
+  })
+  @IsOptional()
+  @IsDateString()
+  thoiGianKetThucGVDangKy?: string;
+
+  // 2. Giai đoạn Sinh viên đăng ký đề tài đã duyệt
+  @ApiPropertyOptional({
+    description: 'Thời gian mở đăng ký đề tài cho Sinh viên (ISO string)',
+    example: '2026-09-16T00:00:00.000Z',
   })
   @IsOptional()
   @IsDateString()

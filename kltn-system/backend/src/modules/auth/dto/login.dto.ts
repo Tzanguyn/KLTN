@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
   @ApiProperty({
@@ -18,4 +18,20 @@ export class LoginDto {
   @IsString({ message: 'Mật khẩu phải là chuỗi ký tự' })
   @MinLength(8, { message: 'Mật khẩu tối thiểu 8 ký tự' })
   password!: string;
+
+  @ApiPropertyOptional({
+    description: 'Mã định danh CAPTCHA (nhận từ API GET /api/auth/captcha)',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @IsOptional()
+  @IsString({ message: 'Mã định danh CAPTCHA phải là chuỗi ký tự' })
+  captchaId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Mã xác nhận (CAPTCHA) người dùng nhập',
+    example: 'A7K9',
+  })
+  @IsOptional()
+  @IsString({ message: 'Mã xác nhận CAPTCHA phải là chuỗi ký tự' })
+  captchaCode?: string;
 }

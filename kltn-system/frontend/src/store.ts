@@ -13,6 +13,9 @@ export interface User {
   eligible?: boolean;
   duDieuKienDangKyKLTN?: boolean;
   trangThaiKLTN?: string;
+  isFirstLogin?: boolean;
+  requireProfileUpdate?: boolean;
+  hasContactInfo?: boolean;
   studentProfile?: {
     studentCode: string;
     className?: string;
@@ -20,6 +23,9 @@ export interface User {
     gpa?: number;
     creditsEarned: number;
     eligible: boolean;
+    personalEmail?: string;
+    address?: string;
+    contactInfo?: string;
     department?: { name: string; code: string };
   };
   lecturerProfile?: {

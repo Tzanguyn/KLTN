@@ -26,11 +26,17 @@ export class RegistrationsService {
     const student = await this.prisma.studentProfile.findUnique({
       where: { userId },
       include: {
-        user: { select: { fullName: true, email: true } },
+        user: { select: { fullName: true, email: true, phone: true } },
       },
     });
     if (!student) {
       throw new ForbiddenException('Không tìm thấy thông tin sinh viên');
+    }
+
+    if (!student.user.phone || !student.personalEmail) {
+      throw new BadRequestException(
+        'Vui lòng hoàn tất cập nhật thông tin liên lạc cá nhân (Số điện thoại, Email cá nhân) trước khi đăng ký đề tài',
+      );
     }
 
     // 2. Resolve Topic & Semester
@@ -77,10 +83,18 @@ export class RegistrationsService {
 
     const now = new Date();
     if (semester.registrationFrom && now < semester.registrationFrom) {
-      throw new ForbiddenException('Chưa đến thời gian mở đăng ký KLTN');
+      if (semester.lecturerTopicTo && now <= semester.lecturerTopicTo) {
+        throw new ForbiddenException(
+          'Chưa đến đợt sinh viên đăng ký đề tài. Hệ thống đang trong giai đoạn Giảng viên đề xuất & thẩm định đề tài.',
+        );
+      }
+      const startFormatted = new Date(semester.registrationFrom).toLocaleDateString('vi-VN');
+      throw new ForbiddenException(
+        `Chưa đến thời gian mở đăng ký đề tài cho sinh viên (bắt đầu từ ${startFormatted})`,
+      );
     }
     if (semester.registrationTo && now > semester.registrationTo) {
-      throw new ForbiddenException('Đã hết thời gian đăng ký đề tài KLTN');
+      throw new ForbiddenException('Đã hết thời gian sinh viên đăng ký đề tài KLTN');
     }
 
     // Tự động kiểm tra điều kiện đăng ký KLTN theo cấu hình của đợt (tín chỉ, GPA, môn tiên quyết, eligible)

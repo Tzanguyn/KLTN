@@ -29,6 +29,9 @@ import {
   Filter,
   LayoutDashboard,
   Edit3,
+  Crown,
+  FileText,
+  TrendingUp,
 } from 'lucide-react';
 import { ManagerWelcomeView } from '../dashboard/ManagerWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
@@ -75,6 +78,8 @@ export const ManagerWorkspace: React.FC = () => {
   const [semCode, setSemCode] = useState('');
   const [semName, setSemName] = useState('');
   const [semYear, setSemYear] = useState('2026-2027');
+  const [semGvRegFrom, setSemGvRegFrom] = useState('');
+  const [semGvRegTo, setSemGvRegTo] = useState('');
   const [semRegFrom, setSemRegFrom] = useState('');
   const [semRegTo, setSemRegTo] = useState('');
   const [semSubTo, setSemSubTo] = useState('');
@@ -203,6 +208,8 @@ export const ManagerWorkspace: React.FC = () => {
     setSemCode('');
     setSemName('');
     setSemYear('2026-2027');
+    setSemGvRegFrom('');
+    setSemGvRegTo('');
     setSemRegFrom('');
     setSemRegTo('');
     setSemSubTo('');
@@ -219,6 +226,8 @@ export const ManagerWorkspace: React.FC = () => {
     setSemYear(sem.academicYear || '2026-2027');
     setSemStep(sem.currentStep || 0);
     const toInputDate = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 16) : '');
+    setSemGvRegFrom(toInputDate(sem.lecturerTopicFrom || sem.thoiGianBatDauGVDangKy));
+    setSemGvRegTo(toInputDate(sem.lecturerTopicTo || sem.thoiGianKetThucGVDangKy));
     setSemRegFrom(toInputDate(sem.registrationFrom));
     setSemRegTo(toInputDate(sem.registrationTo));
     setSemSubTo(toInputDate(sem.submissionTo));
@@ -236,6 +245,8 @@ export const ManagerWorkspace: React.FC = () => {
         name: semName,
         academicYear: semYear,
         currentStep: semStep,
+        lecturerTopicFrom: semGvRegFrom ? new Date(semGvRegFrom).toISOString() : undefined,
+        lecturerTopicTo: semGvRegTo ? new Date(semGvRegTo).toISOString() : undefined,
         registrationFrom: semRegFrom ? new Date(semRegFrom).toISOString() : undefined,
         registrationTo: semRegTo ? new Date(semRegTo).toISOString() : undefined,
         submissionTo: semSubTo ? new Date(semSubTo).toISOString() : undefined,
@@ -526,9 +537,17 @@ export const ManagerWorkspace: React.FC = () => {
                         <span className="text-xs text-slate-500 font-medium">({sem.academicYear})</span>
                       </div>
                       <h4 className="text-base font-bold text-slate-800">{sem.name}</h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-500 pt-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs text-slate-500 pt-1">
                         <div>
-                          Đăng ký:{' '}
+                          1. GV nộp đề tài:{' '}
+                          <b className="text-slate-700">
+                            {sem.lecturerTopicFrom ? new Date(sem.lecturerTopicFrom).toLocaleDateString('vi-VN') : '—'}
+                            {' đến '}
+                            {sem.lecturerTopicTo ? new Date(sem.lecturerTopicTo).toLocaleDateString('vi-VN') : '—'}
+                          </b>
+                        </div>
+                        <div>
+                          2. SV đăng ký:{' '}
                           <b className="text-slate-700">
                             {sem.registrationFrom ? new Date(sem.registrationFrom).toLocaleDateString('vi-VN') : '—'}
                             {' đến '}
@@ -1138,6 +1157,9 @@ export const ManagerWorkspace: React.FC = () => {
                         <th className="p-3">Sinh viên</th>
                         <th className="p-3">GV Hướng dẫn</th>
                         <th className="p-3">Đánh giá giữa kỳ</th>
+                        <th className="p-3">Điểm GVHD</th>
+                        <th className="p-3">Điểm GVPB</th>
+                        <th className="p-3">Phân luồng bảo vệ</th>
                         <th className="p-3">Điều kiện bảo vệ</th>
                         <th className="p-3">Lịch bảo vệ</th>
                       </tr>
@@ -1190,6 +1212,44 @@ export const ManagerWorkspace: React.FC = () => {
                               )}
                             </td>
                             <td className="p-3">
+                              {grp.gvhdScore !== null && grp.gvhdScore !== undefined ? (
+                                <span title={Number(grp.gvhdScore) >= 6.0 ? 'Điểm GVHD đạt yêu cầu (>= 6.0)' : 'Điểm GVHD chưa đạt yêu cầu (< 6.0)'}>
+                                  <Badge
+                                    variant={Number(grp.gvhdScore) >= 6.0 ? 'success' : 'danger'}
+                                    size="sm"
+                                  >
+                                    {Number(grp.gvhdScore).toFixed(1)}/10
+                                  </Badge>
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic">Chưa chấm</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {grp.reviewerScore !== null && grp.reviewerScore !== undefined ? (
+                                <Badge variant="purple" size="sm">
+                                  {Number(grp.reviewerScore).toFixed(1)}/10
+                                </Badge>
+                              ) : (
+                                <span className="text-slate-400 italic text-[11px]">Chưa có điểm PB</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {grp.defenseFormat === 'HOI_DONG' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                  <Crown className="w-3 h-3 text-purple-600" /> Hội đồng (Top 20%)
+                                </span>
+                              ) : grp.defenseFormat === 'POSTER' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                  <FileText className="w-3 h-3 text-amber-600" /> Poster (80%)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600">
+                                  <Clock className="w-3 h-3 text-slate-400" /> {grp.defenseFormatName || 'Chờ điểm PB'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3">
                               {isEligible ? (
                                 <Badge variant="success" size="sm" className="gap-1">
                                   <CheckCircle2 className="w-3 h-3" /> ĐỦ ĐIỀU KIỆN
@@ -1226,7 +1286,7 @@ export const ManagerWorkspace: React.FC = () => {
                       })}
                       {defenseEligibleGroups.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="p-6 text-center text-slate-400 italic">
+                          <td colSpan={8} className="p-6 text-center text-slate-400 italic">
                             Không tìm thấy nhóm nào phù hợp tiêu chí.
                           </td>
                         </tr>
@@ -1896,9 +1956,38 @@ export const ManagerWorkspace: React.FC = () => {
             <Input label="Năm học" placeholder="VD: 2026-2027" value={semYear} onChange={(e) => setSemYear(e.target.value)} required />
           </div>
           <Input label="Tên đợt KLTN" placeholder="VD: Đợt KLTN học kỳ 2 năm học 2026-2027" value={semName} onChange={(e) => setSemName(e.target.value)} required />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input type="datetime-local" label="Mở đăng ký từ" value={semRegFrom} onChange={(e) => setSemRegFrom(e.target.value)} />
-            <Input type="datetime-local" label="Hết hạn đăng ký" value={semRegTo} onChange={(e) => setSemRegTo(e.target.value)} />
+          {/* Giai đoạn 1: Giảng viên nộp đề tài */}
+          <div className="p-3.5 bg-amber-50/70 rounded-xl border border-amber-200 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-amber-600 text-white text-[11px] font-bold flex items-center justify-center">1</span>
+              <span className="font-bold text-xs text-amber-900 uppercase tracking-wider">
+                Giai đoạn 1: Giảng viên đăng ký đề tài & Bộ môn thẩm định
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input type="datetime-local" label="GV bắt đầu nộp đề tài" value={semGvRegFrom} onChange={(e) => setSemGvRegFrom(e.target.value)} />
+              <Input type="datetime-local" label="Hạn chót GV nộp đề tài" value={semGvRegTo} onChange={(e) => setSemGvRegTo(e.target.value)} />
+            </div>
+            <p className="text-[11px] text-amber-800">
+              Giảng viên tạo đề tài mới và Trưởng bộ môn tiến hành thẩm định/phê duyệt trước khi mở cho sinh viên.
+            </p>
+          </div>
+
+          {/* Giai đoạn 2: Sinh viên đăng ký đề tài đã duyệt */}
+          <div className="p-3.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">2</span>
+              <span className="font-bold text-xs text-emerald-900 uppercase tracking-wider">
+                Giai đoạn 2: Sinh viên đăng ký đề tài đã duyệt
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input type="datetime-local" label="SV bắt đầu đăng ký từ" value={semRegFrom} onChange={(e) => setSemRegFrom(e.target.value)} />
+              <Input type="datetime-local" label="Hạn chót SV đăng ký" value={semRegTo} onChange={(e) => setSemRegTo(e.target.value)} />
+            </div>
+            <p className="text-[11px] text-emerald-800">
+              Cổng sinh viên tự động mở theo mốc thời gian này. Sinh viên chỉ được chọn các đề tài đã được duyệt (APPROVED).
+            </p>
           </div>
           <Input type="datetime-local" label="Hạn nộp báo cáo hoàn thiện" value={semSubTo} onChange={(e) => setSemSubTo(e.target.value)} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

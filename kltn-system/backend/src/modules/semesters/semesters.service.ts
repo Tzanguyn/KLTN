@@ -62,11 +62,36 @@ export class SemestersService implements OnModuleInit {
     if (!semester) return null;
 
     const now = new Date();
+    const gvFrom = semester.lecturerTopicFrom ? new Date(semester.lecturerTopicFrom) : null;
+    const gvTo = semester.lecturerTopicTo ? new Date(semester.lecturerTopicTo) : null;
     const regFrom = semester.registrationFrom ? new Date(semester.registrationFrom) : null;
     const regTo = semester.registrationTo ? new Date(semester.registrationTo) : null;
     const subTo = semester.submissionTo ? new Date(semester.submissionTo) : null;
     const defFrom = semester.defenseFrom ? new Date(semester.defenseFrom) : null;
     const defTo = semester.defenseTo ? new Date(semester.defenseTo) : null;
+
+    const isLecturerTopicOpen =
+      semester.status === SemesterStatus.OPEN &&
+      Boolean((!gvFrom || now >= gvFrom) && (!gvTo || now <= gvTo));
+
+    const isStudentRegistrationOpen =
+      semester.status === SemesterStatus.OPEN &&
+      Boolean((!regFrom || now >= regFrom) && (!regTo || now <= regTo));
+
+    let currentSubPhase = 'CLOSED';
+    if (semester.status === SemesterStatus.OPEN) {
+      if (gvFrom && now >= gvFrom && (!gvTo || now <= gvTo)) {
+        currentSubPhase = 'GV_TOPIC_REGISTRATION';
+      } else if (gvTo && now > gvTo && regFrom && now < regFrom) {
+        currentSubPhase = 'TOPIC_REVIEW_PENDING';
+      } else if (regFrom && now >= regFrom && (!regTo || now <= regTo)) {
+        currentSubPhase = 'STUDENT_TOPIC_REGISTRATION';
+      } else if (regTo && now > regTo) {
+        currentSubPhase = 'TOPIC_REGISTRATION_ENDED';
+      } else {
+        currentSubPhase = 'ACTIVE';
+      }
+    }
 
     let midFrom: Date | null = null;
     let midTo: Date | null = null;
@@ -115,10 +140,14 @@ export class SemestersService implements OnModuleInit {
       {
         number: 1,
         title: 'Đăng ký đề tài',
-        subtitle: 'Mở đợt, chọn hoặc đề xuất đề tài mới',
+        subtitle: 'Pha 1: GV ra đề tài & duyệt. Pha 2: SV đăng ký đề tài đã duyệt',
         phase: 'Tuần 1 - 3',
-        startDate: regFrom ? regFrom.toISOString() : null,
+        startDate: (gvFrom ?? regFrom)?.toISOString() ?? null,
         endDate: regTo ? regTo.toISOString() : null,
+        lecturerStartDate: gvFrom ? gvFrom.toISOString() : null,
+        lecturerEndDate: gvTo ? gvTo.toISOString() : null,
+        studentStartDate: regFrom ? regFrom.toISOString() : null,
+        studentEndDate: regTo ? regTo.toISOString() : null,
       },
       {
         number: 2,
@@ -161,13 +190,20 @@ export class SemestersService implements OnModuleInit {
       maHocKy: semester.code,
       trangThai: semester.status,
       boMonId: semester.departmentId,
-      thoiGianBatDau: semester.registrationFrom,
+      thoiGianBatDau: semester.lecturerTopicFrom ?? semester.registrationFrom,
       thoiGianKetThuc: semester.defenseTo ?? semester.registrationTo,
+      thoiGianBatDauGVDangKy: semester.lecturerTopicFrom,
+      thoiGianKetThucGVDangKy: semester.lecturerTopicTo,
+      thoiGianBatDauSVDangKy: semester.registrationFrom,
+      thoiGianKetThucSVDangKy: semester.registrationTo,
       thoiGianBatDauDangKy: semester.registrationFrom,
       thoiGianKetThucDangKy: semester.registrationTo,
       thoiGianNopBaoCao: semester.submissionTo,
       thoiGianBatDauBaoVe: semester.defenseFrom,
       thoiGianKetThucBaoVe: semester.defenseTo,
+      isLecturerTopicOpen,
+      isStudentRegistrationOpen,
+      currentSubPhase,
       currentStep,
       currentStage: stageTitles[currentStep - 1] || 'Đăng ký đề tài',
       timelineSteps,
@@ -423,7 +459,17 @@ export class SemestersService implements OnModuleInit {
       );
     }
 
-    // Đăng ký
+    // Giảng viên đăng ký đề tài
+    const rawGvStart = dto.lecturerTopicFrom || dto.thoiGianBatDauGVDangKy;
+    const rawGvEnd = dto.lecturerTopicTo || dto.thoiGianKetThucGVDangKy;
+    const lecturerTopicFrom = rawGvStart ? new Date(rawGvStart) : undefined;
+    const lecturerTopicTo = rawGvEnd ? new Date(rawGvEnd) : undefined;
+
+    if (lecturerTopicFrom && lecturerTopicTo && lecturerTopicFrom.getTime() >= lecturerTopicTo.getTime()) {
+      throw new BadRequestException('Thời gian Giảng viên bắt đầu đăng ký đề tài phải trước hạn chót đăng ký.');
+    }
+
+    // Sinh viên đăng ký đề tài đã duyệt
     const registrationFrom = rawStart ? new Date(rawStart) : undefined;
     const registrationTo =
       dto.registrationTo || dto.thoiGianKetThucDangKy
@@ -438,7 +484,13 @@ export class SemestersService implements OnModuleInit {
       registrationFrom.getTime() >= registrationTo.getTime()
     ) {
       throw new BadRequestException(
-        'Thời gian mở đăng ký phải trước hạn chót đăng ký.',
+        'Thời gian mở đăng ký cho Sinh viên phải trước hạn chót đăng ký.',
+      );
+    }
+
+    if (lecturerTopicTo && registrationFrom && lecturerTopicTo.getTime() > registrationFrom.getTime()) {
+      throw new BadRequestException(
+        'Hạn chót Giảng viên đăng ký đề tài không được diễn ra sau ngày mở đăng ký cho Sinh viên.',
       );
     }
 
@@ -483,6 +535,8 @@ export class SemestersService implements OnModuleInit {
         academicYear,
         status,
         departmentId,
+        lecturerTopicFrom,
+        lecturerTopicTo,
         registrationFrom,
         registrationTo,
         submissionTo,
@@ -551,6 +605,15 @@ export class SemestersService implements OnModuleInit {
     });
 
     // Cập nhật các trường mốc thời gian cụ thể
+    const rawGvStart = dto.lecturerTopicFrom || (dto as any).thoiGianBatDauGVDangKy;
+    const rawGvEnd = dto.lecturerTopicTo || (dto as any).thoiGianKetThucGVDangKy;
+    const lecturerTopicFrom = rawGvStart ? new Date(rawGvStart) : undefined;
+    const lecturerTopicTo = rawGvEnd ? new Date(rawGvEnd) : undefined;
+
+    if (lecturerTopicFrom && lecturerTopicTo && lecturerTopicFrom.getTime() >= lecturerTopicTo.getTime()) {
+      throw new BadRequestException('Thời gian Giảng viên bắt đầu đăng ký đề tài phải trước hạn chót đăng ký.');
+    }
+
     const registrationFrom = rawStart
       ? new Date(rawStart)
       : undefined;
@@ -558,6 +621,18 @@ export class SemestersService implements OnModuleInit {
       dto.registrationTo || dto.thoiGianKetThucDangKy
         ? new Date(dto.registrationTo || dto.thoiGianKetThucDangKy!)
         : undefined;
+
+    if (
+      (lecturerTopicTo || existing.lecturerTopicTo) &&
+      (registrationFrom || existing.registrationFrom)
+    ) {
+      const gvDeadline = lecturerTopicTo || existing.lecturerTopicTo!;
+      const svStart = registrationFrom || existing.registrationFrom!;
+      if (gvDeadline.getTime() > svStart.getTime()) {
+        throw new BadRequestException('Hạn chót Giảng viên đăng ký đề tài không được sau thời gian mở đăng ký của Sinh viên.');
+      }
+    }
+
     const submissionTo =
       dto.submissionTo || dto.thoiGianNopBaoCao
         ? new Date(dto.submissionTo || dto.thoiGianNopBaoCao!)
@@ -581,6 +656,8 @@ export class SemestersService implements OnModuleInit {
         academicYear,
         status,
         departmentId,
+        ...(lecturerTopicFrom !== undefined ? { lecturerTopicFrom } : {}),
+        ...(lecturerTopicTo !== undefined ? { lecturerTopicTo } : {}),
         ...(registrationFrom !== undefined ? { registrationFrom } : {}),
         ...(registrationTo !== undefined ? { registrationTo } : {}),
         ...(submissionTo !== undefined ? { submissionTo } : {}),
@@ -727,28 +804,44 @@ export class SemestersService implements OnModuleInit {
     }
 
     const now = new Date();
+    const gvStart = semester.lecturerTopicFrom;
+    const gvEnd = semester.lecturerTopicTo;
+    const isLecturerTopicOpen =
+      semester.status === SemesterStatus.OPEN &&
+      Boolean((!gvStart || now >= gvStart) && (!gvEnd || now <= gvEnd));
+
     const start = semester.registrationFrom;
     const end = semester.registrationTo;
-    const isOpen =
+    const isStudentRegistrationOpen =
       semester.status === SemesterStatus.OPEN &&
-      Boolean(start && end && now >= start && now <= end);
+      Boolean(start && end ? (now >= start && now <= end) : (!start || now >= start));
 
     return {
       semesterId: semester.id,
       semesterCode: semester.code,
       semesterName: semester.name,
       status: semester.status,
+      lecturerTopicFrom: gvStart,
+      lecturerTopicTo: gvEnd,
+      thoiGianBatDauGVDangKy: gvStart,
+      thoiGianKetThucGVDangKy: gvEnd,
+      isLecturerTopicOpen,
       start,
       end,
       thoiGianBatDau: start,
       thoiGianKetThuc: end,
-      isRegistrationOpen: isOpen,
-      message: isOpen
-        ? 'Đợt KLTN hiện đang trong thời gian mở đăng ký đề tài.'
+      thoiGianBatDauSVDangKy: start,
+      thoiGianKetThucSVDangKy: end,
+      isRegistrationOpen: isStudentRegistrationOpen,
+      isStudentRegistrationOpen,
+      message: isStudentRegistrationOpen
+        ? 'Đợt KLTN hiện đang trong thời gian sinh viên mở đăng ký đề tài.'
+        : isLecturerTopicOpen
+        ? 'Đợt KLTN đang trong giai đoạn Giảng viên đề xuất & thẩm định đề tài. Cổng đăng ký của sinh viên chưa mở.'
         : start && now < start
-        ? `Chưa đến thời gian đăng ký đề tài (bắt đầu lúc ${this.formatDate(start)}).`
+        ? `Chưa đến thời gian sinh viên đăng ký đề tài (bắt đầu lúc ${this.formatDate(start)}).`
         : end && now > end
-        ? `Đã hết hạn đăng ký đề tài (kết thúc lúc ${this.formatDate(end)}).`
+        ? `Đã hết hạn đăng ký đề tài cho sinh viên (kết thúc lúc ${this.formatDate(end)}).`
         : 'Đợt KLTN chưa thiết lập thời gian mở đăng ký hoặc không ở trạng thái OPEN.',
     };
   }
@@ -765,35 +858,49 @@ export class SemestersService implements OnModuleInit {
       throw new NotFoundException(`Không tìm thấy đợt KLTN với ID: ${id}`);
     }
 
+    const rawGvStart = dto.lecturerTopicFrom || dto.thoiGianBatDauGVDangKy;
+    const rawGvEnd = dto.lecturerTopicTo || dto.thoiGianKetThucGVDangKy;
+    const lecturerTopicFrom = rawGvStart ? new Date(rawGvStart) : undefined;
+    const lecturerTopicTo = rawGvEnd ? new Date(rawGvEnd) : undefined;
+
+    if (lecturerTopicFrom && lecturerTopicTo && lecturerTopicFrom.getTime() >= lecturerTopicTo.getTime()) {
+      throw new BadRequestException('Thời gian Giảng viên bắt đầu đăng ký đề tài phải trước hạn chót đăng ký.');
+    }
+
     const rawStart = dto.start || dto.thoiGianBatDau;
     const rawEnd = dto.end || dto.thoiGianKetThuc;
 
-    if (!rawStart || !rawEnd) {
-      throw new BadRequestException(
-        'Vui lòng cung cấp đầy đủ thời gian bắt đầu (start) và thời gian kết thúc (end).',
-      );
+    const startDate = rawStart ? new Date(rawStart) : undefined;
+    const endDate = rawEnd ? new Date(rawEnd) : undefined;
+
+    if (startDate && isNaN(startDate.getTime())) {
+      throw new BadRequestException('Thời gian bắt đầu SV đăng ký không hợp lệ.');
+    }
+    if (endDate && isNaN(endDate.getTime())) {
+      throw new BadRequestException('Thời gian kết thúc SV đăng ký không hợp lệ.');
+    }
+    if (startDate && endDate && startDate.getTime() >= endDate.getTime()) {
+      throw new BadRequestException('Thời gian bắt đầu đăng ký của Sinh viên phải trước hạn chót.');
     }
 
-    const startDate = new Date(rawStart);
-    const endDate = new Date(rawEnd);
-
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-      throw new BadRequestException(
-        'Thời gian không hợp lệ. Vui lòng cung cấp chuỗi thời gian chuẩn ISO.',
-      );
-    }
-
-    if (startDate.getTime() >= endDate.getTime()) {
-      throw new BadRequestException(
-        'Thời gian bắt đầu đăng ký phải diễn ra trước thời gian kết thúc đăng ký.',
-      );
+    if (
+      (lecturerTopicTo || existing.lecturerTopicTo) &&
+      (startDate || existing.registrationFrom)
+    ) {
+      const gvDeadline = lecturerTopicTo || existing.lecturerTopicTo!;
+      const svStart = startDate || existing.registrationFrom!;
+      if (gvDeadline.getTime() > svStart.getTime()) {
+        throw new BadRequestException('Hạn chót Giảng viên đăng ký đề tài không được sau thời gian mở đăng ký của Sinh viên.');
+      }
     }
 
     const updated = await this.prisma.semester.update({
       where: { id },
       data: {
-        registrationFrom: startDate,
-        registrationTo: endDate,
+        ...(lecturerTopicFrom !== undefined ? { lecturerTopicFrom } : {}),
+        ...(lecturerTopicTo !== undefined ? { lecturerTopicTo } : {}),
+        ...(startDate !== undefined ? { registrationFrom: startDate } : {}),
+        ...(endDate !== undefined ? { registrationTo: endDate } : {}),
       },
       include: { department: true },
     });
@@ -801,24 +908,24 @@ export class SemestersService implements OnModuleInit {
     const now = new Date();
     const isRegistrationOpen =
       updated.status === SemesterStatus.OPEN &&
-      now >= startDate &&
-      now <= endDate;
+      Boolean((!updated.registrationFrom || now >= updated.registrationFrom) &&
+              (!updated.registrationTo || now <= updated.registrationTo));
 
     return {
       ...this.formatSemester(updated),
       registrationPeriod: {
         start: updated.registrationFrom,
         end: updated.registrationTo,
+        lecturerTopicFrom: updated.lecturerTopicFrom,
+        lecturerTopicTo: updated.lecturerTopicTo,
         isRegistrationOpen,
       },
       isRegistrationOpen,
       message: isRegistrationOpen
         ? `Cấu hình thành công. Đăng ký đề tài ĐANG MỞ từ ${this.formatDate(
-            startDate,
-          )} đến ${this.formatDate(endDate)}.`
-        : now < startDate
-        ? `Cấu hình thành công. Đăng ký đề tài sẽ mở vào ${this.formatDate(startDate)}.`
-        : `Cấu hình thành công. Hạn đăng ký (${this.formatDate(endDate)}) đã kết thúc.`,
+            updated.registrationFrom,
+          )} đến ${this.formatDate(updated.registrationTo)}.`
+        : 'Cấu hình thời gian đợt KLTN thành công.',
     };
   }
 
@@ -1019,8 +1126,10 @@ export class SemestersService implements OnModuleInit {
    */
   async resetToNewSemesterState(targetSemesterId?: string) {
     const now = new Date();
-    const regFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Mở từ hôm qua
-    const regTo = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // Hạn đăng ký: +30 ngày
+    const gvFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Mở GV đề xuất từ hôm qua
+    const gvTo = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // Hạn GV đề xuất: +7 ngày
+    const regFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000); // Mở SV đăng ký từ hôm qua
+    const regTo = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // Hạn SV đăng ký: +30 ngày
     const subTo = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // Hạn nộp báo cáo: +60 ngày
     const defFrom = new Date(now.getTime() + 75 * 24 * 60 * 60 * 1000); // Bảo vệ từ: +75 ngày
     const defTo = new Date(now.getTime() + 85 * 24 * 60 * 60 * 1000); // Bảo vệ đến: +85 ngày
@@ -1062,6 +1171,8 @@ export class SemestersService implements OnModuleInit {
         where: { id: semester.id },
         data: {
           status: SemesterStatus.OPEN,
+          lecturerTopicFrom: gvFrom,
+          lecturerTopicTo: gvTo,
           registrationFrom: regFrom,
           registrationTo: regTo,
           submissionTo: subTo,
@@ -1077,6 +1188,8 @@ export class SemestersService implements OnModuleInit {
           academicYear: '2026-2027',
           departmentId: dept.id,
           status: SemesterStatus.OPEN,
+          lecturerTopicFrom: gvFrom,
+          lecturerTopicTo: gvTo,
           registrationFrom: regFrom,
           registrationTo: regTo,
           submissionTo: subTo,

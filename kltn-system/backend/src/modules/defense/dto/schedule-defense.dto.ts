@@ -54,6 +54,10 @@ export class ScheduleDefenseDto {
   room?: string;
 
   @IsOptional()
+  @IsString()
+  defenseFormat?: 'HOI_DONG' | 'POSTER';
+
+  @IsOptional()
   @IsUUID()
   semesterId?: string;
 

@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CaptchaService } from './captcha.service';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 
@@ -23,7 +24,15 @@ export class AuthService {
   // Bộ nhớ đệm lưu trữ số lần đăng nhập sai theo identifier (Giới hạn 5 lần / 15 phút)
   private readonly failedAttempts = new Map<string, FailedLoginAttempt>();
 
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly captchaService: CaptchaService,
+  ) {}
+
+  generateCaptcha() {
+    return this.captchaService.generateCaptcha();
+  }
 
   private checkRateLimit(key: string) {
     const now = Date.now();
@@ -136,6 +145,18 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, ipAddress?: string, userAgent?: string) {
+    // 0. Kiểm tra mã CAPTCHA (nếu client gửi lên hoặc hệ thống bật cấu hình bắt buộc)
+    const requireCaptcha = process.env.REQUIRE_CAPTCHA === 'true';
+    if (requireCaptcha || dto.captchaId || dto.captchaCode) {
+      if (!dto.captchaId || !dto.captchaCode) {
+        throw new BadRequestException('Vui lòng nhập đầy đủ mã xác nhận (CAPTCHA).');
+      }
+      const isCaptchaValid = this.captchaService.validateCaptcha(dto.captchaId, dto.captchaCode);
+      if (!isCaptchaValid) {
+        throw new BadRequestException('Mã xác nhận (CAPTCHA) không chính xác hoặc đã hết hạn. Vui lòng thử lại.');
+      }
+    }
+
     const identifier = dto.identifier.toLowerCase().trim();
 
     // 1. Kiểm tra giới hạn 5 lần thử / 15 phút (Ngoại lệ E1)
@@ -213,6 +234,10 @@ export class AuthService {
     );
 
     // 7. Cập nhật lastLoginAt và lưu hash Refresh Token
+    const isFirstLogin = user.lastLoginAt === null;
+    const hasContactInfo = Boolean(user.phone && user.studentProfile?.personalEmail);
+    const requireProfileUpdate = isStudent && (isFirstLogin || !hasContactInfo);
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
@@ -236,6 +261,8 @@ export class AuthService {
             role: roles[0],
             duDieuKienDangKyKLTN,
             trangThaiKLTN,
+            isFirstLogin,
+            requireProfileUpdate,
           },
         },
       });
@@ -256,6 +283,9 @@ export class AuthService {
       trangThaiKLTN,
       phone: user.phone,
       avatarUrl: user.avatarUrl,
+      isFirstLogin,
+      requireProfileUpdate,
+      hasContactInfo,
       studentProfile: user.studentProfile
         ? {
             studentCode: user.studentProfile.studentCode,
@@ -265,6 +295,9 @@ export class AuthService {
             creditsEarned: user.studentProfile.creditsEarned,
             eligible: duDieuKienDangKyKLTN,
             department: user.studentProfile.department,
+            personalEmail: user.studentProfile.personalEmail,
+            address: user.studentProfile.address,
+            contactInfo: user.studentProfile.contactInfo,
           }
         : undefined,
       lecturerProfile: user.lecturerProfile
@@ -375,6 +408,9 @@ export class AuthService {
       trangThaiKLTN = statusInfo.trangThaiKLTN;
     }
 
+    const hasContactInfo = Boolean(user.phone && user.studentProfile?.personalEmail);
+    const requireProfileUpdate = isStudent && !hasContactInfo;
+
     return {
       ...user,
       mssv: user.studentProfile?.studentCode ?? null,
@@ -384,6 +420,14 @@ export class AuthService {
       duDieuKienDangKyKLTN,
       eligible: duDieuKienDangKyKLTN,
       trangThaiKLTN,
+      requireProfileUpdate,
+      hasContactInfo,
+      studentProfile: user.studentProfile
+        ? {
+            ...user.studentProfile,
+            gpa: user.studentProfile.gpa ? Number(user.studentProfile.gpa) : undefined,
+          }
+        : undefined,
     };
   }
 

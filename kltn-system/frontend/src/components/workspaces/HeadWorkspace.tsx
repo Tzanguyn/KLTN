@@ -36,6 +36,7 @@ import {
   Eye,
   LayoutDashboard,
   GraduationCap,
+  UserPlus,
 } from 'lucide-react';
 import { HeadWelcomeView } from '../dashboard/HeadWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
@@ -95,10 +96,27 @@ export const HeadWorkspace: React.FC = () => {
   const [availableReviewerData, setAvailableReviewerData] = useState<any>(null);
   const [filterReadyForReview, setFilterReadyForReview] = useState(false);
 
+  // Phân công GVPB thứ 3 do lệch điểm
+  const [showAssignThirdModal, setShowAssignThirdModal] = useState(false);
+  const [assignThirdGroupId, setAssignThirdGroupId] = useState('');
+  const [assignThirdReviewerId, setAssignThirdReviewerId] = useState('');
+  const [assignThirdNote, setAssignThirdNote] = useState('');
+  const [selectedGroupForThird, setSelectedGroupForThird] = useState<any>(null);
+  const [filterNeedsThirdReviewer, setFilterNeedsThirdReviewer] = useState(false);
+  const [isSubmittingThirdReviewer, setIsSubmittingThirdReviewer] = useState(false);
+
   const [showCommitteeModal, setShowCommitteeModal] = useState(false);
   const [committeeName, setCommitteeName] = useState('');
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [selectedCommitteeGroupIds, setSelectedCommitteeGroupIds] = useState<string[]>([]);
+
+  // Phân nhóm cho hội đồng sau khi thành lập
+  const [showAssignGroupsModal, setShowAssignGroupsModal] = useState(false);
+  const [selectedAssignCommitteeId, setSelectedAssignCommitteeId] = useState<string>('');
+  const [selectedAssignGroupIds, setSelectedAssignGroupIds] = useState<string[]>([]);
+  const [assignGroupSearch, setAssignGroupSearch] = useState('');
+  const [assignGroupFilter, setAssignGroupFilter] = useState<'ALL' | 'ASSIGNED_THIS' | 'UNASSIGNED'>('ALL');
+  const [isSavingAssignGroups, setIsSavingAssignGroups] = useState(false);
 
   // Score Unlock State
   const [showDirectUnlockModal, setShowDirectUnlockModal] = useState(false);
@@ -489,6 +507,69 @@ export const HeadWorkspace: React.FC = () => {
     }
   };
 
+  // Open 3rd Reviewer modal (When score discrepancy detected)
+  const handleOpenAssignThirdModal = async (group: any) => {
+    setAssignThirdGroupId(group.id);
+    setSelectedGroupForThird(group);
+    setAssignThirdReviewerId('');
+    setAssignThirdNote('');
+    setShowAssignThirdModal(true);
+    setLoadingAvailable(true);
+
+    try {
+      const res = await api.get(`/lecturers/available-reviewers?groupId=${group.id}`);
+      const data = res.data?.data;
+      setAvailableReviewerData(data);
+      if (data?.availableReviewers && data.availableReviewers.length > 0) {
+        setAssignThirdReviewerId(data.availableReviewers[0].id);
+      }
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi tải danh sách giảng viên', 'error');
+    } finally {
+      setLoadingAvailable(false);
+    }
+  };
+
+  // Submit 3rd Reviewer
+  const handleAssignThirdReviewer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assignThirdGroupId || !assignThirdReviewerId) {
+      notify('Vui lòng chọn Giảng viên phản biện thứ 3', 'error');
+      return;
+    }
+    setIsSubmittingThirdReviewer(true);
+    try {
+      await api.post('/review-assignments/third-reviewer', {
+        groupId: assignThirdGroupId,
+        reviewerId: assignThirdReviewerId,
+        note: assignThirdNote.trim() || undefined,
+      });
+      notify('Phân công Giảng viên phản biện thứ 3 thành công! Điểm GVPB là trung bình cộng của 3 GVPB.');
+      setShowAssignThirdModal(false);
+      setAssignThirdGroupId('');
+      setAssignThirdReviewerId('');
+      setAssignThirdNote('');
+      setSelectedGroupForThird(null);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi phân công GVPB thứ 3', 'error');
+    } finally {
+      setIsSubmittingThirdReviewer(false);
+    }
+  };
+
+  // Remove 3rd Reviewer
+  const handleRemoveThirdReviewer = async (groupId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn hủy phân công Giảng viên phản biện thứ 3 cho nhóm này?')) return;
+    try {
+      await api.delete(`/review-assignments/third-reviewer/${groupId}`);
+      notify('Đã hủy phân công Giảng viên phản biện thứ 3 thành công');
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi hủy phân công GVPB 3', 'error');
+    }
+  };
+
   // Create Defense Committee (with min members check and anti-conflict check)
   const handleCreateCommittee = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -510,7 +591,11 @@ export const HeadWorkspace: React.FC = () => {
         memberIds: selectedMemberIds,
         tenHoiDong: committeeName.trim() || undefined,
       });
-      notify('Thành lập Hội đồng bảo vệ KLTN thành công!');
+      if (selectedCommitteeGroupIds.length === 0) {
+        notify('Thành lập Hội đồng bảo vệ thành công! Bạn có thể chọn Hội đồng và phân các nhóm bảo vệ.');
+      } else {
+        notify(`Thành lập Hội đồng bảo vệ và phân công ${selectedCommitteeGroupIds.length} nhóm thành công!`);
+      }
       setShowCommitteeModal(false);
       setCommitteeName('');
       setSelectedMemberIds([]);
@@ -518,6 +603,182 @@ export const HeadWorkspace: React.FC = () => {
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi lập hội đồng bảo vệ', 'error');
+    }
+  };
+
+  // Phân nhóm cho hội đồng sau khi thành lập
+  const openAssignGroupsModal = (com?: any) => {
+    const targetCommittee = com || (committees.length > 0 ? committees[0] : null);
+    if (!targetCommittee) {
+      notify('Chưa có Hội đồng bảo vệ nào được thành lập. Vui lòng thành lập hội đồng trước.', 'error');
+      return;
+    }
+    setSelectedAssignCommitteeId(targetCommittee.id);
+    const assignedIds =
+      targetCommittee.assignedGroups?.map((g: any) => g.id) ||
+      targetCommittee.schedules?.map((s: any) => s.groupId || s.group?.id).filter(Boolean) ||
+      [];
+    setSelectedAssignGroupIds(assignedIds);
+    setAssignGroupSearch('');
+    setAssignGroupFilter('ALL');
+    setShowAssignGroupsModal(true);
+  };
+
+  const handleSwitchAssignCommittee = (newCommitteeId: string) => {
+    setSelectedAssignCommitteeId(newCommitteeId);
+    const targetCommittee = committees.find((c) => c.id === newCommitteeId);
+    if (targetCommittee) {
+      const assignedIds =
+        targetCommittee.assignedGroups?.map((g: any) => g.id) ||
+        targetCommittee.schedules?.map((s: any) => s.groupId || s.group?.id).filter(Boolean) ||
+        [];
+      setSelectedAssignGroupIds(assignedIds);
+    }
+  };
+
+  const selectedAssignCommittee = useMemo(() => {
+    return committees.find((c) => c.id === selectedAssignCommitteeId) || null;
+  }, [committees, selectedAssignCommitteeId]);
+
+  const selectedCommitteeMemberUserIds = useMemo(() => {
+    if (!selectedAssignCommittee) return new Set<string>();
+    const set = new Set<string>();
+    (selectedAssignCommittee.members || []).forEach((m: any) => {
+      if (m.userId) set.add(m.userId);
+      if (m.user?.id) set.add(m.user.id);
+      if (m.id) set.add(m.id);
+    });
+    return set;
+  }, [selectedAssignCommittee]);
+
+  const candidateDefenseGroups = useMemo(() => {
+    return allGroups.filter((grp: any) => {
+      const isMidtermOk = grp.midtermStatus === 'CONTINUE' || grp.midtermStatus === 'CHO_LAM_TIEP';
+      const isGvhdOk =
+        grp.isGvhdScorePassed ??
+        (grp.gvhdScore !== undefined && grp.gvhdScore !== null ? Number(grp.gvhdScore) >= 6.0 : true);
+      return isMidtermOk && isGvhdOk;
+    });
+  }, [allGroups]);
+
+  const enrichedCandidateGroups = useMemo(() => {
+    return candidateDefenseGroups.map((grp: any) => {
+      const advisorId = grp.topic?.ownerId || grp.topic?.owner?.id || grp.gvhd?.id || grp.gvhd?.userId;
+      const advisorName = grp.topic?.owner?.fullName || grp.gvhd?.fullName || 'Chưa rõ GVHD';
+      const isConflict = advisorId ? selectedCommitteeMemberUserIds.has(advisorId) : false;
+      const isPoster = grp.defenseFormat === 'POSTER';
+
+      const currentAssignedCommittee = committees.find((c) =>
+        (c.assignedGroups || []).some((ag: any) => ag.id === grp.id) ||
+        (c.schedules || []).some((s: any) => (s.groupId || s.group?.id) === grp.id),
+      );
+
+      const isAssignedToThis = currentAssignedCommittee?.id === selectedAssignCommitteeId;
+      const isAssignedToOther = currentAssignedCommittee && currentAssignedCommittee.id !== selectedAssignCommitteeId;
+      const isChecked = selectedAssignGroupIds.includes(grp.id);
+      const isSelectable = !isConflict && !isPoster;
+
+      return {
+        ...grp,
+        advisorId,
+        advisorName,
+        isConflict,
+        isPoster,
+        currentAssignedCommittee,
+        isAssignedToThis,
+        isAssignedToOther,
+        isChecked,
+        isSelectable,
+      };
+    });
+  }, [candidateDefenseGroups, selectedCommitteeMemberUserIds, committees, selectedAssignCommitteeId, selectedAssignGroupIds]);
+
+  const filteredCandidateGroups = useMemo(() => {
+    return enrichedCandidateGroups.filter((item: any) => {
+      if (assignGroupSearch.trim()) {
+        const query = assignGroupSearch.trim().toLowerCase();
+        const codeMatch = item.code?.toLowerCase().includes(query);
+        const titleMatch = (item.topic?.title || item.name || '')?.toLowerCase().includes(query);
+        const advisorMatch = item.advisorName?.toLowerCase().includes(query);
+        if (!codeMatch && !titleMatch && !advisorMatch) return false;
+      }
+      if (assignGroupFilter === 'ASSIGNED_THIS') {
+        return item.isChecked;
+      }
+      if (assignGroupFilter === 'UNASSIGNED') {
+        return !item.currentAssignedCommittee;
+      }
+      return true;
+    });
+  }, [enrichedCandidateGroups, assignGroupSearch, assignGroupFilter]);
+
+  const toggleAssignGroup = (grp: any) => {
+    if (!grp.isSelectable) {
+      if (grp.isConflict) {
+        notify(`Không thể chọn nhóm ${grp.code}: GVHD ${grp.advisorName} là thành viên của Hội đồng này (Xung đột vai trò).`, 'error');
+      } else if (grp.isPoster) {
+        notify(`Không thể chọn nhóm ${grp.code}: Nhóm thuộc diện Báo cáo Poster (80%), không đưa vào Hội đồng bảo vệ trực tiếp.`, 'error');
+      }
+      return;
+    }
+    if (selectedAssignGroupIds.includes(grp.id)) {
+      setSelectedAssignGroupIds(selectedAssignGroupIds.filter((id) => id !== grp.id));
+    } else {
+      setSelectedAssignGroupIds([...selectedAssignGroupIds, grp.id]);
+    }
+  };
+
+  const selectAllValidAssignGroups = () => {
+    const validIds = enrichedCandidateGroups
+      .filter((g: any) => g.isSelectable)
+      .map((g: any) => g.id);
+    setSelectedAssignGroupIds(validIds);
+    notify(`Đã chọn ${validIds.length} nhóm hợp lệ cho Hội đồng`);
+  };
+
+  const deselectAllAssignGroups = () => {
+    setSelectedAssignGroupIds([]);
+  };
+
+  const handleSaveAssignGroups = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAssignCommitteeId) {
+      notify('Vui lòng chọn Hội đồng bảo vệ', 'error');
+      return;
+    }
+    let semId = currentSemester?.id || allGroups[0]?.semesterId;
+    if (!semId) {
+      const semRes = await api.get('/config/semesters');
+      semId = semRes.data?.data?.[0]?.id;
+      if (!semId) return notify('Không tìm thấy thông tin học kỳ', 'error');
+    }
+
+    setIsSavingAssignGroups(true);
+    try {
+      const res = await api.post(`/defense-committees/${selectedAssignCommitteeId}/assign-groups`, {
+        semesterId: semId,
+        groupIds: selectedAssignGroupIds,
+      });
+      notify(res.data?.message || 'Phân công nhóm cho Hội đồng thành công!', 'success');
+      setShowAssignGroupsModal(false);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message || 'Lỗi khi phân nhóm cho hội đồng', 'error');
+    } finally {
+      setIsSavingAssignGroups(false);
+    }
+  };
+
+  const handleDeleteCommittee = async (committeeId: string, name: string) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa hội đồng "${name}"? Các nhóm thuộc hội đồng này sẽ trở về trạng thái chưa phân công.`)) {
+      return;
+    }
+    try {
+      await api.delete(`/defense-committees/${committeeId}`);
+      notify(`Đã xóa hội đồng "${name}" thành công!`);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message || 'Lỗi khi xóa hội đồng', 'error');
     }
   };
 
@@ -1347,140 +1608,287 @@ export const HeadWorkspace: React.FC = () => {
 
       {/* TAB 3: Assign Reviewers */}
       {activeTab === 'reviewers' && (
-        <Card>
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Users className="w-5 h-5 text-indigo-600" />
-                Phân công 2 Giảng viên phản biện (GVPB)
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Chỉ phân công cho các nhóm đã được xác nhận CHO LÀM TIẾP ở giữa kỳ. Tự động loại trừ GVHD và hỗ trợ ghép cặp.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100">
-                <input
-                  type="checkbox"
-                  checked={filterReadyForReview}
-                  onChange={(e) => setFilterReadyForReview(e.target.checked)}
-                  className="rounded text-indigo-600 focus:ring-indigo-500"
-                />
-                <span>Chỉ hiện nhóm đủ điều kiện (CHO LÀM TIẾP)</span>
-              </label>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px] text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="p-3">Mã nhóm</th>
-                    <th className="p-3">Tên đề tài</th>
-                    <th className="p-3">GVHD</th>
-                    <th className="p-3">Đánh giá giữa kỳ</th>
-                    <th className="p-3">GVPB 1 (Chính)</th>
-                    <th className="p-3">GVPB 2 (Phụ)</th>
-                    <th className="p-3">Trạng thái</th>
-                    <th className="p-3 text-right">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {allGroups
-                    .filter((grp) => !filterReadyForReview || grp.midtermStatus === 'CONTINUE')
-                    .map((grp) => {
-                      const isContinue = grp.midtermStatus === 'CONTINUE';
-                      const assignments = grp.reviewerAssignments || [];
-                      const rev1 = assignments.find((r: any) => r.type === 'PRIMARY') || assignments[0];
-                      const rev2 =
-                        assignments.find((r: any) => r.type === 'ADDITIONAL') ||
-                        (assignments.length > 1 ? assignments[1] : null);
-                      const hasTwo = assignments.length >= 2;
+        <div className="space-y-4">
+          {(() => {
+            const groupsNeedingThird = allGroups.filter((grp) => {
+              const scoreItem = semesterScores.find((s: any) => s.id === grp.id || s.group?.id === grp.id);
+              return (
+                grp.needsThirdReviewer ||
+                scoreItem?.discrepancy?.needsThirdReviewer ||
+                scoreItem?.scoreCompleteness?.missingComponents?.includes('CAN_PHAN_CONG_GVPB_3')
+              );
+            });
 
-                      return (
-                        <tr key={grp.id} className="hover:bg-slate-50/50">
-                          <td className="p-3 font-mono font-bold text-slate-800">{grp.code}</td>
-                          <td className="p-3 font-medium text-slate-800 max-w-xs truncate" title={grp.topic?.title ?? grp.name}>
-                            {grp.topic?.title ?? grp.name}
-                          </td>
-                          <td className="p-3 text-slate-600">
-                            {grp.topic?.owner?.fullName ?? grp.gvhd?.fullName ?? 'Chưa xác định'}
-                          </td>
-                          <td className="p-3">
-                            {isContinue ? (
-                              <Badge variant="success" size="sm">CHO LÀM TIẾP</Badge>
-                            ) : grp.midtermStatus === 'STOPPED' ? (
-                              <Badge variant="danger" size="sm">DỪNG ĐỀ TÀI</Badge>
-                            ) : (
-                              <Badge variant="warning" size="sm">Chưa đánh giá</Badge>
-                            )}
-                          </td>
-                          <td className="p-3">
-                            {rev1 ? (
-                              <div>
-                                <span className="font-semibold text-purple-700">
-                                  {rev1.lecturer?.user?.fullName || rev1.fullName || rev1.lecturerName}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic">Chưa gán</span>
-                            )}
-                          </td>
-                          <td className="p-3">
-                            {rev2 ? (
-                              <div>
-                                <span className="font-semibold text-indigo-700">
-                                  {rev2.lecturer?.user?.fullName || rev2.fullName || rev2.lecturerName}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic">Chưa gán</span>
-                            )}
-                          </td>
-                          <td className="p-3">
-                            {hasTwo ? (
-                              <Badge variant="success" size="sm">Đủ 2 GVPB</Badge>
-                            ) : assignments.length === 1 ? (
-                              <Badge variant="warning" size="sm">Thiếu 1 GVPB</Badge>
-                            ) : (
-                              <Badge variant="neutral" size="sm">Chưa phân công</Badge>
-                            )}
-                          </td>
-                          <td className="p-3 text-right">
-                            {isContinue ? (
-                              <Button
-                                size="sm"
-                                variant={hasTwo ? 'outline' : 'primary'}
-                                onClick={() => handleOpenAssignModal(grp)}
-                              >
-                                {hasTwo ? 'Đổi 2 GVPB' : 'Phân công 2 GVPB'}
-                              </Button>
-                            ) : (
-                              <span
-                                className="text-xs text-slate-400 cursor-not-allowed italic"
-                                title="Chỉ phân công cho nhóm đã CHO LÀM TIẾP ở giữa kỳ"
-                              >
-                                Chưa đủ ĐK
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  {allGroups.filter((grp) => !filterReadyForReview || grp.midtermStatus === 'CONTINUE').length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="p-6 text-center text-slate-400">
-                        {filterReadyForReview
-                          ? 'Không có nhóm nào đủ điều kiện (CHO LÀM TIẾP) cần phân công phản biện.'
-                          : 'Chưa có nhóm KLTN nào trong hệ thống.'}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+            return (
+              <>
+                {groupsNeedingThird.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                    <div className="flex items-center gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <div>
+                        <div className="font-bold text-xs text-amber-900">
+                          Phát hiện {groupsNeedingThird.length} nhóm KLTN có độ lệch điểm cần phân công GVPB thứ 3
+                        </div>
+                        <div className="text-[11px] text-amber-700">
+                          Quy định: Khi điểm giữa 2 GVPB chênh nhau &ge; 4.0 điểm hoặc điểm của GVPB và GVHD chênh nhau &ge; 2.0 điểm, Trưởng bộ môn phân công GVPB thứ 3. Điểm GVPB khi đó là trung bình cộng của 3 GVPB.
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setFilterNeedsThirdReviewer(!filterNeedsThirdReviewer)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white text-xs shrink-0"
+                    >
+                      {filterNeedsThirdReviewer ? 'Hiện tất cả các nhóm' : `Lọc ${groupsNeedingThird.length} nhóm lệch điểm`}
+                    </Button>
+                  </div>
+                )}
+
+                <Card>
+                  <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Users className="w-5 h-5 text-indigo-600" />
+                        Phân công Giảng viên phản biện (GVPB)
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Phân công 2 GVPB cho nhóm đã CHO LÀM TIẾP. Khi có chênh lệch điểm (&ge; 4đ giữa 2 GVPB hoặc &ge; 2đ với GVHD), phân công GVPB thứ 3 và tính điểm trung bình của 3 GVPB.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={filterReadyForReview}
+                          onChange={(e) => setFilterReadyForReview(e.target.checked)}
+                          className="rounded text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>Đủ ĐK (CHO LÀM TIẾP)</span>
+                      </label>
+                      {groupsNeedingThird.length > 0 && (
+                        <label className="flex items-center gap-2 text-xs font-medium text-amber-800 cursor-pointer bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200 hover:bg-amber-100">
+                          <input
+                            type="checkbox"
+                            checked={filterNeedsThirdReviewer}
+                            onChange={(e) => setFilterNeedsThirdReviewer(e.target.checked)}
+                            className="rounded text-amber-600 focus:ring-amber-500"
+                          />
+                          <span>Cần GVPB 3 ({groupsNeedingThird.length})</span>
+                        </label>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[850px] text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-600 uppercase border-b border-slate-200">
+                          <tr>
+                            <th className="p-3">Mã nhóm</th>
+                            <th className="p-3">Tên đề tài</th>
+                            <th className="p-3">GVHD</th>
+                            <th className="p-3">Đánh giá giữa kỳ</th>
+                            <th className="p-3">GVPB 1 (Chính)</th>
+                            <th className="p-3">GVPB 2 (Phụ)</th>
+                            <th className="p-3">GVPB 3 (Thẩm định)</th>
+                            <th className="p-3">Trạng thái</th>
+                            <th className="p-3 text-right">Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {allGroups
+                            .filter((grp) => {
+                              if (filterNeedsThirdReviewer) {
+                                const sItem = semesterScores.find((s: any) => s.id === grp.id || s.group?.id === grp.id);
+                                return (
+                                  grp.needsThirdReviewer ||
+                                  sItem?.discrepancy?.needsThirdReviewer ||
+                                  sItem?.scoreCompleteness?.missingComponents?.includes('CAN_PHAN_CONG_GVPB_3')
+                                );
+                              }
+                              if (filterReadyForReview) return grp.midtermStatus === 'CONTINUE';
+                              return true;
+                            })
+                            .map((grp) => {
+                              const isContinue = grp.midtermStatus === 'CONTINUE';
+                              const assignments = grp.reviewerAssignments || [];
+                              const rev1 = assignments.find((r: any) => r.type === 'PRIMARY') || assignments[0];
+                              const rev2 =
+                                assignments.find((r: any) => r.type === 'ADDITIONAL') ||
+                                (assignments.length > 1 ? assignments[1] : null);
+                              const rev3 = assignments.length >= 3 ? assignments[2] : grp.thirdReviewer;
+                              const hasTwo = assignments.length >= 2;
+                              const hasThree = assignments.length >= 3 || grp.hasThirdReviewer;
+                              const scoreItem = semesterScores.find((s: any) => s.id === grp.id || s.group?.id === grp.id);
+                              const discrepancy = grp.discrepancy || scoreItem?.discrepancy;
+                              const needsThird =
+                                grp.needsThirdReviewer ||
+                                scoreItem?.discrepancy?.needsThirdReviewer ||
+                                scoreItem?.scoreCompleteness?.missingComponents?.includes('CAN_PHAN_CONG_GVPB_3');
+
+                              return (
+                                <tr key={grp.id} className="hover:bg-slate-50/50">
+                                  <td className="p-3 font-mono font-bold text-slate-800">{grp.code}</td>
+                                  <td className="p-3 font-medium text-slate-800 max-w-xs truncate" title={grp.topic?.title ?? grp.name}>
+                                    {grp.topic?.title ?? grp.name}
+                                  </td>
+                                  <td className="p-3 text-slate-600">
+                                    {grp.topic?.owner?.fullName ?? grp.gvhd?.fullName ?? 'Chưa xác định'}
+                                  </td>
+                                  <td className="p-3">
+                                    {isContinue ? (
+                                      <Badge variant="success" size="sm">CHO LÀM TIẾP</Badge>
+                                    ) : grp.midtermStatus === 'STOPPED' ? (
+                                      <Badge variant="danger" size="sm">DỪNG ĐỀ TÀI</Badge>
+                                    ) : (
+                                      <Badge variant="warning" size="sm">Chưa đánh giá</Badge>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    {rev1 ? (
+                                      <div>
+                                        <span className="font-semibold text-purple-700">
+                                          {rev1.lecturer?.user?.fullName || rev1.fullName || rev1.lecturerName}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-400 italic">Chưa gán</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    {rev2 ? (
+                                      <div>
+                                        <span className="font-semibold text-indigo-700">
+                                          {rev2.lecturer?.user?.fullName || rev2.fullName || rev2.lecturerName}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-400 italic">Chưa gán</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    {rev3 ? (
+                                      <div>
+                                        <span className="font-semibold text-amber-700">
+                                          {rev3.lecturer?.user?.fullName || rev3.fullName || rev3.lecturerName}
+                                        </span>
+                                        <span className="block text-[10px] text-amber-600 font-medium">GVPB 3 (Thẩm định)</span>
+                                      </div>
+                                    ) : needsThird ? (
+                                      <div className="space-y-1">
+                                        <Badge variant="danger" size="sm" className="animate-pulse">Cần phân công GVPB 3</Badge>
+                                        {discrepancy?.reasons?.[0] && (
+                                          <div className="text-[10px] text-rose-600 max-w-[130px] truncate" title={discrepancy.reasons.join('\n')}>
+                                            {discrepancy.reasons[0]}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-400 italic">Không có</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    {hasThree ? (
+                                      <Badge variant="success" size="sm" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                                        3 GVPB (TB cộng)
+                                      </Badge>
+                                    ) : needsThird ? (
+                                      <Badge variant="danger" size="sm" className="animate-pulse">
+                                        Lệch điểm - Cần GVPB 3
+                                      </Badge>
+                                    ) : hasTwo ? (
+                                      <Badge variant="success" size="sm">Đủ 2 GVPB</Badge>
+                                    ) : assignments.length === 1 ? (
+                                      <Badge variant="warning" size="sm">Thiếu 1 GVPB</Badge>
+                                    ) : (
+                                      <Badge variant="neutral" size="sm">Chưa phân công</Badge>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    {isContinue ? (
+                                      <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                        {needsThird && !hasThree && (
+                                          <Button
+                                            size="sm"
+                                            variant="danger"
+                                            className="bg-amber-600 hover:bg-amber-700 text-white text-xs whitespace-nowrap"
+                                            onClick={() => handleOpenAssignThirdModal(grp)}
+                                          >
+                                            Phân công GVPB 3
+                                          </Button>
+                                        )}
+                                        {hasThree && (
+                                          <>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="text-amber-700 border-amber-300 hover:bg-amber-50 text-xs"
+                                              onClick={() => handleOpenAssignThirdModal(grp)}
+                                            >
+                                              Đổi GVPB 3
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="text-rose-600 hover:bg-rose-50 px-2 text-xs"
+                                              onClick={() => handleRemoveThirdReviewer(grp.id)}
+                                              title="Hủy GVPB 3"
+                                            >
+                                              ✕
+                                            </Button>
+                                          </>
+                                        )}
+                                        <Button
+                                          size="sm"
+                                          variant={hasTwo ? 'outline' : 'primary'}
+                                          onClick={() => handleOpenAssignModal(grp)}
+                                        >
+                                          {hasTwo ? 'Đổi 2 GVPB' : 'Phân công 2 GVPB'}
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <span
+                                        className="text-xs text-slate-400 cursor-not-allowed italic"
+                                        title="Chỉ phân công cho nhóm đã CHO LÀM TIẾP ở giữa kỳ"
+                                      >
+                                        Chưa đủ ĐK
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          {allGroups.filter((grp) => {
+                            if (filterNeedsThirdReviewer) {
+                              const sItem = semesterScores.find((s: any) => s.id === grp.id || s.group?.id === grp.id);
+                              return (
+                                grp.needsThirdReviewer ||
+                                sItem?.discrepancy?.needsThirdReviewer ||
+                                sItem?.scoreCompleteness?.missingComponents?.includes('CAN_PHAN_CONG_GVPB_3')
+                              );
+                            }
+                            if (filterReadyForReview) return grp.midtermStatus === 'CONTINUE';
+                            return true;
+                          }).length === 0 && (
+                            <tr>
+                              <td colSpan={9} className="p-6 text-center text-slate-400">
+                                {filterNeedsThirdReviewer
+                                  ? 'Không có nhóm nào có độ lệch điểm cần phân công GVPB thứ 3.'
+                                  : filterReadyForReview
+                                  ? 'Không có nhóm nào đủ điều kiện (CHO LÀM TIẾP) cần phân công phản biện.'
+                                  : 'Chưa có nhóm KLTN nào trong hệ thống.'}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            );
+          })()}
+        </div>
       )}
 
       {/* TAB 4: Committees & Schedules & Defense Eligibility */}
@@ -1548,23 +1956,63 @@ export const HeadWorkspace: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-indigo-600" />
-                    Hội đồng bảo vệ ({committees.length})
-                  </h3>
-                  <Button size="sm" variant="primary" onClick={() => setShowCommitteeModal(true)}>
-                    Thành lập hội đồng
-                  </Button>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                      <Layers className="w-5 h-5 text-indigo-600" />
+                      Hội đồng bảo vệ ({committees.length})
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Thành lập hội đồng, chọn hội đồng và phân các nhóm bảo vệ
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {committees.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openAssignGroupsModal()}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100"
+                        title="Chọn một hội đồng và phân các nhóm bảo vệ"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        Phân nhóm cho hội đồng
+                      </Button>
+                    )}
+                    <Button size="sm" variant="primary" onClick={() => setShowCommitteeModal(true)}>
+                      Thành lập hội đồng
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
                     {committees.map((com) => {
                       const assigned = com.assignedGroups || com.schedules?.map((s: any) => s.group).filter(Boolean) || [];
                       return (
-                        <div key={com.id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                          <div className="flex items-center justify-between">
+                        <div key={com.id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 hover:border-slate-300 transition-colors">
+                          <div className="flex items-center justify-between gap-2">
                             <h4 className="font-bold text-sm text-slate-900">{com.name}</h4>
-                            <Badge variant="primary" size="sm">{assigned.length} nhóm chấm</Badge>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Badge variant={assigned.length > 0 ? "primary" : "neutral"} size="sm">
+                                {assigned.length} nhóm chấm
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openAssignGroupsModal(com)}
+                                className="text-xs h-7 px-2.5 flex items-center gap-1.5 text-indigo-700 bg-white border-indigo-200 hover:bg-indigo-50 font-medium"
+                                title="Chọn hội đồng này và phân các nhóm đề tài"
+                              >
+                                <Users className="w-3 h-3" />
+                                Phân nhóm
+                              </Button>
+                              <button
+                                onClick={() => handleDeleteCommittee(com.id, com.name)}
+                                className="p-1 text-slate-400 hover:text-rose-600 transition-colors rounded"
+                                title="Xóa hội đồng này"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
                           <div className="space-y-1.5 text-xs">
                             <span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Thành viên hội đồng:</span>
@@ -1577,9 +2025,18 @@ export const HeadWorkspace: React.FC = () => {
                               ))}
                             </div>
                           </div>
-                          {assigned.length > 0 && (
+                          {assigned.length > 0 ? (
                             <div className="space-y-1 text-xs pt-1 border-t border-slate-200">
-                              <span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Nhóm bảo vệ:</span>
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Các nhóm được phân công ({assigned.length}):</span>
+                                <button
+                                  type="button"
+                                  onClick={() => openAssignGroupsModal(com)}
+                                  className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline"
+                                >
+                                  Chỉnh sửa phân nhóm
+                                </button>
+                              </div>
                               <div className="flex flex-wrap gap-1.5 pt-0.5">
                                 {assigned.map((g: any) => (
                                   <span key={g.id || g.code} className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-800 text-[11px] font-medium" title={g.topicTitle || g.topic?.title || g.name}>
@@ -1588,12 +2045,23 @@ export const HeadWorkspace: React.FC = () => {
                                 ))}
                               </div>
                             </div>
+                          ) : (
+                            <div className="pt-1 border-t border-slate-200 flex items-center justify-between text-xs text-slate-400 italic">
+                              <span>Chưa phân nhóm cho hội đồng này.</span>
+                              <button
+                                type="button"
+                                onClick={() => openAssignGroupsModal(com)}
+                                className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold not-italic cursor-pointer underline"
+                              >
+                                + Phân nhóm ngay
+                              </button>
+                            </div>
                           )}
                         </div>
                       );
                     })}
                     {committees.length === 0 && (
-                      <p className="text-xs text-slate-400 italic p-4 text-center">Chưa có Hội đồng bảo vệ nào được thành lập.</p>
+                      <p className="text-xs text-slate-400 italic p-4 text-center">Chưa có Hội đồng bảo vệ nào được thành lập. Bấm "Thành lập hội đồng" để bắt đầu.</p>
                     )}
                   </div>
                 </CardContent>
@@ -2082,7 +2550,24 @@ export const HeadWorkspace: React.FC = () => {
 
                           {/* GVPB Score */}
                           <td className="p-3 text-center min-w-[140px]">
-                            {item.reviewer ? (
+                            {item.discrepancy?.needsThirdReviewer ? (
+                              <div className="space-y-1">
+                                <Badge variant="danger" size="sm" className="font-semibold animate-pulse block">
+                                  Lệch điểm (Chờ GVPB 3)
+                                </Badge>
+                                <div className="text-[10px] text-rose-700 font-medium">
+                                  {item.discrepancy.isReviewersDiscrepancy ? '2 GVPB lệch ≥ 4.0đ' : 'GVPB & GVHD lệch ≥ 2.0đ'}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  onClick={() => handleOpenAssignThirdModal(item)}
+                                  className="text-[11px] py-0.5 px-2 h-auto mx-auto"
+                                >
+                                  Phân công GVPB 3
+                                </Button>
+                              </div>
+                            ) : item.reviewer ? (
                               item.scores?.gvpb !== null && item.scores?.gvpb !== undefined ? (
                                 <div className="space-y-1">
                                   {students.length > 0 && students.some((st: any) => st.gvpb !== null && st.gvpb !== undefined) ? (
@@ -2099,6 +2584,11 @@ export const HeadWorkspace: React.FC = () => {
                                   ) : (
                                     <span className="text-sm font-bold text-slate-900">{item.scores.gvpb} / 10</span>
                                   )}
+                                  {item.componentScores?.gvpb?.hasThirdReviewer && (
+                                    <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded font-semibold block">
+                                      TB cộng 3 GVPB
+                                    </span>
+                                  )}
                                   <div>
                                     {item.scoreBreakdown?.gvpb?.isDraft ? (
                                       <Badge variant="warning" size="sm">Bản nháp</Badge>
@@ -2108,6 +2598,14 @@ export const HeadWorkspace: React.FC = () => {
                                   </div>
                                   <div className="text-[10px] text-slate-400 truncate max-w-[120px] mx-auto">
                                     {item.reviewer.fullName}
+                                    {item.componentScores?.gvpb?.reviewersCount > 1 ? ` (+${item.componentScores.gvpb.reviewersCount - 1})` : ''}
+                                  </div>
+                                </div>
+                              ) : item.componentScores?.gvpb?.hasThirdReviewer && !item.scores?.gvpb ? (
+                                <div className="space-y-0.5">
+                                  <Badge variant="warning" size="sm">Chờ GVPB 3 chấm</Badge>
+                                  <div className="text-[10px] text-slate-500 truncate max-w-[120px] mx-auto">
+                                    GVPB 3: {item.discrepancy?.thirdReviewer?.fullName || 'Đã phân công'}
                                   </div>
                                 </div>
                               ) : (
@@ -2243,6 +2741,29 @@ export const HeadWorkspace: React.FC = () => {
                            {/* Thao tác */}
                            <td className="p-3 text-right">
                              <div className="flex items-center justify-end gap-1.5">
+                               {item.discrepancy?.needsThirdReviewer && (
+                                 <Button
+                                   size="sm"
+                                   variant="primary"
+                                   onClick={() => handleOpenAssignThirdModal(item)}
+                                   title="Phân công Giảng viên phản biện thứ 3 (Thẩm định lệch điểm)"
+                                   className="text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 font-semibold px-2 py-1 text-xs"
+                                 >
+                                   <UserPlus className="w-3.5 h-3.5 mr-1 text-amber-700" />
+                                   GVPB 3
+                                 </Button>
+                               )}
+                               {item.discrepancy?.hasThirdReviewer && (
+                                 <Button
+                                   size="sm"
+                                   variant="outline"
+                                   onClick={() => handleRemoveThirdReviewer(item.id)}
+                                   title="Hủy phân công Giảng viên phản biện thứ 3"
+                                   className="text-rose-600 border-rose-200 hover:bg-rose-50 px-2 text-xs"
+                                 >
+                                   Hủy GVPB 3
+                                 </Button>
+                               )}
                                {isGroupMidtermPassed && (
                                  <>
                                    <Button
@@ -2982,6 +3503,165 @@ export const HeadWorkspace: React.FC = () => {
         </form>
       </Modal>
 
+      {/* MODAL: Assign 3rd Reviewer (Discrepancy) */}
+      <Modal
+        isOpen={showAssignThirdModal}
+        onClose={() => {
+          setShowAssignThirdModal(false);
+          setAssignThirdGroupId('');
+          setAssignThirdReviewerId('');
+          setAssignThirdNote('');
+          setSelectedGroupForThird(null);
+        }}
+        title="Phân công Giảng viên phản biện thứ 3 (Thẩm định lệch điểm)"
+      >
+        <form onSubmit={handleAssignThirdReviewer} className="space-y-4 text-sm">
+          {/* Cảnh báo lệch điểm */}
+          <div className="bg-amber-50 border-l-4 border-amber-500 p-3.5 rounded-r-lg space-y-2">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-600 font-bold text-base">⚠️</span>
+              <div>
+                <h4 className="font-semibold text-amber-900 text-sm">Phát hiện chênh lệch điểm đánh giá</h4>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Theo quy định: Điểm giữa 2 GVPB chênh nhau &ge; 4.0 điểm hoặc điểm của GVPB và GVHD chênh nhau &ge; 2.0 điểm, Trưởng bộ môn phân công GVPB thứ 3. Khi đó, điểm GVPB là trung bình cộng của cả 3 GVPB.
+                </p>
+              </div>
+            </div>
+
+            {((availableReviewerData?.discrepancy?.reasons && availableReviewerData.discrepancy.reasons.length > 0) ||
+              (selectedGroupForThird?.discrepancy?.reasons && selectedGroupForThird.discrepancy.reasons.length > 0)) && (
+              <div className="bg-white/80 p-2.5 rounded border border-amber-200 text-xs text-amber-900 space-y-1 mt-2">
+                <span className="font-semibold block text-amber-950">Chi tiết lý do kích hoạt GVPB 3:</span>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {(availableReviewerData?.discrepancy?.reasons || selectedGroupForThird?.discrepancy?.reasons || []).map((r: string, idx: number) => (
+                    <li key={idx}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Chi tiết nhóm và các điểm số hiện tại */}
+          <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-2">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-xs font-semibold text-slate-500 uppercase">Nhóm:</span>
+                <span className="ml-1.5 font-bold text-slate-900">{selectedGroupForThird?.code}</span>
+              </div>
+              <span className="text-xs text-slate-600 italic max-w-[280px] text-right truncate">
+                {selectedGroupForThird?.project?.title || selectedGroupForThird?.topic?.title || selectedGroupForThird?.topic?.nameVi || selectedGroupForThird?.name}
+              </span>
+            </div>
+
+            {/* Bảng đối soát điểm GVHD vs GVPB1 vs GVPB2 */}
+            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
+              <div className="bg-white p-2 rounded border border-slate-200">
+                <div className="text-[11px] text-slate-500 font-medium">GV Hướng dẫn</div>
+                <div className="text-xs font-semibold text-slate-800 truncate" title={selectedGroupForThird?.supervisor?.user?.fullName || selectedGroupForThird?.supervisor?.fullName || selectedGroupForThird?.topic?.owner?.fullName || 'GVHD'}>
+                  {selectedGroupForThird?.supervisor?.user?.fullName || selectedGroupForThird?.supervisor?.fullName || selectedGroupForThird?.topic?.owner?.fullName || 'GVHD'}
+                </div>
+                <div className="text-base font-bold text-emerald-600 mt-0.5">
+                  {availableReviewerData?.discrepancy?.scores?.gvhdScore != null
+                    ? Number(availableReviewerData.discrepancy.scores.gvhdScore).toFixed(2)
+                    : (selectedGroupForThird?.scores?.gvhd != null ? Number(selectedGroupForThird.scores.gvhd).toFixed(2) : '--')}
+                </div>
+              </div>
+
+              <div className="bg-white p-2 rounded border border-slate-200">
+                <div className="text-[11px] text-slate-500 font-medium">GVPB 1</div>
+                <div className="text-xs font-semibold text-slate-800 truncate" title={selectedGroupForThird?.primaryReviewer?.user?.fullName || selectedGroupForThird?.reviewers?.[0]?.lecturer?.user?.fullName || selectedGroupForThird?.reviewers?.[0]?.fullName}>
+                  {selectedGroupForThird?.primaryReviewer?.user?.fullName || selectedGroupForThird?.reviewers?.[0]?.lecturer?.user?.fullName || selectedGroupForThird?.reviewers?.[0]?.fullName || 'GVPB 1'}
+                </div>
+                <div className="text-base font-bold text-blue-600 mt-0.5">
+                  {availableReviewerData?.discrepancy?.scores?.gvpb1Score != null
+                    ? Number(availableReviewerData.discrepancy.scores.gvpb1Score).toFixed(2)
+                    : (selectedGroupForThird?.reviewers?.[0]?.total != null ? Number(selectedGroupForThird.reviewers[0].total).toFixed(2) : '--')}
+                </div>
+              </div>
+
+              <div className="bg-white p-2 rounded border border-slate-200">
+                <div className="text-[11px] text-slate-500 font-medium">GVPB 2</div>
+                <div className="text-xs font-semibold text-slate-800 truncate" title={selectedGroupForThird?.additionalReviewer?.user?.fullName || selectedGroupForThird?.reviewers?.[1]?.lecturer?.user?.fullName || selectedGroupForThird?.reviewers?.[1]?.fullName}>
+                  {selectedGroupForThird?.additionalReviewer?.user?.fullName || selectedGroupForThird?.reviewers?.[1]?.lecturer?.user?.fullName || selectedGroupForThird?.reviewers?.[1]?.fullName || 'GVPB 2'}
+                </div>
+                <div className="text-base font-bold text-purple-600 mt-0.5">
+                  {availableReviewerData?.discrepancy?.scores?.gvpb2Score != null
+                    ? Number(availableReviewerData.discrepancy.scores.gvpb2Score).toFixed(2)
+                    : (selectedGroupForThird?.reviewers?.[1]?.total != null ? Number(selectedGroupForThird.reviewers[1].total).toFixed(2) : '--')}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Chọn Giảng viên phản biện 3 */}
+          {loadingAvailable ? (
+            <div className="py-6 text-center text-slate-500 text-sm">Đang kiểm tra danh sách giảng viên hợp lệ...</div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                  Chọn Giảng viên phản biện thứ 3 (Thẩm định) *
+                </label>
+                <select
+                  value={assignThirdReviewerId}
+                  onChange={(e) => setAssignThirdReviewerId(e.target.value)}
+                  className="w-full text-sm border-slate-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border bg-white"
+                  required
+                >
+                  <option value="">-- Chọn giảng viên thẩm định --</option>
+                  {(availableReviewerData?.availableReviewers || [])
+                    .filter((l: any) => !l.isAlreadyAssigned && !l.isSupervisor)
+                    .map((lec: any) => (
+                      <option key={lec.id} value={lec.id} disabled={lec.quotaReached}>
+                        {lec.fullName} ({lec.code || lec.email}) — Hiện nhận: {lec.assignedCount}/{lec.quota} nhóm {lec.quotaReached ? '[Đã đạt hạn mức]' : ''}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  * Hệ thống tự động loại trừ GV Hướng dẫn và 2 GVPB ban đầu để đảm bảo tính khách quan độc lập.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Ghi chú chỉ đạo của Trưởng bộ môn (Tùy chọn)
+                </label>
+                <textarea
+                  value={assignThirdNote}
+                  onChange={(e) => setAssignThirdNote(e.target.value)}
+                  rows={2}
+                  className="w-full text-xs border border-slate-300 rounded-md p-2 focus:ring-1 focus:ring-indigo-500"
+                  placeholder="Ghi chú lý do phân công thẩm định hoặc hướng dẫn chấm bổ sung..."
+                />
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end gap-3 pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShowAssignThirdModal(false);
+                setAssignThirdGroupId('');
+                setAssignThirdReviewerId('');
+                setAssignThirdNote('');
+                setSelectedGroupForThird(null);
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={loadingAvailable || !assignThirdReviewerId || isSubmittingThirdReviewer}
+            >
+              {isSubmittingThirdReviewer ? 'Đang lưu...' : 'Xác nhận phân công GVPB 3'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
       {/* MODAL: Create Committee */}
       <Modal
         isOpen={showCommitteeModal}
@@ -3005,12 +3685,15 @@ export const HeadWorkspace: React.FC = () => {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                1. Chọn nhóm bảo vệ (Đã CHO LÀM TIẾP)
+                1. Phân nhóm bảo vệ ngay (Tùy chọn - có thể phân nhóm sau khi thành lập)
               </label>
               <span className="text-xs font-medium text-indigo-600">
                 Đã chọn: <b>{selectedCommitteeGroupIds.length}</b> nhóm
               </span>
             </div>
+            <p className="text-[11px] text-slate-500 italic">
+              Có thể để trống để thành lập Hội đồng trước. Sau khi thành lập, dùng chức năng "Phân nhóm" để chọn Hội đồng và phân các nhóm.
+            </p>
             <div className="max-h-36 overflow-y-auto space-y-1.5 border border-slate-200 p-2.5 rounded-lg bg-slate-50">
               {eligibleCommitteeGroups.length === 0 ? (
                 <div className="text-xs text-slate-400 italic p-2 text-center">
@@ -3169,6 +3852,302 @@ export const HeadWorkspace: React.FC = () => {
                 disabled={selectedMemberIds.length < 3}
               >
                 Tạo hội đồng
+              </Button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL: Assign Groups to Committee */}
+      <Modal
+        isOpen={showAssignGroupsModal}
+        onClose={() => {
+          setShowAssignGroupsModal(false);
+          setSelectedAssignGroupIds([]);
+          setAssignGroupSearch('');
+        }}
+        title="Phân công nhóm cho Hội đồng bảo vệ KLTN"
+      >
+        <form onSubmit={handleSaveAssignGroups} className="space-y-4 text-sm">
+          {/* 1. Chọn Hội đồng */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                1. Chọn Hội đồng bảo vệ
+              </label>
+              <span className="text-xs text-slate-500">
+                Tổng cộng: <b>{committees.length}</b> hội đồng
+              </span>
+            </div>
+            <select
+              value={selectedAssignCommitteeId}
+              onChange={(e) => handleSwitchAssignCommittee(e.target.value)}
+              className="w-full text-sm font-semibold p-2.5 rounded-xl border border-slate-300 bg-white shadow-xs focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              {committees.map((com) => {
+                const count = com.assignedGroups?.length || com.schedules?.filter((s: any) => s.group)?.length || 0;
+                return (
+                  <option key={com.id} value={com.id}>
+                    {com.name} ({count} nhóm đã gán)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Chi tiết Hội đồng được chọn & Chống xung đột vai trò */}
+          {selectedAssignCommittee && (
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  Thành viên {selectedAssignCommittee.name}:
+                </span>
+                <span className="text-[11px] font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                  {selectedAssignCommittee.members?.length || 0} thành viên
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {selectedAssignCommittee.members?.map((m: any) => (
+                  <div
+                    key={m.userId || m.id}
+                    className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 shadow-2xs"
+                  >
+                    <span className="font-semibold truncate mr-2">{m.user?.fullName || m.fullName}</span>
+                    <Badge variant={m.role === 'Chủ tịch' ? 'purple' : m.role === 'Thư ký' ? 'primary' : 'neutral'} size="sm">
+                      {m.role}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-start gap-2 p-2 bg-amber-50/80 rounded-lg border border-amber-200 text-amber-900 text-xs">
+                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <b>Chống xung đột vai trò GVHD:</b> Hệ thống tự động loại trừ và chặn chọn các nhóm có Giảng viên hướng dẫn trùng với bất kỳ thành viên nào của Hội đồng này.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* 2. Danh sách phân nhóm */}
+          <div className="space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                2. Phân các nhóm cho hội đồng này
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-md border border-indigo-200">
+                  Đã chọn: <b>{selectedAssignGroupIds.length}</b> nhóm
+                </span>
+              </div>
+            </div>
+
+            {/* Thanh tìm kiếm & bộ lọc */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Tìm theo mã nhóm, tên đề tài, tên GVHD..."
+                  value={assignGroupSearch}
+                  onChange={(e) => setAssignGroupSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setAssignGroupFilter('ALL')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    assignGroupFilter === 'ALL'
+                      ? 'bg-slate-800 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Tất cả ({candidateDefenseGroups.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignGroupFilter('ASSIGNED_THIS')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    assignGroupFilter === 'ASSIGNED_THIS'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Đã chọn ({selectedAssignGroupIds.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignGroupFilter('UNASSIGNED')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    assignGroupFilter === 'UNASSIGNED'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  Chưa gán
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons */}
+            <div className="flex items-center justify-between text-xs pt-1">
+              <span className="text-slate-500">
+                Hiển thị <b>{filteredCandidateGroups.length}</b> nhóm
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={selectAllValidAssignGroups}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline"
+                >
+                  Chọn tất cả nhóm hợp lệ
+                </button>
+                <span className="text-slate-300">|</span>
+                <button
+                  type="button"
+                  onClick={deselectAllAssignGroups}
+                  className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer underline"
+                >
+                  Bỏ chọn tất cả
+                </button>
+              </div>
+            </div>
+
+            {/* Danh sách các nhóm */}
+            <div className="max-h-72 overflow-y-auto space-y-1.5 border border-slate-200 p-2.5 rounded-xl bg-slate-50">
+              {filteredCandidateGroups.length === 0 ? (
+                <div className="text-xs text-slate-400 italic p-6 text-center">
+                  Không tìm thấy nhóm đề tài phù hợp với tiêu chí lọc.
+                </div>
+              ) : (
+                filteredCandidateGroups.map((grp: any) => {
+                  const isChecked = grp.isChecked;
+                  const isConflict = grp.isConflict;
+                  const isPoster = grp.isPoster;
+                  const isSelectable = grp.isSelectable;
+                  const currentCom = grp.currentAssignedCommittee;
+
+                  return (
+                    <div
+                      key={grp.id}
+                      onClick={() => toggleAssignGroup(grp)}
+                      className={`p-2.5 rounded-xl border text-xs transition-all ${
+                        isConflict
+                          ? 'bg-rose-50/70 border-rose-300 text-rose-900 cursor-not-allowed opacity-90'
+                          : isPoster
+                          ? 'bg-amber-50/60 border-amber-200 text-slate-500 cursor-not-allowed opacity-80'
+                          : isChecked
+                          ? 'bg-indigo-50/90 border-indigo-400 text-indigo-950 font-medium shadow-xs cursor-pointer ring-1 ring-indigo-400'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100/70 cursor-pointer'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            disabled={!isSelectable}
+                            onChange={() => {}}
+                            className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 disabled:opacity-40"
+                          />
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200 text-[11px]">
+                                {grp.code}
+                              </span>
+                              <span className="font-bold text-slate-900 text-xs">
+                                {grp.topic?.title || grp.name}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-3">
+                              <span>
+                                GVHD:{' '}
+                                <span className={`font-semibold ${isConflict ? 'text-rose-700 font-bold' : 'text-purple-700'}`}>
+                                  {grp.advisorName}
+                                </span>
+                              </span>
+                              {grp.gvhdScore !== null && grp.gvhdScore !== undefined && (
+                                <span className="text-emerald-700 font-medium">
+                                  Điểm GVHD: {Number(grp.gvhdScore).toFixed(1)}đ
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Badges trạng thái */}
+                        <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
+                          {isConflict && (
+                            <span className="text-[10px] font-bold text-rose-800 bg-rose-100 px-2 py-0.5 rounded-full border border-rose-300 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
+                              Xung đột: GVHD là thành viên HĐ này
+                            </span>
+                          )}
+                          {isPoster && !isConflict && (
+                            <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300">
+                              Báo cáo Poster (80%)
+                            </span>
+                          )}
+                          {isSelectable && currentCom && currentCom.id === selectedAssignCommitteeId && (
+                            <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-full border border-indigo-200">
+                              Đang thuộc HĐ này
+                            </span>
+                          )}
+                          {isSelectable && currentCom && currentCom.id !== selectedAssignCommitteeId && (
+                            <span className="text-[10px] font-medium text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200" title="Nếu chọn, nhóm sẽ được chuyển sang Hội đồng này">
+                              Đang ở: {currentCom.name}
+                            </span>
+                          )}
+                          {isSelectable && !currentCom && (
+                            <span className="text-[10px] font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              Chưa gán HĐ
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Footer actions */}
+          <div className="flex items-center justify-between pt-3 border-t border-slate-200">
+            <span className="text-xs text-slate-500">
+              Tổng số nhóm được gán: <b className="text-indigo-700">{selectedAssignGroupIds.length}</b>
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowAssignGroupsModal(false);
+                  setSelectedAssignGroupIds([]);
+                  setAssignGroupSearch('');
+                }}
+              >
+                Hủy
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={isSavingAssignGroups || !selectedAssignCommitteeId}
+                className="flex items-center gap-2"
+              >
+                {isSavingAssignGroups ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Đang lưu phân nhóm...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    Lưu phân công nhóm ({selectedAssignGroupIds.length})
+                  </>
+                )}
               </Button>
             </div>
           </div>
@@ -3367,9 +4346,36 @@ export const HeadWorkspace: React.FC = () => {
                 <div>
                   <span className="font-semibold text-slate-700">GVPB:</span>{' '}
                   {selectedScoreDetails.reviewer?.fullName || 'Chưa phân công'}
+                  {selectedScoreDetails.componentScores?.gvpb?.reviewersCount > 1 && (
+                    <span className="text-[11px] text-indigo-600 font-medium ml-1">
+                      ({selectedScoreDetails.componentScores.gvpb.reviewersCount} GVPB)
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
+
+            {/* Discrepancy Alert */}
+            {selectedScoreDetails.discrepancy?.hasDiscrepancy && (
+              <div className="bg-amber-50 border-l-4 border-amber-500 p-3 rounded-r-xl space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-900 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <span>Phát hiện chênh lệch điểm đánh giá KLTN</span>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  {selectedScoreDetails.discrepancy.hasThirdReviewer
+                    ? 'Nhóm đã được phân công Giảng viên phản biện thứ 3. Điểm GVPB tổng kết được tính theo trung bình cộng 3 GVPB.'
+                    : 'Cần phân công Giảng viên phản biện thứ 3 thẩm định theo quy chế (chênh nhau ≥ 4.0đ giữa 2 GVPB hoặc ≥ 2.0đ giữa GVPB và GVHD).'}
+                </p>
+                {selectedScoreDetails.discrepancy.reasons?.length > 0 && (
+                  <ul className="list-disc list-inside text-[11px] text-amber-900 mt-1 space-y-0.5">
+                    {selectedScoreDetails.discrepancy.reasons.map((r: string, idx: number) => (
+                      <li key={idx}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             {/* Formula */}
             <div className="bg-purple-50/70 p-3 rounded-xl border border-purple-200 space-y-1">
@@ -3463,6 +4469,59 @@ export const HeadWorkspace: React.FC = () => {
               </div>
             )}
 
+            {/* GVPB breakdown */}
+            {selectedScoreDetails.componentScores?.gvpb?.reviewers?.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                    Điểm từng Giảng viên phản biện (GVPB)
+                  </div>
+                  {selectedScoreDetails.componentScores.gvpb.hasThirdReviewer && (
+                    <Badge variant="purple" size="sm">Đã có GVPB thứ 3 (Thẩm định)</Badge>
+                  )}
+                </div>
+                <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="p-2">Giảng viên phản biện</th>
+                        <th className="p-2 text-center">Vai trò</th>
+                        <th className="p-2 text-center">Trạng thái</th>
+                        <th className="p-2 text-right">Điểm số</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedScoreDetails.componentScores.gvpb.reviewers.map((rev: any, rIdx: number) => (
+                        <tr key={rev.lecturerId || rIdx}>
+                          <td className="p-2 font-medium text-slate-800">{rev.fullName}</td>
+                          <td className="p-2 text-center">
+                            <Badge variant={rIdx === 2 ? 'purple' : 'neutral'} size="sm">
+                              {rIdx === 0 ? 'GVPB 1 (Chính)' : rIdx === 1 ? 'GVPB 2' : 'GVPB 3 (Thẩm định)'}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-center">
+                            {rev.total !== null ? (
+                              rev.isDraft ? <Badge variant="warning" size="sm">Bản nháp</Badge> : <Badge variant="success" size="sm">Đã chấm</Badge>
+                            ) : (
+                              <Badge variant="warning" size="sm">Chưa chấm</Badge>
+                            )}
+                          </td>
+                          <td className="p-2 text-right font-bold text-slate-900">
+                            {rev.total !== null ? `${Number(rev.total).toFixed(2)} / 10` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {selectedScoreDetails.componentScores.gvpb.formula && (
+                  <p className="text-[11px] text-slate-600 italic mt-1 font-mono bg-slate-50 p-1.5 rounded border border-slate-200">
+                    * Cách tính: {selectedScoreDetails.componentScores.gvpb.formula}
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Incomplete Warnings List */}
             {selectedScoreDetails.scoreCompleteness?.warnings?.length > 0 && (
               <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-1">
@@ -3483,6 +4542,20 @@ export const HeadWorkspace: React.FC = () => {
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              {selectedScoreDetails.discrepancy?.needsThirdReviewer && (
+                <Button
+                  variant="primary"
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-semibold flex items-center gap-1.5"
+                  onClick={() => {
+                    const item = selectedScoreDetails;
+                    setSelectedScoreDetails(null);
+                    handleOpenAssignThirdModal(item);
+                  }}
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Phân công GVPB 3</span>
+                </Button>
+              )}
               {(selectedScoreDetails.midtermStatus === 'CONTINUE' ||
                 selectedScoreDetails.group?.midtermStatus === 'CONTINUE') && (
                 <Button

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -8,9 +9,22 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+import { extname } from 'path';
 import { RoleCode, UserStatus } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -75,6 +89,19 @@ export class AdminController {
     return this.adminService.getUsers({ page, limit, search, role, status });
   }
 
+  @ApiOperation({ summary: 'Tải file Excel mẫu để thêm tài khoản người dùng' })
+  @Get('users/excel-template')
+  @Roles(RoleCode.ADMIN)
+  async downloadUserExcelTemplate(@Res() res: Response) {
+    const { buffer, filename } = await this.adminService.generateUserExcelTemplate();
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
+      'Content-Length': buffer.length.toString(),
+    });
+    res.end(buffer);
+  }
+
   @ApiOperation({ summary: 'Xem thông tin chi tiết một tài khoản' })
   @Get('users/:id')
   @Roles(RoleCode.ADMIN)
@@ -100,6 +127,44 @@ export class AdminController {
     @CurrentUser() user: { id: string },
   ) {
     return this.adminService.batchCreateUsers(dto, user?.id);
+  }
+
+  @ApiOperation({ summary: 'Thêm tài khoản người dùng hàng loạt từ file Excel (.xlsx, .xls)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'File Excel danh sách tài khoản (.xlsx, .xls)',
+        },
+      },
+    },
+  })
+  @Post('users/import-excel')
+  @Roles(RoleCode.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_, file, cb) => {
+        const ext = extname(file.originalname).toLowerCase();
+        if (!['.xlsx', '.xls'].includes(ext)) {
+          return cb(new BadRequestException('Định dạng file không hợp lệ. Vui lòng chọn file Excel (.xlsx, .xls)'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async importUsersFromExcel(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: { id: string },
+  ) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn file Excel để tải lên.');
+    }
+    return this.adminService.importUsersFromExcel(file, user?.id);
   }
 
   @ApiOperation({ summary: 'Cập nhật thông tin tài khoản người dùng' })

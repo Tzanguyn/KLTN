@@ -435,11 +435,38 @@ export class ScoresService {
     const midtermStatus = group?.midtermStatus ?? 'PENDING';
     const isMidtermPassed = midtermStatus === 'CONTINUE';
 
+    // Ràng buộc: Điểm của GVHD >= 6.0 mới được phản biện hoặc ra hội đồng
+    const gvhdUserId = topic?.ownerId;
+    let gvhdScore: number | null = null;
+    let isGvhdScoreEligible = false;
+    let gvhdEligibilityReason: string | null = null;
+
+    if (group?.id && gvhdUserId) {
+      const gScores = await this.prisma.score.findMany({
+        where: { groupId: group.id, scorerId: gvhdUserId },
+        include: { criterion: true },
+      });
+      const gScoresToCalc = this.getScoresToCalculate(gScores);
+      if (gScoresToCalc.length > 0) {
+        gvhdScore = this.calculateWeightedTotal(gScoresToCalc);
+        isGvhdScoreEligible = gvhdScore >= 6.0;
+      }
+    }
+
+    if (role === 'PHAN_BIEN' || role === 'HOI_DONG') {
+      if (gvhdScore === null) {
+        gvhdEligibilityReason =
+          'Giảng viên hướng dẫn chưa hoàn thành chấm điểm. Theo quy định, điểm GVHD phải >= 6.0 mới được phản biện hoặc ra hội đồng.';
+      } else if (gvhdScore < 6.0) {
+        gvhdEligibilityReason = `Điểm của Giảng viên hướng dẫn là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện phản biện hoặc ra hội đồng (yêu cầu điểm GVHD >= 6.0).`;
+      }
+    }
+
     const hasScores = existingScores.length > 0;
     const isOpened = existingScores.some((s) => s.status === 'OPENED' && (!s.unlockedUntil || s.unlockedUntil >= now));
     const isLocked = hasScores && !isOpened && existingScores.some((s) => s.status === 'LOCKED' || s.status === 'SUBMITTED');
     const isDraft = !hasScores || existingScores.some((s) => s.status === 'DRAFT');
-    const canEdit = isMidtermPassed && (!isLocked || isOpened || isDraft);
+    const canEdit = isMidtermPassed && (!isLocked || isOpened || isDraft) && !gvhdEligibilityReason;
 
     // Tính điểm tổng theo trọng số
     const totalScore = this.calculateWeightedTotal(existingScores);
@@ -548,6 +575,9 @@ export class ScoresService {
       isDraft,
       isLocked,
       canEdit,
+      gvhdScore,
+      isGvhdScoreEligible,
+      gvhdEligibilityReason,
       unlockRequest: unlockRequest
         ? {
             id: unlockRequest.id,
@@ -644,6 +674,27 @@ export class ScoresService {
       throw new BadRequestException(
         `Nhóm ${targetGroup.code} chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP). Vui lòng xác nhận đánh giá giữa kỳ trước khi tiến hành nhập điểm.`,
       );
+    }
+
+    // Ràng buộc: Điểm của GVHD >= 6.0 mới được phản biện hoặc ra hội đồng
+    const gvhdUserId = targetGroup.topic?.ownerId;
+    if (gvhdUserId && gvhdUserId !== userId) {
+      const gvhdScores = await this.prisma.score.findMany({
+        where: { groupId, scorerId: gvhdUserId },
+        include: { criterion: true },
+      });
+      const gvhdScoresToCalc = this.getScoresToCalculate(gvhdScores);
+      const gvhdTotal = gvhdScoresToCalc.length > 0 ? this.calculateWeightedTotal(gvhdScoresToCalc) : null;
+      if (gvhdTotal === null) {
+        throw new BadRequestException(
+          `Nhóm ${targetGroup.code} chưa có điểm từ Giảng viên hướng dẫn. Theo quy định, điểm của GVHD phải đạt từ 6.0 trở lên mới được phản biện hoặc ra hội đồng.`,
+        );
+      }
+      if (gvhdTotal < 6.0) {
+        throw new BadRequestException(
+          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện phản biện hoặc ra hội đồng (yêu cầu điểm GVHD >= 6.0).`,
+        );
+      }
     }
 
     // 2. Ràng buộc khóa điểm & thời hạn mở khóa: Nếu điểm đã khóa và chưa được mở khóa thì cấm sửa
@@ -1000,7 +1051,12 @@ export class ScoresService {
 
     const targetGroup = await this.prisma.group.findUnique({
       where: { id: dto.groupId },
-      select: { id: true, code: true, midtermStatus: true },
+      select: {
+        id: true,
+        code: true,
+        midtermStatus: true,
+        topic: { select: { ownerId: true } },
+      },
     });
     if (!targetGroup) throw new NotFoundException('Không tìm thấy nhóm đề tài');
     if (targetGroup.midtermStatus !== 'CONTINUE') {
@@ -1009,6 +1065,27 @@ export class ScoresService {
           ? `Nhóm ${targetGroup.code} đã dừng đề tài ở giữa kỳ, không thể nhập điểm.`
           : `Nhóm ${targetGroup.code} chưa được GVHD xác nhận qua giữa kỳ (CHO LÀM TIẾP). Vui lòng xác nhận giữa kỳ trước khi nhập điểm.`,
       );
+    }
+
+    // Ràng buộc: Điểm của GVHD >= 6.0 mới được phản biện hoặc ra hội đồng
+    const gvhdUserId = targetGroup.topic?.ownerId;
+    if (gvhdUserId && gvhdUserId !== userId) {
+      const gvhdScores = await this.prisma.score.findMany({
+        where: { groupId: dto.groupId, scorerId: gvhdUserId },
+        include: { criterion: true },
+      });
+      const gvhdScoresToCalc = this.getScoresToCalculate(gvhdScores);
+      const gvhdTotal = gvhdScoresToCalc.length > 0 ? this.calculateWeightedTotal(gvhdScoresToCalc) : null;
+      if (gvhdTotal === null) {
+        throw new BadRequestException(
+          `Nhóm ${targetGroup.code} chưa có điểm từ Giảng viên hướng dẫn. Theo quy định, điểm của GVHD phải đạt từ 6.0 trở lên mới được phản biện hoặc ra hội đồng.`,
+        );
+      }
+      if (gvhdTotal < 6.0) {
+        throw new BadRequestException(
+          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện phản biện hoặc ra hội đồng (yêu cầu điểm GVHD >= 6.0).`,
+        );
+      }
     }
 
     const existing = await this.prisma.score.findUnique({
@@ -1862,16 +1939,83 @@ export class ScoresService {
         };
       });
 
-      const reviewersWithScores = reviewers.filter((r) => r.total !== null);
-      const gvpbTotal =
-        reviewersWithScores.length > 0
-          ? Number(
-              (
-                reviewersWithScores.reduce((sum, r) => sum + (r.total || 0), 0) /
-                reviewersWithScores.length
-              ).toFixed(2),
-            )
-          : null;
+      // Kiểm tra độ lệch điểm theo quy chế:
+      // Chênh nhau giữa 2 GVPB >= 4 điểm HOẶC chênh giữa GVPB và GVHD >= 2 điểm
+      let isReviewersDiscrepancy = false;
+      let isGvhdDiscrepancy = false;
+      let diffReviewers: number | null = null;
+      let diffGvhd1: number | null = null;
+      let diffGvhd2: number | null = null;
+      const discrepancyReasons: string[] = [];
+
+      const r1 = reviewers[0] || null;
+      const r2 = reviewers[1] || null;
+      const r3 = reviewers[2] || null;
+
+      if (r1 && r2 && r1.total !== null && r2.total !== null) {
+        diffReviewers = Number(Math.abs(r1.total - r2.total).toFixed(2));
+        if (diffReviewers >= 4.0) {
+          isReviewersDiscrepancy = true;
+          discrepancyReasons.push(
+            `Điểm giữa 2 GVPB chênh lệch ${diffReviewers}đ (>= 4.0đ) [GVPB 1 (${r1.fullName}): ${r1.total}, GVPB 2 (${r2.fullName}): ${r2.total}]`,
+          );
+        }
+
+        if (gvhdTotal !== null) {
+          diffGvhd1 = Number(Math.abs(r1.total - gvhdTotal).toFixed(2));
+          diffGvhd2 = Number(Math.abs(r2.total - gvhdTotal).toFixed(2));
+          if (diffGvhd1 >= 2.0) {
+            isGvhdDiscrepancy = true;
+            discrepancyReasons.push(
+              `Điểm GVPB 1 và GVHD chênh lệch ${diffGvhd1}đ (>= 2.0đ) [GVPB 1 (${r1.fullName}): ${r1.total}, GVHD (${g.topic?.owner?.fullName || 'GVHD'}): ${gvhdTotal}]`,
+            );
+          }
+          if (diffGvhd2 >= 2.0) {
+            isGvhdDiscrepancy = true;
+            discrepancyReasons.push(
+              `Điểm GVPB 2 và GVHD chênh lệch ${diffGvhd2}đ (>= 2.0đ) [GVPB 2 (${r2.fullName}): ${r2.total}, GVHD (${g.topic?.owner?.fullName || 'GVHD'}): ${gvhdTotal}]`,
+            );
+          }
+        }
+      }
+
+      const hasDiscrepancy = isReviewersDiscrepancy || isGvhdDiscrepancy;
+      const hasThirdReviewer = g.reviewerAssignments.length >= 3;
+      const needsThirdReviewer = hasDiscrepancy && !hasThirdReviewer;
+
+      // Tính điểm gvpbTotal:
+      // Quy định: "Khi đó điểm của gvpb là trung bình của 3 gvpb"
+      let gvpbTotal: number | null = null;
+      let gvpbFormula = '';
+
+      if (hasThirdReviewer) {
+        if (r1?.total !== null && r2?.total !== null && r3?.total !== null) {
+          const sum3 = r1.total + r2.total + r3.total;
+          gvpbTotal = Number((sum3 / 3).toFixed(2));
+          gvpbFormula = `Điểm GVPB = (${r1.total} + ${r2.total} + ${r3.total}) / 3 = ${gvpbTotal} (Trung bình cộng 3 GVPB)`;
+        } else {
+          gvpbTotal = null;
+          gvpbFormula = `Đang chờ GVPB thứ 3 (${r3?.fullName || 'GVPB 3'}) chấm điểm để tính trung bình 3 GVPB`;
+        }
+      } else if (needsThirdReviewer) {
+        gvpbTotal = null;
+        gvpbFormula = `Cần phân công GVPB thứ 3 do lệch điểm (${discrepancyReasons.join('; ')})`;
+      } else {
+        const reviewersWithScores = reviewers.filter((r) => r.total !== null);
+        gvpbTotal =
+          reviewersWithScores.length > 0
+            ? Number(
+                (
+                  reviewersWithScores.reduce((sum, r) => sum + (r.total || 0), 0) /
+                  reviewersWithScores.length
+                ).toFixed(2),
+              )
+            : null;
+        gvpbFormula =
+          reviewersWithScores.length > 0
+            ? `Điểm GVPB = (${reviewersWithScores.map((r) => r.total).join(' + ')}) / ${reviewersWithScores.length} = ${gvpbTotal}`
+            : 'Chưa có điểm GVPB';
+      }
 
       // 3. Điểm Hội đồng
       const defense = g.defenses?.[0] || null;
@@ -2001,6 +2145,12 @@ export class ScoresService {
             missingComponents.push('GVHD_DIEM_MO_KHOA');
             warnings.push('Điểm của Cán bộ Hướng dẫn đang được mở khóa để chỉnh sửa');
           }
+          if (gvhdTotal !== null && gvhdTotal < 6.0) {
+            missingComponents.push('GVHD_DIEM_DUOI_6');
+            warnings.push(
+              `Điểm Cán bộ Hướng dẫn (${gvhdTotal}) < 6.0 — Không đủ điều kiện phản biện hoặc ra hội đồng`,
+            );
+          }
         }
 
         // Kiểm tra GVPB
@@ -2029,6 +2179,25 @@ export class ScoresService {
                 missingComponents.push('GVPB_DIEM_MO_KHOA');
                 warnings.push(`Điểm của GVPB (${revName}) đang được mở khóa để chỉnh sửa`);
               }
+            }
+          }
+
+          if (needsThirdReviewer) {
+            missingComponents.push('CAN_PHAN_CONG_GVPB_3');
+            warnings.push(
+              `Phát hiện lệch điểm: ${discrepancyReasons.join('; ')}. Trưởng bộ môn cần phân công GVPB thứ 3 để thẩm định.`,
+            );
+          } else if (hasThirdReviewer) {
+            if (!r3 || r3.total === null) {
+              missingComponents.push('GVPB_3_CHUA_CHAM');
+              warnings.push(
+                `Đã phân công GVPB thứ 3 (${r3?.fullName || 'GVPB 3'}) do lệch điểm. Đang chờ GVPB thứ 3 nhập điểm.`,
+              );
+            } else if (!r3.isComplete) {
+              missingComponents.push('GVPB_3_CHUA_DU_TIEU_CHI');
+              warnings.push(
+                `GVPB thứ 3 (${r3.fullName}) mới chấm ${r3.criteriaCount}/10 tiêu chí hoặc điểm vẫn ở bản nháp.`,
+              );
             }
           }
         }
@@ -2083,7 +2252,13 @@ export class ScoresService {
         }
       }
 
-      const isReadyForDefense = g.midtermStatus === 'CONTINUE' && g.status !== 'CANCELLED';
+      const isReadyForDefense =
+        g.midtermStatus === 'CONTINUE' &&
+        g.status !== 'CANCELLED' &&
+        gvhdTotal !== null &&
+        gvhdTotal >= 6.0 &&
+        !needsThirdReviewer &&
+        (!hasThirdReviewer || (r3 && r3.isComplete));
       const isComplete = isReadyForDefense && missingComponents.length === 0 && warnings.length === 0;
       const hasWarning = warnings.length > 0;
       const primaryReviewer = reviewers[0]
@@ -2109,10 +2284,15 @@ export class ScoresService {
             return rScores.length > 0 ? calculateStudentWeightedTotal(rScores, keys) : null;
           })
           .filter((v): v is number => v !== null);
-        const stGvpb =
-          stRevScores.length > 0
-            ? Number((stRevScores.reduce((a, b) => a + b, 0) / stRevScores.length).toFixed(2))
-            : null;
+
+        let stGvpb: number | null = null;
+        if (hasThirdReviewer) {
+          if (stRevScores.length >= 3) {
+            stGvpb = Number(((stRevScores[0] + stRevScores[1] + stRevScores[2]) / 3).toFixed(2));
+          }
+        } else if (!needsThirdReviewer && stRevScores.length > 0) {
+          stGvpb = Number((stRevScores.reduce((a, b) => a + b, 0) / stRevScores.length).toFixed(2));
+        }
 
         const stCouncilScores = (committee?.members || [])
           .map((cm: any) => {
@@ -2255,8 +2435,18 @@ export class ScoresService {
             total: gvpbTotal,
             reviewers,
             isComplete:
-              reviewers.length > 0 &&
+              reviewers.length >= (hasThirdReviewer ? 3 : 2) &&
               reviewers.every((r) => r.isComplete),
+            hasThirdReviewer,
+            needsThirdReviewer,
+            hasDiscrepancy,
+            isReviewersDiscrepancy,
+            isGvhdDiscrepancy,
+            diffReviewers,
+            diffGvhd1,
+            diffGvhd2,
+            discrepancyReasons,
+            formula: gvpbFormula,
           },
           council: {
             committeeName: committee?.name || null,
@@ -2285,6 +2475,27 @@ export class ScoresService {
           hasWarning,
           missingComponents,
           warnings,
+        },
+        discrepancy: {
+          hasDiscrepancy,
+          needsThirdReviewer,
+          hasThirdReviewer,
+          isReviewersDiscrepancy,
+          isGvhdDiscrepancy,
+          diffReviewers,
+          diffGvhd1,
+          diffGvhd2,
+          reasons: discrepancyReasons,
+          thirdReviewer:
+            hasThirdReviewer && r3
+              ? {
+                  id: r3.lecturerId,
+                  fullName: r3.fullName,
+                  email: r3.email,
+                  score: r3.total,
+                  isComplete: r3.isComplete,
+                }
+              : null,
         },
       };
     });

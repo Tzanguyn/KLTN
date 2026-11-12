@@ -60,7 +60,7 @@ export class UsersService {
   async lecturers() {
     return this.prisma.lecturerProfile.findMany({
       include: {
-        user: { select: { id: true, fullName: true, email: true, phone: true } },
+        user: { select: { id: true, fullName: true, email: true } },
         department: true,
       },
       orderBy: { user: { fullName: 'asc' } },
@@ -202,6 +202,8 @@ export class UsersService {
       creditsEarned: student.creditsEarned,
       duDieuKienDangKyKLTN: isEligible,
       eligible: student.eligible,
+      hasContactInfo: Boolean(student.user.phone && student.personalEmail),
+      requireProfileUpdate: Boolean(!student.user.phone || !student.personalEmail),
     };
   }
 
@@ -430,7 +432,6 @@ export class UsersService {
           (gvhdUser?.lecturerProfile?.title ? `${gvhdUser.lecturerProfile.title} ` : '') +
           (gvhdUser?.fullName || 'Chưa phân công'),
         email: gvhdUser?.email || '',
-        soDienThoai: gvhdUser?.phone || 'Chưa cập nhật',
         hocHamHocVi: gvhdUser?.lecturerProfile?.title || 'Giảng viên',
         chuyenMon: gvhdUser?.lecturerProfile?.specialization || '',
       },
@@ -1363,7 +1364,6 @@ export class UsersService {
       hoTen: string;
       email: string;
       vaiTro?: string;
-      soDienThoai?: string;
     }> = [];
 
     if (group?.reviewerAssignments) {
@@ -1373,7 +1373,6 @@ export class UsersService {
             hoTen: ra.lecturer.user.fullName,
             email: ra.lecturer.user.email,
             vaiTro: ra.type === 'PRIMARY' ? 'Phản biện chính' : 'Phản biện phụ',
-            soDienThoai: ra.lecturer.user.phone || undefined,
           });
         }
       }
@@ -1385,7 +1384,6 @@ export class UsersService {
         hoTen: reviewer.fullName,
         email: reviewer.email,
         vaiTro: 'Phản biện chính',
-        soDienThoai: reviewer.phone || undefined,
       });
     }
 
@@ -2434,11 +2432,36 @@ export class UsersService {
             },
           },
         },
+        scores: { include: { criterion: true } },
       },
     });
 
     if (!group) {
       throw new NotFoundException('Không tìm thấy nhóm KLTN');
+    }
+
+    if (group.midtermStatus !== 'CONTINUE') {
+      throw new BadRequestException('Chỉ nhóm được xác nhận CHO_LAM_TIEP ở giữa kỳ mới được phân công phản biện');
+    }
+
+    // Ràng buộc: Điểm của GVHD >= 6.0 mới được phản biện
+    const advId = group.topic?.ownerId;
+    const gvhdScores = advId ? (group as any).scores?.filter((s: any) => s.scorerId === advId) : [];
+    const tcScores = gvhdScores?.filter((s: any) => s.criterion?.code?.startsWith('TC')) || [];
+    const scoresToCalc = tcScores.length > 0 ? tcScores : gvhdScores;
+    const gvhdScore = scoresToCalc && scoresToCalc.length > 0
+      ? Number((scoresToCalc.reduce((sum: number, s: any) => sum + (Number(s.value) || 0), 0) / scoresToCalc.length).toFixed(2))
+      : null;
+
+    if (gvhdScore === null) {
+      throw new BadRequestException(
+        `Nhóm ${group.code} chưa có điểm đánh giá từ Giảng viên hướng dẫn. Theo quy định, điểm của GVHD phải >= 6.0 mới được phản biện.`,
+      );
+    }
+    if (gvhdScore < 6.0) {
+      throw new BadRequestException(
+        `Điểm đánh giá của GVHD là ${gvhdScore} (< 6.0). Nhóm ${group.code} không đủ điều kiện phân công phản biện (yêu cầu điểm GVHD >= 6.0).`,
+      );
     }
 
     const advisorUserId = group.topic?.ownerId;
@@ -2501,6 +2524,9 @@ export class UsersService {
       if (isAdvisor) {
         isAvailable = false;
         reason = 'Là giảng viên hướng dẫn (GVHD) của nhóm này (loại trừ theo quy định)';
+      } else if (isAlreadyAssigned) {
+        isAvailable = false;
+        reason = 'Đã được phân công làm Giảng viên phản biện cho nhóm này';
       } else if (isOverloaded) {
         isAvailable = false;
         reason = `Đã đạt định mức phản biện tối đa (${currentReviewCount}/${maxReviews} nhóm)`;
@@ -2580,6 +2606,61 @@ export class UsersService {
       ? 'Lấy danh sách giảng viên phản biện khả dụng thành công'
       : 'Không đủ số lượng giảng viên phù hợp để phân công 2 GVPB (cần tối thiểu 2 giảng viên không phải GVHD và chưa đủ định mức)';
 
+    // Tính điểm từng reviewer hiện tại & kiểm tra độ lệch điểm
+    const currentAssignmentsWithScores = group.reviewerAssignments.map((ra) => {
+      const revUserId = ra.lecturer?.user?.id;
+      let revScore: number | null = null;
+      if (revUserId) {
+        const revScores = (group as any).scores?.filter((s: any) => s.scorerId === revUserId) || [];
+        const tcScores = revScores.filter((s: any) => s.criterion?.code?.startsWith('TC'));
+        const scoresToCalc = tcScores.length > 0 ? tcScores : revScores;
+        if (scoresToCalc.length > 0) {
+          revScore = Number((scoresToCalc.reduce((sum: number, s: any) => sum + (Number(s.value) || 0), 0) / scoresToCalc.length).toFixed(2));
+        }
+      }
+      return {
+        id: ra.id,
+        lecturerId: ra.lecturerId,
+        userId: revUserId,
+        fullName: ra.lecturer.user?.fullName,
+        type: ra.type,
+        score: revScore,
+      };
+    });
+
+    let isReviewersDiscrepancy = false;
+    let isGvhdDiscrepancy = false;
+    let diffReviewers: number | null = null;
+    let diffGvhd1: number | null = null;
+    let diffGvhd2: number | null = null;
+    const discrepancyReasons: string[] = [];
+
+    const r1 = currentAssignmentsWithScores[0];
+    const r2 = currentAssignmentsWithScores[1];
+    if (r1 && r2 && r1.score !== null && r2.score !== null) {
+      diffReviewers = Number(Math.abs(r1.score - r2.score).toFixed(2));
+      if (diffReviewers >= 4.0) {
+        isReviewersDiscrepancy = true;
+        discrepancyReasons.push(`Điểm giữa 2 GVPB chênh lệch ${diffReviewers}đ (>= 4.0đ) [${r1.fullName}: ${r1.score}, ${r2.fullName}: ${r2.score}]`);
+      }
+      if (gvhdScore !== null) {
+        diffGvhd1 = Number(Math.abs(r1.score - gvhdScore).toFixed(2));
+        diffGvhd2 = Number(Math.abs(r2.score - gvhdScore).toFixed(2));
+        if (diffGvhd1 >= 2.0) {
+          isGvhdDiscrepancy = true;
+          discrepancyReasons.push(`Điểm GVPB 1 và GVHD chênh lệch ${diffGvhd1}đ (>= 2.0đ) [${r1.fullName}: ${r1.score}, GVHD: ${gvhdScore}]`);
+        }
+        if (diffGvhd2 >= 2.0) {
+          isGvhdDiscrepancy = true;
+          discrepancyReasons.push(`Điểm GVPB 2 và GVHD chênh lệch ${diffGvhd2}đ (>= 2.0đ) [${r2.fullName}: ${r2.score}, GVHD: ${gvhdScore}]`);
+        }
+      }
+    }
+
+    const hasDiscrepancy = isReviewersDiscrepancy || isGvhdDiscrepancy;
+    const hasThirdReviewer = group.reviewerAssignments.length >= 3;
+    const needsThirdReviewer = hasDiscrepancy && !hasThirdReviewer;
+
     return {
       groupId: group.id,
       groupCode: group.code,
@@ -2595,17 +2676,24 @@ export class UsersService {
             lecturerProfileId: group.topic.owner.lecturerProfile?.id,
           }
         : null,
-      currentAssignments: group.reviewerAssignments.map((ra) => ({
-        id: ra.id,
-        lecturerId: ra.lecturerId,
-        fullName: ra.lecturer.user?.fullName,
-        type: ra.type,
-      })),
+      currentAssignments: currentAssignmentsWithScores,
       hasEnoughReviewers,
       message,
       availableReviewers,
       allReviewers,
       suggestedPairs,
+      discrepancy: {
+        gvhdScore,
+        hasDiscrepancy,
+        needsThirdReviewer,
+        hasThirdReviewer,
+        isReviewersDiscrepancy,
+        isGvhdDiscrepancy,
+        diffReviewers,
+        diffGvhd1,
+        diffGvhd2,
+        reasons: discrepancyReasons,
+      },
     };
   }
 
@@ -2654,6 +2742,41 @@ export class UsersService {
         semesterId,
       },
     });
+  }
+
+  async getLecturerMeetingLink(userId: string) {
+    const config = await this.prisma.systemConfig.findFirst({
+      where: { key: `LECTURER_MEET_URL_${userId}` },
+    });
+    const url = config?.value
+      ? typeof config.value === 'string'
+        ? config.value
+        : (config.value as any)?.url
+      : null;
+    return { meetingUrl: url || '' };
+  }
+
+  async saveLecturerMeetingLink(userId: string, meetingUrl: string) {
+    const trimmed = (meetingUrl || '').trim();
+    const existing = await this.prisma.systemConfig.findFirst({
+      where: { key: `LECTURER_MEET_URL_${userId}` },
+    });
+
+    if (existing) {
+      await this.prisma.systemConfig.update({
+        where: { id: existing.id },
+        data: { value: { url: trimmed } },
+      });
+    } else {
+      await this.prisma.systemConfig.create({
+        data: {
+          key: `LECTURER_MEET_URL_${userId}`,
+          value: { url: trimmed },
+          description: `Link Google Meet mặc định của Giảng viên (${userId})`,
+        },
+      });
+    }
+    return { meetingUrl: trimmed };
   }
 }
 

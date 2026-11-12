@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { RoleCode, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import ExcelJS from 'exceljs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import {
@@ -127,7 +128,6 @@ export class AdminService {
             id: head.user.id,
             fullName: head.user.fullName,
             email: head.user.email,
-            phone: head.user.phone,
             lecturerCode: head.user.lecturerProfile?.lecturerCode,
             title: head.user.lecturerProfile?.title,
             department: head.user.lecturerProfile?.department?.name,
@@ -138,7 +138,6 @@ export class AdminService {
             id: manager.user.id,
             fullName: manager.user.fullName,
             email: manager.user.email,
-            phone: manager.user.phone,
             lecturerCode: manager.user.lecturerProfile?.lecturerCode,
             title: manager.user.lecturerProfile?.title,
             department: manager.user.lecturerProfile?.department?.name,
@@ -487,6 +486,489 @@ export class AdminService {
 
     return {
       total: dto.users.length,
+      successCount,
+      failureCount,
+      results,
+    };
+  }
+
+  /**
+   * Trích xuất giá trị chuỗi an toàn từ một cell ExcelJS
+   */
+  private extractCellValue(cell: any): string {
+    if (cell === null || cell === undefined) return '';
+    const val = cell.value;
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'string') return val.trim();
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val).trim();
+    if (val instanceof Date) return val.toISOString();
+    if (typeof val === 'object') {
+      if (val.text !== undefined) return String(val.text).trim();
+      if (val.result !== undefined) return String(val.result).trim();
+      if (Array.isArray(val.richText)) {
+        return val.richText.map((t: any) => (t && t.text ? t.text : '')).join('').trim();
+      }
+    }
+    return String(val).trim();
+  }
+
+  /**
+   * Chuẩn hóa tên cột (bỏ dấu tiếng Việt, viết thường, bỏ ký tự đặc biệt)
+   */
+  private normalizeHeader(header: string): string {
+    if (!header) return '';
+    return header
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  /**
+   * Nhận diện trường dữ liệu từ tên cột
+   */
+  private detectHeaderField(normalized: string): string | null {
+    if (['email', 'mail', 'thudientu', 'taikhoan', 'diachiemail'].includes(normalized)) return 'email';
+    if (['hovaten', 'hoten', 'fullname', 'name', 'ten', 'hovatennguoidung'].includes(normalized)) return 'fullName';
+    if (['vaitro', 'role', 'chucvu', 'loaitaikhoan', 'quyen'].includes(normalized)) return 'role';
+    if (['matkhau', 'password', 'pass'].includes(normalized)) return 'password';
+    if (['sodienthoai', 'dienthoai', 'sdt', 'phone', 'tel', 'soct', 'lienhe'].includes(normalized)) return 'phone';
+    if (['masv', 'mssv', 'masinhvien', 'studentcode'].includes(normalized)) return 'studentCode';
+    if (['magv', 'msgv', 'magiangvien', 'lecturercode'].includes(normalized)) return 'lecturerCode';
+    if (['masvgv', 'masocanhan', 'macanhan', 'maso', 'code', 'masvmagv'].includes(normalized)) return 'genericCode';
+    if (['lophoc', 'lop', 'classname', 'malop', 'lopsinhhoat'].includes(normalized)) return 'className';
+    if (['khoahoc', 'nienkhoa', 'cohort'].includes(normalized)) return 'cohort';
+    if (['tinchi', 'sotinchi', 'tinchitichluy', 'creditsearned', 'credits'].includes(normalized)) return 'creditsEarned';
+    if (['gpa', 'diemtb', 'diemtichluy', 'diem'].includes(normalized)) return 'gpa';
+    if (['dudieukien', 'dudk', 'xetkltn', 'eligible'].includes(normalized)) return 'eligible';
+    if (['hocvi', 'hocham', 'title', 'chucdanh'].includes(normalized)) return 'title';
+    if (['chuyennganh', 'specialization', 'huongnghiencuu', 'bomonchuyenmon'].includes(normalized)) return 'specialization';
+    if (['sonhomtoida', 'sonhom', 'maxgroups', 'sohuongdan', 'hanmucnhom'].includes(normalized)) return 'maxGroups';
+    if (['bomon', 'khoa', 'mabomon', 'makhoa', 'departmentcode', 'department'].includes(normalized)) return 'departmentCode';
+    return null;
+  }
+
+  /**
+   * Nhận diện và ánh xạ RoleCode
+   */
+  private parseRole(
+    rawRole: string,
+    studentCode?: string,
+    lecturerCode?: string,
+    genericCode?: string,
+  ): RoleCode {
+    const norm = this.normalizeHeader(rawRole);
+    if (['sinhvien', 'sv', 'student'].includes(norm) || norm.includes('sinhvien')) return RoleCode.SINH_VIEN;
+    if (['giangvien', 'gv', 'lecturer', 'teacher'].includes(norm) || norm.includes('giangvien')) return RoleCode.GIANG_VIEN;
+    if (['truongbomon', 'tbm', 'head'].includes(norm) || norm.includes('truong')) return RoleCode.TRUONG_BO_MON;
+    if (['quanlybomon', 'qlbm', 'manager'].includes(norm) || norm.includes('quanly')) return RoleCode.QUAN_LY_BO_MON;
+    if (['admin', 'quantri', 'quantrivien', 'administrator'].includes(norm)) return RoleCode.ADMIN;
+
+    if (studentCode || (genericCode && genericCode.toUpperCase().startsWith('SV'))) {
+      return RoleCode.SINH_VIEN;
+    }
+    if (lecturerCode || (genericCode && genericCode.toUpperCase().startsWith('GV'))) {
+      return RoleCode.GIANG_VIEN;
+    }
+
+    return RoleCode.SINH_VIEN;
+  }
+
+  /**
+   * Chuyển đổi giá trị sang boolean (cho trường eligible)
+   */
+  private parseBoolean(val: string): boolean {
+    if (!val) return true;
+    const norm = this.normalizeHeader(val);
+    if (['co', 'true', 'yes', '1', 'dat', 'ok'].includes(norm)) return true;
+    if (['khong', 'false', 'no', '0', 'chuadat', 'k'].includes(norm)) return false;
+    return true;
+  }
+
+  /**
+   * Tạo và xuất file Excel mẫu chuẩn hóa để Admin tải về và nhập liệu
+   */
+  async generateUserExcelTemplate(): Promise<{ buffer: Buffer; filename: string }> {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'KLTN System Admin';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Danh sach tai khoan', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+
+    sheet.columns = [
+      { header: 'STT', key: 'stt', width: 8 },
+      { header: 'Email (*)', key: 'email', width: 30 },
+      { header: 'Họ và tên (*)', key: 'fullName', width: 26 },
+      { header: 'Vai trò (*)', key: 'role', width: 18 },
+      { header: 'Mật khẩu', key: 'password', width: 16 },
+      { header: 'Số điện thoại', key: 'phone', width: 16 },
+      { header: 'Mã SV / Mã GV', key: 'genericCode', width: 18 },
+      { header: 'Lớp học (SV)', key: 'className', width: 16 },
+      { header: 'Khóa (SV)', key: 'cohort', width: 12 },
+      { header: 'Tín chỉ tích lũy (SV)', key: 'creditsEarned', width: 22 },
+      { header: 'GPA (SV)', key: 'gpa', width: 12 },
+      { header: 'Đủ ĐK (SV)', key: 'eligible', width: 14 },
+      { header: 'Học vị (GV)', key: 'title', width: 14 },
+      { header: 'Chuyên ngành (GV)', key: 'specialization', width: 26 },
+      { header: 'Số nhóm tối đa (GV)', key: 'maxGroups', width: 20 },
+      { header: 'Mã bộ môn', key: 'departmentCode', width: 14 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.height = 30;
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' },
+      };
+      cell.font = {
+        name: 'Calibri',
+        size: 11,
+        bold: true,
+        color: { argb: 'FFFFFFFF' },
+      };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'medium', color: { argb: 'FF475569' } },
+        right: { style: 'thin', color: { argb: 'FF94A3B8' } },
+      };
+    });
+
+    sheet.addRow({
+      stt: 1,
+      email: 'sinhvien.mau1@kltn.edu.vn',
+      fullName: 'Nguyễn Văn An',
+      role: 'SINH_VIEN',
+      password: 'Password@123',
+      phone: '0901234567',
+      genericCode: 'SV2026001',
+      className: 'DHKTPM18A',
+      cohort: 2026,
+      creditsEarned: 125,
+      gpa: 3.42,
+      eligible: 'Có',
+      title: '',
+      specialization: '',
+      maxGroups: '',
+      departmentCode: 'CNTT',
+    });
+
+    sheet.addRow({
+      stt: 2,
+      email: 'sinhvien.mau2@kltn.edu.vn',
+      fullName: 'Trần Thị Bình',
+      role: 'SINH_VIEN',
+      password: '',
+      phone: '0912345678',
+      genericCode: 'SV2026002',
+      className: 'DHKTPM18B',
+      cohort: 2026,
+      creditsEarned: 118,
+      gpa: 3.15,
+      eligible: 'Có',
+      title: '',
+      specialization: '',
+      maxGroups: '',
+      departmentCode: 'CNTT',
+    });
+
+    sheet.addRow({
+      stt: 3,
+      email: 'giangvien.mau1@kltn.edu.vn',
+      fullName: 'Lê Hoàng Long',
+      role: 'GIANG_VIEN',
+      password: '',
+      phone: '0987654321',
+      genericCode: 'GV0089',
+      className: '',
+      cohort: '',
+      creditsEarned: '',
+      gpa: '',
+      eligible: '',
+      title: 'TS.',
+      specialization: 'Khoa học dữ liệu & Trí tuệ nhân tạo',
+      maxGroups: 5,
+      departmentCode: 'CNTT',
+    });
+
+    for (let r = 2; r <= 4; r++) {
+      const row = sheet.getRow(r);
+      row.height = 22;
+      row.eachCell((cell) => {
+        cell.font = { name: 'Calibri', size: 10 };
+        cell.alignment = { vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        };
+      });
+    }
+
+    const guideSheet = workbook.addWorksheet('Huong dan nhap lieu');
+    guideSheet.columns = [
+      { header: 'Tên cột', key: 'col', width: 25 },
+      { header: 'Quy tắc', key: 'required', width: 14 },
+      { header: 'Mô tả & Định dạng chấp nhận', key: 'desc', width: 55 },
+      { header: 'Ví dụ hợp lệ', key: 'example', width: 30 },
+    ];
+    guideSheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    guideSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+    guideSheet.getRow(1).height = 28;
+
+    const guideRows = [
+      { col: 'Email (*)', required: 'Bắt buộc', desc: 'Địa chỉ email duy nhất, chưa tồn tại trong hệ thống', example: 'sv2026@kltn.edu.vn' },
+      { col: 'Họ và tên (*)', required: 'Bắt buộc', desc: 'Họ và tên đầy đủ của người dùng', example: 'Nguyễn Văn An' },
+      { col: 'Vai trò (*)', required: 'Bắt buộc', desc: 'SINH_VIEN | GIANG_VIEN | TRUONG_BO_MON | QUAN_LY_BO_MON | ADMIN', example: 'SINH_VIEN' },
+      { col: 'Mật khẩu', required: 'Tùy chọn', desc: 'Tối thiểu 8 ký tự. Để trống mặc định là Password@123', example: 'Password@123' },
+      { col: 'Số điện thoại', required: 'Tùy chọn', desc: 'Số điện thoại liên lạc', example: '0901234567' },
+      { col: 'Mã SV / Mã GV', required: 'Khuyến nghị', desc: 'Mã số sinh viên hoặc mã số giảng viên (duy nhất)', example: 'SV2026001 / GV0089' },
+      { col: 'Lớp học (SV)', required: 'Sinh viên', desc: 'Lớp sinh hoạt dành cho sinh viên', example: 'DHKTPM18A' },
+      { col: 'Khóa (SV)', required: 'Sinh viên', desc: 'Khóa học (số nguyên)', example: '2026' },
+      { col: 'Tín chỉ (SV)', required: 'Sinh viên', desc: 'Số tín chỉ đã tích lũy (số nguyên)', example: '125' },
+      { col: 'GPA (SV)', required: 'Sinh viên', desc: 'Điểm trung bình tích lũy thang điểm 4 (số thập phân)', example: '3.42' },
+      { col: 'Đủ ĐK (SV)', required: 'Sinh viên', desc: 'Đủ điều kiện làm KLTN (Có / Không hoặc 1 / 0)', example: 'Có' },
+      { col: 'Học vị (GV)', required: 'Giảng viên', desc: 'Học hàm / học vị của giảng viên', example: 'TS., ThS., PGS.TS.' },
+      { col: 'Chuyên ngành (GV)', required: 'Giảng viên', desc: 'Hướng nghiên cứu / chuyên môn giảng dạy', example: 'Kỹ thuật phần mềm' },
+      { col: 'Số nhóm tối đa (GV)', required: 'Giảng viên', desc: 'Số nhóm KLTN tối đa có thể hướng dẫn (mặc định 5)', example: '5' },
+      { col: 'Mã bộ môn', required: 'Tùy chọn', desc: 'Mã bộ môn quản lý (mặc định CNTT)', example: 'CNTT' },
+    ];
+
+    guideRows.forEach((r) => guideSheet.addRow(r));
+    for (let r = 2; r <= guideRows.length + 1; r++) {
+      guideSheet.getRow(r).height = 20;
+      guideSheet.getRow(r).alignment = { vertical: 'middle' };
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return {
+      buffer: Buffer.from(buffer),
+      filename: 'Mau_Nhap_Tai_Khoan.xlsx',
+    };
+  }
+
+  /**
+   * Đọc và nhập danh sách tài khoản người dùng từ file Excel
+   */
+  async importUsersFromExcel(file: Express.Multer.File, adminId?: string) {
+    if (!file || !file.buffer) {
+      throw new BadRequestException('Tệp tải lên không hợp lệ hoặc rỗng.');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    try {
+      await workbook.xlsx.load(file.buffer as any);
+    } catch (err: any) {
+      throw new BadRequestException('Không thể đọc file Excel. Định dạng file có thể bị hỏng hoặc không đúng.');
+    }
+
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet || worksheet.rowCount <= 1) {
+      throw new BadRequestException('File Excel không có dữ liệu để nhập.');
+    }
+
+    // Quét tìm dòng tiêu đề chứa cột 'email' (hỗ trợ file có dòng tiêu đề banner ở đầu)
+    let headerRowIndex = -1;
+    let columnMap: { [colNumber: number]: string } = {};
+
+    for (let r = 1; r <= Math.min(worksheet.rowCount, 10); r++) {
+      const row = worksheet.getRow(r);
+      let hasEmail = false;
+      const tempMap: { [colNumber: number]: string } = {};
+
+      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const rawVal = this.extractCellValue(cell);
+        const norm = this.normalizeHeader(rawVal);
+        const field = this.detectHeaderField(norm);
+        if (field) {
+          tempMap[colNumber] = field;
+          if (field === 'email') {
+            hasEmail = true;
+          }
+        }
+      });
+
+      if (hasEmail) {
+        headerRowIndex = r;
+        columnMap = tempMap;
+        break;
+      }
+    }
+
+    if (headerRowIndex === -1) {
+      throw new BadRequestException(
+        'Không tìm thấy dòng tiêu đề chứa cột "Email" trong file Excel. Vui lòng sử dụng file mẫu chuẩn của hệ thống.',
+      );
+    }
+
+    const results: Array<{
+      rowNumber: number;
+      email: string;
+      fullName: string;
+      role?: RoleCode | string;
+      status: 'SUCCESS' | 'ERROR';
+      message?: string;
+    }> = [];
+
+    for (let r = headerRowIndex + 1; r <= worksheet.rowCount; r++) {
+      const row = worksheet.getRow(r);
+
+      const rowData: Record<string, string> = {};
+      let hasAnyData = false;
+
+      Object.entries(columnMap).forEach(([colNumberStr, field]) => {
+        const colNumber = parseInt(colNumberStr, 10);
+        const cell = row.getCell(colNumber);
+        const val = this.extractCellValue(cell);
+        if (val) {
+          hasAnyData = true;
+          rowData[field] = val;
+        }
+      });
+
+      if (!hasAnyData) {
+        continue;
+      }
+
+      const email = (rowData['email'] || '').trim().toLowerCase();
+      const fullName = (rowData['fullName'] || '').trim();
+      const rawRole = (rowData['role'] || '').trim();
+      const password = (rowData['password'] || '').trim();
+      const phone = (rowData['phone'] || '').trim();
+      const genericCode = (rowData['genericCode'] || '').trim();
+      let studentCode = (rowData['studentCode'] || '').trim();
+      let lecturerCode = (rowData['lecturerCode'] || '').trim();
+      const className = (rowData['className'] || '').trim();
+      const cohortRaw = (rowData['cohort'] || '').trim();
+      const creditsRaw = (rowData['creditsEarned'] || '').trim();
+      const gpaRaw = (rowData['gpa'] || '').trim();
+      const eligibleRaw = (rowData['eligible'] || '').trim();
+      const title = (rowData['title'] || '').trim();
+      const specialization = (rowData['specialization'] || '').trim();
+      const maxGroupsRaw = (rowData['maxGroups'] || '').trim();
+      const departmentCode = (rowData['departmentCode'] || '').trim();
+
+      if (!email) {
+        results.push({
+          rowNumber: r,
+          email: '(Trống)',
+          fullName: fullName || '(Trống)',
+          status: 'ERROR',
+          message: 'Cột Email không được để trống.',
+        });
+        continue;
+      }
+
+      if (!email.includes('@')) {
+        results.push({
+          rowNumber: r,
+          email,
+          fullName: fullName || '(Trống)',
+          status: 'ERROR',
+          message: 'Địa chỉ Email không đúng định dạng.',
+        });
+        continue;
+      }
+
+      if (!fullName) {
+        results.push({
+          rowNumber: r,
+          email,
+          fullName: '(Trống)',
+          status: 'ERROR',
+          message: 'Họ và tên không được để trống.',
+        });
+        continue;
+      }
+
+      const role = this.parseRole(rawRole, studentCode, lecturerCode, genericCode);
+
+      if (role === RoleCode.SINH_VIEN && !studentCode && genericCode) {
+        studentCode = genericCode;
+      } else if (
+        (role === RoleCode.GIANG_VIEN ||
+          role === RoleCode.TRUONG_BO_MON ||
+          role === RoleCode.QUAN_LY_BO_MON) &&
+        !lecturerCode &&
+        genericCode
+      ) {
+        lecturerCode = genericCode;
+      }
+
+      const cohort = cohortRaw ? parseInt(cohortRaw, 10) : undefined;
+      const creditsEarned = creditsRaw ? parseInt(creditsRaw, 10) : undefined;
+      const gpa = gpaRaw ? parseFloat(gpaRaw) : undefined;
+      const eligible = eligibleRaw ? this.parseBoolean(eligibleRaw) : true;
+      const maxGroups = maxGroupsRaw ? parseInt(maxGroupsRaw, 10) : undefined;
+
+      const dto: CreateUserDto = {
+        email,
+        fullName,
+        role,
+        password: password || undefined,
+        phone: phone || undefined,
+        studentCode: studentCode || undefined,
+        className: className || undefined,
+        cohort: !isNaN(cohort as any) ? cohort : undefined,
+        creditsEarned: !isNaN(creditsEarned as any) ? creditsEarned : undefined,
+        gpa: !isNaN(gpa as any) ? gpa : undefined,
+        eligible,
+        lecturerCode: lecturerCode || undefined,
+        title: title || undefined,
+        specialization: specialization || undefined,
+        maxGroups: !isNaN(maxGroups as any) ? maxGroups : undefined,
+        departmentCode: departmentCode || undefined,
+      };
+
+      try {
+        await this.createUser(dto, adminId);
+        results.push({
+          rowNumber: r,
+          email,
+          fullName,
+          role,
+          status: 'SUCCESS',
+        });
+      } catch (err: any) {
+        results.push({
+          rowNumber: r,
+          email,
+          fullName,
+          role,
+          status: 'ERROR',
+          message: err.message || 'Lỗi tạo tài khoản',
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.status === 'SUCCESS').length;
+    const failureCount = results.filter((r) => r.status === 'ERROR').length;
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: adminId || null,
+          action: 'ADMIN_IMPORT_EXCEL_USERS',
+          entity: 'User',
+          metadata: {
+            filename: file.originalname,
+            totalRows: results.length,
+            successCount,
+            failureCount,
+          },
+        },
+      });
+    } catch {}
+
+    return {
+      totalRows: results.length,
       successCount,
       failureCount,
       results,

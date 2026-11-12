@@ -137,8 +137,30 @@ export class AppointmentsService {
       ? AppointmentMode.OFFLINE
       : AppointmentMode.ONLINE;
 
-    const location = dto.phong || dto.location || undefined;
-    const meetingUrl = dto.linkMeet || dto.meetingUrl || undefined;
+    let location = dto.phong || dto.location || undefined;
+    let meetingUrl = dto.linkMeet || dto.meetingUrl || undefined;
+
+    if (mode === AppointmentMode.ONLINE) {
+      // Nếu chưa có meetingUrl nhưng location có dạng URL http/https thì chuyển sang meetingUrl
+      if (!meetingUrl && location && (location.startsWith('http://') || location.startsWith('https://'))) {
+        meetingUrl = location;
+        location = undefined;
+      }
+      // Nếu location chỉ là chuỗi "Google Meet" thì xóa để tránh lưu nhầm thành địa điểm offline
+      if (location && location.trim().toLowerCase() === 'google meet') {
+        location = undefined;
+      }
+      // Nếu vẫn chưa có meetingUrl, tự động lấy link Google Meet mặc định của Giảng viên (hostId)
+      if (!meetingUrl) {
+        const meetConfig = await this.prisma.systemConfig.findFirst({
+          where: { key: `LECTURER_MEET_URL_${userId}` },
+        });
+        if (meetConfig?.value) {
+          const cfgVal = meetConfig.value;
+          meetingUrl = typeof cfgVal === 'string' ? cfgVal : (cfgVal as any)?.url;
+        }
+      }
+    }
 
     // 3. Phân giải tiêu đề & nội dung
     let title = dto.title?.trim() || dto.noiDung?.trim();

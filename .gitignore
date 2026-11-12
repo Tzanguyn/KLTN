@@ -66,5 +66,12 @@ ehthumbs.db
 *.rar
 *.zip
 *.sql
+!**/prisma/migrations/**/*.sql
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
 
 

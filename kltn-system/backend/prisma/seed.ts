@@ -61,6 +61,8 @@ async function main() {
       academicYear: '2026-2027',
       departmentId: department.id,
       status: SemesterStatus.OPEN,
+      lecturerTopicFrom: new Date(Date.now() - 7 * 86400000),
+      lecturerTopicTo: new Date(Date.now() + 7 * 86400000),
       registrationFrom: new Date(),
       registrationTo: new Date(Date.now() + 30 * 86400000),
       submissionTo: new Date(Date.now() + 60 * 86400000),

@@ -15,23 +15,71 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 export class GroupsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Tính điểm trung bình của Cán bộ Hướng dẫn (GVHD) theo các tiêu chí đã chấm
+   */
+  calculateGvhdScore(advisorUserId?: string | null, scores?: Array<any>): number | null {
+    if (!advisorUserId || !scores || scores.length === 0) return null;
+    const gvhdScores = scores.filter((s) => s.scorerId === advisorUserId);
+    if (gvhdScores.length === 0) return null;
+    const tcScores = gvhdScores.filter((s) => s.criterion?.code?.startsWith('TC'));
+    const scoresToCalc = tcScores.length > 0 ? tcScores : gvhdScores;
+    const total = scoresToCalc.reduce((sum, s) => sum + (Number(s.value) || 0), 0);
+    return Number((total / scoresToCalc.length).toFixed(2));
+  }
+
+  /**
+   * Tính điểm trung bình của các Giảng viên phản biện (GVPB)
+   * Quy định:
+   * - Nếu điểm giữa 2 GVPB chênh nhau >= 4 điểm HOẶC điểm của GVPB và GVHD chênh nhau >= 2 điểm, Trưởng bộ môn phân công GVPB thứ 3.
+   * - Khi đó điểm của GVPB là trung bình của 3 GVPB.
+   */
+  calculateReviewerScore(
+    reviewerAssignments?: Array<any>,
+    scores?: Array<any>,
+    gvhdScore?: number | null,
+  ): number | null {
+    if (!reviewerAssignments || reviewerAssignments.length === 0 || !scores || scores.length === 0) {
+      return null;
+    }
+    const reviewerScores: number[] = [];
+    for (const ra of reviewerAssignments) {
+      const revUserId = ra.lecturer?.user?.id || (ra as any).userId;
+      if (!revUserId) continue;
+      const revScores = scores.filter((s) => s.scorerId === revUserId);
+      const tcScores = revScores.filter((s) => s.criterion?.code?.startsWith('TC'));
+      const scoresToCalc = tcScores.length > 0 ? tcScores : revScores;
+      if (scoresToCalc.length === 0) continue;
+      const total = scoresToCalc.reduce((sum, s) => sum + (Number(s.value) || 0), 0);
+      reviewerScores.push(Number((total / scoresToCalc.length).toFixed(2)));
+    }
+    if (reviewerScores.length === 0) return null;
+
+    if (reviewerAssignments.length >= 3) {
+      if (reviewerScores.length >= 3) {
+        return Number(((reviewerScores[0] + reviewerScores[1] + reviewerScores[2]) / 3).toFixed(2));
+      }
+      return null;
+    }
+
+    if (reviewerAssignments.length === 2 && reviewerScores.length >= 2) {
+      const diffReviewers = Math.abs(reviewerScores[0] - reviewerScores[1]);
+      let diffGvhd = false;
+      if (gvhdScore !== null && gvhdScore !== undefined) {
+        if (Math.abs(reviewerScores[0] - gvhdScore) >= 2 || Math.abs(reviewerScores[1] - gvhdScore) >= 2) {
+          diffGvhd = true;
+        }
+      }
+      if (diffReviewers >= 4 || diffGvhd) {
+        return null;
+      }
+    }
+
+    return Number((reviewerScores.reduce((sum, s) => sum + s, 0) / reviewerScores.length).toFixed(2));
+  }
+
   async findGroups(query: QueryGroupsDto, userId?: string) {
     const where: any = {};
-
-    if (query.readyForReview === 'true') {
-      where.midtermStatus = 'CONTINUE';
-      where.status = { not: 'CANCELLED' };
-    }
-
-    if (query.readyForDefense === 'true') {
-      where.midtermStatus = 'CONTINUE';
-      where.status = { not: 'CANCELLED' };
-    } else if (query.readyForDefense === 'false') {
-      where.OR = [
-        { midtermStatus: { not: 'CONTINUE' } },
-        { status: 'CANCELLED' },
-      ];
-    }
 
     if (query.semesterId) {
       where.semesterId = query.semesterId;
@@ -93,6 +141,11 @@ export class GroupsService {
           },
           orderBy: { assignedAt: 'asc' },
         },
+        scores: {
+          include: {
+            criterion: true,
+          },
+        },
         defenses: {
           where: { status: { not: 'CANCELLED' } },
           include: {
@@ -112,37 +165,170 @@ export class GroupsService {
       orderBy: [{ code: 'asc' }],
     });
 
-    return groups.map((g) => {
+    const savedConfigs = await this.prisma.systemConfig.findMany({
+      where: { key: 'DEFENSE_FORMAT_CLASSIFICATION' },
+    });
+    const classificationMap = new Map<string, any>();
+    for (const cfg of savedConfigs) {
+      const val = cfg.value as any;
+      if (val?.groups) {
+        for (const [gId, info] of Object.entries(val.groups)) {
+          classificationMap.set(gId, info);
+        }
+      }
+    }
+
+    let mappedGroups = groups.map((g) => {
       const primaryReviewer =
         g.reviewerAssignments.find((r) => r.type === 'PRIMARY') || g.reviewerAssignments[0];
       const additionalReviewer =
         g.reviewerAssignments.find((r) => r.type === 'ADDITIONAL') ||
         (g.reviewerAssignments.length > 1 ? g.reviewerAssignments[1] : null);
-      const isReadyForReview = g.midtermStatus === 'CONTINUE';
-      const hasTwoReviewers = g.reviewerAssignments.length >= 2;
-      const isReadyForDefense = g.midtermStatus === 'CONTINUE' && g.status !== 'CANCELLED';
+      const thirdReviewer =
+        g.reviewerAssignments.length >= 3 ? g.reviewerAssignments[2] : null;
+
+      const isMidtermPassed = g.midtermStatus === 'CONTINUE';
+      const gvhdScore = this.calculateGvhdScore(g.topic?.ownerId, g.scores);
+      const isGvhdScorePassed = gvhdScore !== null && gvhdScore >= 6.0;
+
+      // Tính điểm từng reviewer để kiểm tra độ lệch điểm
+      let r1Score: number | null = null;
+      let r2Score: number | null = null;
+      const r1 = g.reviewerAssignments[0];
+      const r2 = g.reviewerAssignments[1];
+      if (r1?.lecturer?.user?.id) {
+        const r1Scores = g.scores.filter((s) => s.scorerId === r1.lecturer.user.id);
+        const tc1 = r1Scores.filter((s) => s.criterion?.code?.startsWith('TC'));
+        const calc1 = tc1.length > 0 ? tc1 : r1Scores;
+        if (calc1.length > 0) {
+          r1Score = Number((calc1.reduce((sum, s) => sum + (Number(s.value) || 0), 0) / calc1.length).toFixed(2));
+        }
+      }
+      if (r2?.lecturer?.user?.id) {
+        const r2Scores = g.scores.filter((s) => s.scorerId === r2.lecturer.user.id);
+        const tc2 = r2Scores.filter((s) => s.criterion?.code?.startsWith('TC'));
+        const calc2 = tc2.length > 0 ? tc2 : r2Scores;
+        if (calc2.length > 0) {
+          r2Score = Number((calc2.reduce((sum, s) => sum + (Number(s.value) || 0), 0) / calc2.length).toFixed(2));
+        }
+      }
+
+      let isReviewersDiscrepancy = false;
+      let isGvhdDiscrepancy = false;
+      let diffReviewers: number | null = null;
+      let diffGvhd1: number | null = null;
+      let diffGvhd2: number | null = null;
+      const discrepancyReasons: string[] = [];
+
+      if (r1Score !== null && r2Score !== null) {
+        diffReviewers = Number(Math.abs(r1Score - r2Score).toFixed(2));
+        if (diffReviewers >= 4.0) {
+          isReviewersDiscrepancy = true;
+          discrepancyReasons.push(`Điểm 2 GVPB chênh lệch ${diffReviewers}đ (>= 4.0đ)`);
+        }
+        if (gvhdScore !== null) {
+          diffGvhd1 = Number(Math.abs(r1Score - gvhdScore).toFixed(2));
+          diffGvhd2 = Number(Math.abs(r2Score - gvhdScore).toFixed(2));
+          if (diffGvhd1 >= 2.0) {
+            isGvhdDiscrepancy = true;
+            discrepancyReasons.push(`Điểm GVPB 1 và GVHD chênh lệch ${diffGvhd1}đ (>= 2.0đ)`);
+          }
+          if (diffGvhd2 >= 2.0) {
+            isGvhdDiscrepancy = true;
+            discrepancyReasons.push(`Điểm GVPB 2 và GVHD chênh lệch ${diffGvhd2}đ (>= 2.0đ)`);
+          }
+        }
+      }
+
+      const hasDiscrepancy = isReviewersDiscrepancy || isGvhdDiscrepancy;
+      const hasThirdReviewer = g.reviewerAssignments.length >= 3;
+      const needsThirdReviewer = hasDiscrepancy && !hasThirdReviewer;
+
+      // Ràng buộc: GVHD >= 6.0 mới được phản biện hoặc ra hội đồng
+      const isReadyForReview = isMidtermPassed && isGvhdScorePassed;
+      const isReadyForDefense = isMidtermPassed && g.status !== 'CANCELLED' && isGvhdScorePassed;
+
+      let defenseEligibleReason = '';
+      if (g.status === 'CANCELLED') {
+        defenseEligibleReason = 'Nhóm đã bị hủy';
+      } else if (g.midtermStatus === 'STOPPED') {
+        defenseEligibleReason = 'Không đủ điều kiện (Đã bị dừng đề tài ở giữa kỳ)';
+      } else if (!isMidtermPassed) {
+        defenseEligibleReason = 'Chưa đủ điều kiện (Chưa có kết quả giữa kỳ: CHO LÀM TIẾP)';
+      } else if (gvhdScore === null) {
+        defenseEligibleReason = 'Chưa đủ điều kiện ra hội đồng (GVHD chưa chấm điểm - yêu cầu điểm GVHD >= 6.0)';
+      } else if (gvhdScore < 6.0) {
+        defenseEligibleReason = `Không đủ điều kiện ra hội đồng (Điểm GVHD: ${gvhdScore} < 6.0, yêu cầu >= 6.0)`;
+      } else {
+        defenseEligibleReason = `Đủ điều kiện bảo vệ (Giữa kỳ: ĐẠT, Điểm GVHD: ${gvhdScore} >= 6.0)`;
+      }
+
+      let reviewEligibleReason = '';
+      if (g.status === 'CANCELLED') {
+        reviewEligibleReason = 'Nhóm đã bị hủy';
+      } else if (!isMidtermPassed) {
+        reviewEligibleReason = 'Chưa được xác nhận CHO LÀM TIẾP ở giữa kỳ';
+      } else if (gvhdScore === null) {
+        reviewEligibleReason = 'Chưa đủ điều kiện phản biện (GVHD chưa chấm điểm - yêu cầu điểm GVHD >= 6.0)';
+      } else if (gvhdScore < 6.0) {
+        reviewEligibleReason = `Không đủ điều kiện phản biện (Điểm GVHD: ${gvhdScore} < 6.0, yêu cầu >= 6.0)`;
+      } else {
+        reviewEligibleReason = `Đủ điều kiện phản biện (Điểm GVHD: ${gvhdScore} >= 6.0)`;
+      }
+
       const defenseSchedule = g.defenses?.[0] || null;
       const hasDefenseSchedule = (g.defenses?.length ?? 0) > 0;
       const defenseEligibility = {
         eligible: isReadyForDefense,
-        reason: isReadyForDefense
-          ? 'Đủ điều kiện bảo vệ (Đạt đánh giá giữa kỳ: CHO LÀM TIẾP)'
-          : g.status === 'CANCELLED'
-          ? 'Nhóm đã bị hủy'
-          : g.midtermStatus === 'STOPPED'
-          ? 'Không đủ điều kiện bảo vệ (Đã bị dừng đề tài ở giữa kỳ)'
-          : 'Chưa đủ điều kiện bảo vệ (Chưa có kết quả đánh giá giữa kỳ đạt yêu cầu)',
+        reason: defenseEligibleReason,
       };
+      const reviewEligibility = {
+        eligible: isReadyForReview,
+        reason: reviewEligibleReason,
+      };
+
+      const reviewerScore = this.calculateReviewerScore(g.reviewerAssignments, g.scores, gvhdScore);
+      const savedClassification = classificationMap.get(g.id);
+
+      let defenseFormat = savedClassification?.defenseFormat;
+      let defenseFormatName = savedClassification?.defenseFormatName;
+      let defenseFormatRank = savedClassification?.rank ?? null;
+
+      if (!defenseFormat) {
+        if (g.defenses?.length > 0) {
+          defenseFormat = g.defenses[0].committeeId ? 'HOI_DONG' : 'POSTER';
+          defenseFormatName =
+            defenseFormat === 'HOI_DONG' ? 'Báo cáo Hội đồng (Top 20%)' : 'Báo cáo Poster (80%)';
+        } else if (!isReadyForDefense) {
+          defenseFormat = 'KHONG_DU_DIEU_KIEN';
+          defenseFormatName = 'Không đủ điều kiện';
+        } else if (reviewerScore === null) {
+          defenseFormat = 'CHUA_PHAN_LOAI';
+          defenseFormatName = 'Chờ điểm phản biện';
+        } else {
+          defenseFormat = 'CHUA_PHAN_LOAI';
+          defenseFormatName = 'Đã có điểm PB (Chờ phân luồng)';
+        }
+      }
 
       return {
         ...g,
         memberCount: g.members.length,
+        gvhdScore,
+        hasGvhdScore: gvhdScore !== null,
+        isGvhdScorePassed,
         isReadyForReview,
         isReadyForDefense,
+        reviewEligibility,
         defenseEligibility,
         defenseSchedule,
         hasDefenseSchedule,
-        hasTwoReviewers,
+        reviewerScore,
+        hasReviewerScore: reviewerScore !== null,
+        defenseFormat,
+        defenseFormatName,
+        defenseFormatRank,
+        hasTwoReviewers: g.reviewerAssignments.length >= 2,
         reviewerCount: g.reviewerAssignments.length,
         primaryReviewer: primaryReviewer
           ? {
@@ -162,6 +348,24 @@ export class GroupsService {
               type: additionalReviewer.type,
             }
           : null,
+        thirdReviewer: thirdReviewer
+          ? {
+              id: thirdReviewer.id,
+              lecturerId: thirdReviewer.lecturerId,
+              fullName: thirdReviewer.lecturer?.user?.fullName,
+              email: thirdReviewer.lecturer?.user?.email,
+              type: thirdReviewer.type,
+            }
+          : null,
+        hasThirdReviewer,
+        needsThirdReviewer,
+        hasDiscrepancy,
+        isReviewersDiscrepancy,
+        isGvhdDiscrepancy,
+        diffReviewers,
+        diffGvhd1,
+        diffGvhd2,
+        discrepancyReasons,
         gvhd: g.topic?.owner
           ? {
               id: g.topic.owner.id,
@@ -173,6 +377,20 @@ export class GroupsService {
           : null,
       };
     });
+
+    if (query.readyForReview === 'true') {
+      mappedGroups = mappedGroups.filter((g) => g.isReadyForReview);
+    } else if (query.readyForReview === 'false') {
+      mappedGroups = mappedGroups.filter((g) => !g.isReadyForReview);
+    }
+
+    if (query.readyForDefense === 'true') {
+      mappedGroups = mappedGroups.filter((g) => g.isReadyForDefense);
+    } else if (query.readyForDefense === 'false') {
+      mappedGroups = mappedGroups.filter((g) => !g.isReadyForDefense);
+    }
+
+    return mappedGroups;
   }
 
   async findById(groupId: string, userId?: string) {
@@ -214,6 +432,11 @@ export class GroupsService {
           },
           orderBy: { assignedAt: 'asc' },
         },
+        scores: {
+          include: {
+            criterion: true,
+          },
+        },
         defenses: {
           where: { status: { not: 'CANCELLED' } },
           include: {
@@ -241,28 +464,102 @@ export class GroupsService {
     const additionalReviewer =
       group.reviewerAssignments.find((r) => r.type === 'ADDITIONAL') ||
       (group.reviewerAssignments.length > 1 ? group.reviewerAssignments[1] : null);
-    const isReadyForDefense = group.midtermStatus === 'CONTINUE' && group.status !== 'CANCELLED';
+
+    const isMidtermPassed = group.midtermStatus === 'CONTINUE';
+    const gvhdScore = this.calculateGvhdScore(group.topic?.ownerId, group.scores);
+    const isGvhdScorePassed = gvhdScore !== null && gvhdScore >= 6.0;
+
+    // Ràng buộc: GVHD >= 6.0 mới được phản biện hoặc ra hội đồng
+    const isReadyForReview = isMidtermPassed && isGvhdScorePassed;
+    const isReadyForDefense = isMidtermPassed && group.status !== 'CANCELLED' && isGvhdScorePassed;
+
+    let defenseEligibleReason = '';
+    if (group.status === 'CANCELLED') {
+      defenseEligibleReason = 'Nhóm đã bị hủy';
+    } else if (group.midtermStatus === 'STOPPED') {
+      defenseEligibleReason = 'Không đủ điều kiện (Đã bị dừng đề tài ở giữa kỳ)';
+    } else if (!isMidtermPassed) {
+      defenseEligibleReason = 'Chưa đủ điều kiện (Chưa có kết quả giữa kỳ: CHO LÀM TIẾP)';
+    } else if (gvhdScore === null) {
+      defenseEligibleReason = 'Chưa đủ điều kiện ra hội đồng (GVHD chưa chấm điểm - yêu cầu điểm GVHD >= 6.0)';
+    } else if (gvhdScore < 6.0) {
+      defenseEligibleReason = `Không đủ điều kiện ra hội đồng (Điểm GVHD: ${gvhdScore} < 6.0, yêu cầu >= 6.0)`;
+    } else {
+      defenseEligibleReason = `Đủ điều kiện bảo vệ (Giữa kỳ: ĐẠT, Điểm GVHD: ${gvhdScore} >= 6.0)`;
+    }
+
+    let reviewEligibleReason = '';
+    if (group.status === 'CANCELLED') {
+      reviewEligibleReason = 'Nhóm đã bị hủy';
+    } else if (!isMidtermPassed) {
+      reviewEligibleReason = 'Chưa được xác nhận CHO LÀM TIẾP ở giữa kỳ';
+    } else if (gvhdScore === null) {
+      reviewEligibleReason = 'Chưa đủ điều kiện phản biện (GVHD chưa chấm điểm - yêu cầu điểm GVHD >= 6.0)';
+    } else if (gvhdScore < 6.0) {
+      reviewEligibleReason = `Không đủ điều kiện phản biện (Điểm GVHD: ${gvhdScore} < 6.0, yêu cầu >= 6.0)`;
+    } else {
+      reviewEligibleReason = `Đủ điều kiện phản biện (Điểm GVHD: ${gvhdScore} >= 6.0)`;
+    }
+
     const defenseSchedule = group.defenses?.[0] || null;
     const hasDefenseSchedule = (group.defenses?.length ?? 0) > 0;
     const defenseEligibility = {
       eligible: isReadyForDefense,
-      reason: isReadyForDefense
-        ? 'Đủ điều kiện bảo vệ (Đạt đánh giá giữa kỳ: CHO LÀM TIẾP)'
-        : group.status === 'CANCELLED'
-        ? 'Nhóm đã bị hủy'
-        : group.midtermStatus === 'STOPPED'
-        ? 'Không đủ điều kiện bảo vệ (Đã bị dừng đề tài ở giữa kỳ)'
-        : 'Chưa đủ điều kiện bảo vệ (Chưa có kết quả đánh giá giữa kỳ đạt yêu cầu)',
+      reason: defenseEligibleReason,
     };
+    const reviewEligibility = {
+      eligible: isReadyForReview,
+      reason: reviewEligibleReason,
+    };
+
+    const savedConfig = await this.prisma.systemConfig.findFirst({
+      where: {
+        key: 'DEFENSE_FORMAT_CLASSIFICATION',
+        semesterId: group.semesterId,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const savedGroupInfo = (savedConfig?.value as any)?.groups?.[group.id];
+    const reviewerScore = this.calculateReviewerScore(group.reviewerAssignments, group.scores);
+
+    let defenseFormat = savedGroupInfo?.defenseFormat;
+    let defenseFormatName = savedGroupInfo?.defenseFormatName;
+    let defenseFormatRank = savedGroupInfo?.rank ?? null;
+
+    if (!defenseFormat) {
+      if (group.defenses?.length > 0) {
+        defenseFormat = group.defenses[0].committeeId ? 'HOI_DONG' : 'POSTER';
+        defenseFormatName =
+          defenseFormat === 'HOI_DONG' ? 'Báo cáo Hội đồng (Top 20%)' : 'Báo cáo Poster (80%)';
+      } else if (!isReadyForDefense) {
+        defenseFormat = 'KHONG_DU_DIEU_KIEN';
+        defenseFormatName = 'Không đủ điều kiện';
+      } else if (reviewerScore === null) {
+        defenseFormat = 'CHUA_PHAN_LOAI';
+        defenseFormatName = 'Chờ điểm phản biện';
+      } else {
+        defenseFormat = 'CHUA_PHAN_LOAI';
+        defenseFormatName = 'Đã có điểm PB (Chờ phân luồng)';
+      }
+    }
 
     return {
       ...group,
       memberCount: group.members.length,
-      isReadyForReview: group.midtermStatus === 'CONTINUE',
+      gvhdScore,
+      hasGvhdScore: gvhdScore !== null,
+      isGvhdScorePassed,
+      isReadyForReview,
       isReadyForDefense,
+      reviewEligibility,
       defenseEligibility,
       defenseSchedule,
       hasDefenseSchedule,
+      reviewerScore,
+      hasReviewerScore: reviewerScore !== null,
+      defenseFormat,
+      defenseFormatName,
+      defenseFormatRank,
       hasTwoReviewers: group.reviewerAssignments.length >= 2,
       reviewerCount: group.reviewerAssignments.length,
       primaryReviewer: primaryReviewer

@@ -80,5 +80,28 @@ export class LecturersController {
   saveReviewerPairs(@Body() body: { semesterId: string; pairs: any[] }) {
     return this.usersService.saveReviewerPairs(body.semesterId, body.pairs);
   }
+
+  @ApiOperation({
+    summary: 'Lấy link Google Meet / phòng họp trực tuyến mặc định của giảng viên',
+  })
+  @ApiResponse({ status: 200, description: 'Lấy link Google Meet mặc định thành công' })
+  @Get('me/meeting-link')
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  getLecturerMeetingLink(@CurrentUser() user: { id: string }) {
+    return this.usersService.getLecturerMeetingLink(user.id);
+  }
+
+  @ApiOperation({
+    summary: 'Lưu cấu hình link Google Meet / phòng họp trực tuyến mặc định của giảng viên',
+  })
+  @ApiResponse({ status: 200, description: 'Lưu link Google Meet mặc định thành công' })
+  @Post('me/meeting-link')
+  @Roles(RoleCode.GIANG_VIEN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  saveLecturerMeetingLink(
+    @CurrentUser() user: { id: string },
+    @Body() body: { meetingUrl: string },
+  ) {
+    return this.usersService.saveLecturerMeetingLink(user.id, body.meetingUrl);
+  }
 }
 

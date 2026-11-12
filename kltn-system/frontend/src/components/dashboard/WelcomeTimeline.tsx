@@ -29,6 +29,8 @@ export interface SemesterTimelineInfo {
   name?: string;
   academicYear?: string;
   status?: string;
+  lecturerTopicFrom?: string | null;
+  lecturerTopicTo?: string | null;
   registrationFrom?: string | null;
   registrationTo?: string | null;
   submissionTo?: string | null;
@@ -56,7 +58,7 @@ const defaultSteps: TimelineStepItem[] = [
   {
     number: 1,
     title: 'Đăng ký đề tài',
-    subtitle: 'Mở đợt, chọn hoặc đề xuất đề tài mới',
+    subtitle: 'Pha 1: GV ra đề tài & duyệt. Pha 2: SV đăng ký đề tài đã duyệt',
     phase: 'Tuần 1 - 3',
   },
   {
@@ -87,14 +89,14 @@ const defaultSteps: TimelineStepItem[] = [
 
 const roleStepGuidance: Record<string, Record<number, string>> = {
   SINH_VIEN: {
-    1: 'Chọn nguyện vọng đề tài từ danh sách công bố hoặc nộp đề xuất đề tài riêng cho GVHD.',
+    1: 'Giai đoạn đầu GV đăng ký đề tài & Bộ môn thẩm định. Khi mở cổng, sinh viên đăng ký các đề tài đã được duyệt.',
     2: 'Tìm bạn ghép nhóm (2-3 sinh viên), phân công nhóm trưởng và chờ GVHD phê duyệt chính thức.',
     3: 'Triển khai nghiên cứu, nộp báo cáo tiến độ định kỳ và hoàn thành đánh giá giữa kỳ.',
     4: 'Nộp quyển báo cáo hoàn chỉnh và mã nguồn/sản phẩm lên hệ thống cho Giảng viên phản biện.',
     5: 'Xem lịch bảo vệ chính thức, phòng thi và trình bày báo cáo trước Hội đồng chấm điểm 10 tiêu chí.',
   },
   GIANG_VIEN: {
-    1: 'Đăng ký danh mục đề tài mới cho đợt KLTN và duyệt nguyện vọng đăng ký của sinh viên.',
+    1: 'Đăng ký danh mục đề tài mới cho đợt KLTN để Trưởng bộ môn phê duyệt trước khi mở cho sinh viên đăng ký.',
     2: 'Xác nhận danh sách thành viên các nhóm KLTN đăng ký và gửi danh sách lên Bộ môn.',
     3: 'Đánh giá tiến độ giữa kỳ cho các nhóm hướng dẫn (TIẾP TỤC / DỪNG) và ghi nhận xét.',
     4: 'Thẩm định quyển báo cáo và chấm điểm phản biện cho các nhóm được Trưởng bộ môn phân công.',
@@ -164,9 +166,8 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
   const [selectedStepOption, setSelectedStepOption] = useState<number>(0);
   const [savingStep, setSavingStep] = useState(false);
 
-  // 1. Tự động xác định bước hiện tại (đồng bộ từ semesterInfo nếu không truyền prop cứng)
+  // Normalize effective step
   let effectiveStep = 1;
-
   if (typeof propCurrentStep === 'number' && propCurrentStep >= 1 && propCurrentStep <= 5) {
     effectiveStep = propCurrentStep;
   } else if (
@@ -175,81 +176,50 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
     semesterInfo.currentStep <= 5
   ) {
     effectiveStep = semesterInfo.currentStep;
-  } else if (semesterInfo) {
-    // Tự động tính từ thời gian thực so với mốc học kỳ
-    const now = new Date();
-    const regTo = semesterInfo.registrationTo ? new Date(semesterInfo.registrationTo) : null;
-    const subTo = semesterInfo.submissionTo ? new Date(semesterInfo.submissionTo) : null;
-    const defFrom = semesterInfo.defenseFrom ? new Date(semesterInfo.defenseFrom) : null;
-
-    let midTo: Date | null = null;
-    if (regTo && subTo) {
-      midTo = new Date((regTo.getTime() + subTo.getTime()) / 2);
-    }
-
-    if (semesterInfo.status === 'ARCHIVED' || semesterInfo.status === 'CLOSED') {
-      effectiveStep = 5;
-    } else if (defFrom && now >= defFrom) {
-      effectiveStep = 5;
-    } else if (subTo && now >= subTo) {
-      effectiveStep = 4;
-    } else if (midTo && now >= midTo) {
-      effectiveStep = 3;
-    } else if (regTo && now > regTo) {
-      effectiveStep = 2;
-    } else {
-      effectiveStep = 1;
-    }
   }
 
-  // 2. Tính toán ngày hiển thị cho từng bước dựa vào dữ liệu semesterInfo
+  // Bind real dates from semesterInfo into step descriptors
   const resolvedSteps: TimelineStepItem[] = defaultSteps.map((step) => {
     let dateLabel = '';
-
-    if (semesterInfo) {
-      if (step.number === 1) {
-        const from = formatDateShort(semesterInfo.registrationFrom);
-        const to = formatDateShort(semesterInfo.registrationTo);
-        if (from && to) dateLabel = `${from} - ${to}`;
-        else if (to) dateLabel = `Đến ${to}`;
-        else dateLabel = 'Giai đoạn mở đợt';
-      } else if (step.number === 2) {
-        const regTo = formatDateShort(semesterInfo.registrationTo);
-        if (regTo) dateLabel = `Sau ${regTo}`;
-        else dateLabel = 'Sau đợt đăng ký';
-      } else if (step.number === 3) {
-        const subTo = formatDateShort(semesterInfo.submissionTo);
-        if (subTo) dateLabel = `Hạn nộp: ${subTo}`;
-        else dateLabel = 'Báo cáo tiến độ';
-      } else if (step.number === 4) {
-        const subTo = formatDateShort(semesterInfo.submissionTo);
-        const defFrom = formatDateShort(semesterInfo.defenseFrom);
-        if (subTo && defFrom) dateLabel = `${subTo} - ${defFrom}`;
-        else if (subTo) dateLabel = `Từ ${subTo}`;
-        else dateLabel = 'Chấm phản biện';
-      } else if (step.number === 5) {
-        const defFrom = formatDateShort(semesterInfo.defenseFrom);
-        const defTo = formatDateShort(semesterInfo.defenseTo);
-        if (defFrom && defTo) dateLabel = `${defFrom} - ${defTo}`;
-        else if (defFrom) dateLabel = `Từ ${defFrom}`;
-        else dateLabel = 'Hội đồng bảo vệ';
-      }
+    if (step.number === 1) {
+      const from = formatDateShort(
+        semesterInfo?.lecturerTopicFrom || semesterInfo?.registrationFrom,
+      );
+      const to = formatDateShort(semesterInfo?.registrationTo);
+      if (from && to) dateLabel = `${from} - ${to}`;
+      else if (to) dateLabel = `Hạn: ${to}`;
+    } else if (step.number === 2) {
+      const to = formatDateShort(semesterInfo?.registrationTo);
+      if (to) dateLabel = `Duyệt trước: ${to}`;
+    } else if (step.number === 3) {
+      const to = formatDateShort(semesterInfo?.submissionTo);
+      if (to) dateLabel = `Nộp bài: ${to}`;
+    } else if (step.number === 4) {
+      const defFrom = formatDateShort(semesterInfo?.defenseFrom);
+      if (defFrom) dateLabel = `Trước: ${defFrom}`;
+    } else if (step.number === 5) {
+      const defFrom = formatDateShort(semesterInfo?.defenseFrom);
+      const defTo = formatDateShort(semesterInfo?.defenseTo);
+      if (defFrom && defTo) dateLabel = `${defFrom} - ${defTo}`;
+      else if (defFrom) dateLabel = `Từ ${defFrom}`;
     }
 
     return {
       ...step,
-      dateLabel,
+      dateLabel: dateLabel || undefined,
     };
   });
 
   const currentStepTitle =
-    resolvedSteps.find((s) => s.number === effectiveStep)?.title || 'Đang thực hiện';
+    resolvedSteps.find((s) => s.number === effectiveStep)?.title ?? 'Đang thực hiện';
 
-  const roleKey = role || 'SINH_VIEN';
-  const roleLabel = roleLabels[roleKey] || 'Người dùng';
+  const roleKey = String(role).toUpperCase();
   const currentGuidance =
-    roleStepGuidance[roleKey]?.[effectiveStep] ||
-    'Thực hiện các nhiệm vụ chuyên môn theo phân công trong đợt KLTN.';
+    roleStepGuidance[roleKey]?.[effectiveStep] ??
+    roleStepGuidance.SINH_VIEN[effectiveStep] ??
+    'Thực hiện các nhiệm vụ theo tiến độ học kỳ.';
+
+  const roleLabel = roleLabels[roleKey] ?? 'Người dùng';
 
   const handleStepClick = (stepNumber: number) => {
     if (onStepClick) {
@@ -268,12 +238,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
     if (!semesterInfo?.id) return;
     try {
       setSavingStep(true);
-      if (selectedStepOption === 0) {
-        // Tự động đồng bộ
-        await api.put(`/semesters/${semesterInfo.id}/timeline-step`, { autoSync: true });
-      } else {
-        await api.put(`/semesters/${semesterInfo.id}/timeline-step`, { step: selectedStepOption });
-      }
+      await api.patch(`/semesters/${semesterInfo.id}/timeline-step`, {
+        step: selectedStepOption,
+      });
       setShowStepModal(false);
       if (onTimelineStepChange) {
         onTimelineStepChange(selectedStepOption);
@@ -309,23 +276,28 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
     }
   };
 
+  // Calculate overall progress percentage (e.g. step 3/5 = 60%)
+  const progressPercent = Math.min(100, Math.round((effectiveStep / 5) * 100));
+
   return (
-    <div className={`bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs ${className}`}>
+    <div className={`bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs ${className}`}>
       {/* HEADER LỘ TRÌNH */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-3 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-100">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-indigo-600" />
-              <span>Lộ trình Học kỳ Khóa luận Tốt nghiệp</span>
+            <div className="w-7 h-7 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+              <Calendar className="w-4 h-4" />
+            </div>
+            <h3 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight">
+              Lộ trình Khóa luận Tốt nghiệp
             </h3>
             {semesterInfo?.name && (
-              <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+              <span className="text-[11px] font-bold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-lg border border-slate-200">
                 {semesterInfo.name} {semesterInfo.academicYear ? `(${semesterInfo.academicYear})` : ''}
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-500 mt-1 leading-relaxed">
             Quy trình chuẩn 5 giai đoạn đồng bộ từ đăng ký nguyện vọng đến bảo vệ trước hội đồng
           </p>
         </div>
@@ -333,20 +305,20 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
         {/* BADGES & QUẢN LÝ GIAI ĐOẠN */}
         <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
           <span
-            className={`text-[11px] px-3 py-1 font-semibold rounded-lg border flex items-center gap-2 shadow-2xs ${
+            className={`text-[11px] px-3 py-1 font-bold rounded-xl border flex items-center gap-2 shadow-2xs ${
               isOverdue
                 ? 'bg-rose-50 text-rose-700 border-rose-200'
-                : 'bg-indigo-50 text-indigo-700 border-indigo-100'
+                : 'bg-indigo-50 text-indigo-700 border-indigo-200/80'
             }`}
           >
             <span
-              className={`w-2 h-2 rounded-full animate-pulse ${
-                isOverdue ? 'bg-rose-600' : 'bg-indigo-600'
+              className={`w-2 h-2 rounded-full ${
+                isOverdue ? 'bg-rose-600 animate-ping' : 'bg-indigo-600'
               }`}
             />
             <span>
-              Giai đoạn hiện tại: Bước {effectiveStep}/5 • <strong className="font-bold">{currentStepTitle}</strong>
-              {isOverdue && ' (Có mốc trễ hạn)'}
+              Giai đoạn: Bước {effectiveStep}/5 • <strong className="font-extrabold">{currentStepTitle}</strong>
+              {isOverdue && ' (Quá hạn)'}
             </span>
           </span>
 
@@ -356,7 +328,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
                 setSelectedStepOption(effectiveStep);
                 setShowStepModal(true);
               }}
-              className="text-[11px] px-2.5 py-1 font-semibold rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/60 text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="text-[11px] px-3 py-1 font-bold rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/70 text-slate-700 flex items-center gap-1.5 transition-all duration-150 cursor-pointer shadow-2xs"
               title="Trưởng BM / Quản lý điều chỉnh giai đoạn lộ trình đợt KLTN"
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
@@ -368,7 +340,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
             <button
               onClick={handleResetTestData}
               disabled={savingStep}
-              className="text-[11px] px-2.5 py-1 font-semibold rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="text-[11px] px-3 py-1 font-bold rounded-xl border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 flex items-center gap-1.5 transition-all duration-150 cursor-pointer shadow-2xs"
               title="Đặt lại toàn bộ dữ liệu về lúc mới mở học kỳ (Bước 1: Đăng ký đề tài) để kiểm thử (Chỉ Trưởng bộ môn)"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-rose-600 ${savingStep ? 'animate-spin' : ''}`} />
@@ -378,26 +350,44 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
         </div>
       </div>
 
+      {/* OVERALL PROGRESS BAR */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 mb-1.5">
+          <span>Tiến độ tổng thể học kỳ</span>
+          <span className="text-indigo-600">{progressPercent}% hoàn thành</span>
+        </div>
+        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200/60">
+          <div
+            className="h-full bg-gradient-to-r from-indigo-500 via-indigo-600 to-emerald-500 rounded-full transition-all duration-500"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      </div>
+
       {/* BANNER NHIỆM VỤ THEO VAI TRÒ (ROLE-SPECIFIC GUIDANCE) */}
       {showRoleGuidance && (
-        <div className="mb-4 p-3 bg-gradient-to-r from-indigo-50/80 via-purple-50/40 to-slate-50 rounded-xl border border-indigo-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs">
-          <div className="flex items-start sm:items-center gap-2.5">
-            <span className="px-2 py-0.5 rounded-md font-bold text-[10px] uppercase tracking-wider bg-indigo-600 text-white shrink-0 mt-0.5 sm:mt-0">
-              {roleLabel}
-            </span>
-            <span className="text-slate-700 font-medium leading-relaxed">
-              <strong className="text-indigo-950">Nhiệm vụ Bước {effectiveStep} ({currentStepTitle}):</strong>{' '}
-              {currentGuidance}
-            </span>
+        <div className="mb-5 p-3.5 sm:p-4 bg-gradient-to-r from-indigo-50/80 via-purple-50/40 to-slate-50 rounded-2xl border border-indigo-100/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5 sm:mt-0">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold text-indigo-900 uppercase tracking-wide">
+                Nhiệm vụ {roleLabel} • Bước {effectiveStep} ({currentStepTitle})
+              </div>
+              <p className="text-slate-700 font-medium leading-relaxed mt-0.5">
+                {currentGuidance}
+              </p>
+            </div>
           </div>
 
           {(onNavigate || onStepClick) && (
             <button
               onClick={() => handleStepClick(effectiveStep)}
-              className="text-[11px] font-bold text-indigo-700 hover:text-indigo-800 flex items-center gap-1 shrink-0 self-end sm:self-center cursor-pointer transition-colors"
+              className="text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-white hover:bg-indigo-50/60 px-3 py-1.5 rounded-xl border border-indigo-200/80 flex items-center gap-1 shrink-0 self-end sm:self-center cursor-pointer transition-all duration-150 shadow-2xs group"
             >
               <span>Vào tab tác vụ</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
             </button>
           )}
         </div>
@@ -415,39 +405,39 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
             <div
               key={step.number}
               onClick={() => isClickable && handleStepClick(step.number)}
-              className={`relative p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
-                isClickable ? 'cursor-pointer hover:border-indigo-400 hover:shadow-xs group' : ''
+              className={`relative p-4 rounded-2xl border transition-all duration-200 flex flex-col justify-between ${
+                isClickable ? 'cursor-pointer group hover:-translate-y-0.5' : ''
               } ${
                 isCurrent
                   ? isOverdue
-                    ? 'bg-rose-50/70 border-rose-300 ring-2 ring-rose-500/20 shadow-xs'
-                    : 'bg-indigo-50/70 border-indigo-300 ring-2 ring-indigo-500/20 shadow-xs'
+                    ? 'bg-rose-50/70 border-rose-300 ring-2 ring-rose-500/20 shadow-md'
+                    : 'bg-indigo-50/50 border-indigo-300 ring-2 ring-indigo-500/20 shadow-md'
                   : isDone
-                  ? 'bg-slate-50/80 border-emerald-200/90 text-slate-700'
-                  : 'bg-white border-slate-200/70 opacity-60 hover:opacity-90'
+                  ? 'bg-emerald-50/30 border-emerald-200/80 hover:border-emerald-300 text-slate-700'
+                  : 'bg-white border-slate-200/80 opacity-70 hover:opacity-100 hover:border-slate-300'
               }`}
             >
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2.5">
                   <span
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
+                    className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-extrabold shadow-2xs transition-colors ${
                       isDone
                         ? 'bg-emerald-600 text-white'
                         : isCurrent
                         ? isOverdue
                           ? 'bg-rose-600 text-white ring-2 ring-rose-300'
-                          : 'bg-indigo-600 text-white ring-2 ring-indigo-300'
-                        : 'bg-slate-200 text-slate-600'
+                          : 'bg-indigo-600 text-white ring-2 ring-indigo-300 shadow-indigo-500/25'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200'
                     }`}
                   >
                     {isDone ? <CheckCircle2 className="w-4 h-4" /> : step.number}
                   </span>
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     {step.phase}
                   </span>
                 </div>
 
-                <div className="text-xs font-bold text-slate-800 leading-tight mb-1 group-hover:text-indigo-600 transition-colors">
+                <div className="text-xs font-bold text-slate-900 leading-tight mb-1 group-hover:text-indigo-600 transition-colors">
                   {step.title}
                 </div>
                 <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
@@ -456,9 +446,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
               </div>
 
               {/* THÔNG TIN NGÀY THỰC TẾ & TRẠNG THÁI */}
-              <div className="mt-3 pt-2 border-t border-slate-200/50 flex flex-col gap-1">
+              <div className="mt-3.5 pt-2.5 border-t border-slate-200/60 flex flex-col gap-1">
                 {step.dateLabel && (
-                  <div className="text-[10px] text-slate-500 flex items-center gap-1 font-medium">
+                  <div className="text-[10px] text-slate-500 flex items-center gap-1 font-semibold">
                     <Clock className="w-3 h-3 text-slate-400 shrink-0" />
                     <span>{step.dateLabel}</span>
                   </div>
@@ -475,17 +465,17 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
                   </div>
                 )}
                 {isDone && (
-                  <div className="text-[10px] font-medium text-emerald-700 flex items-center justify-between">
+                  <div className="text-[10px] font-semibold text-emerald-700 flex items-center justify-between">
                     <span className="flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      <span>Đã hoàn thành</span>
+                      <span>Đã xong</span>
                     </span>
-                    {isClickable && <span className="text-[9px] text-slate-400">Xem lại</span>}
+                    {isClickable && <span className="text-[9px] text-slate-400">Xem</span>}
                   </div>
                 )}
                 {isUpcoming && (
                   <div className="text-[10px] font-medium text-slate-400 flex items-center justify-between">
-                    <span>Sắp diễn ra</span>
+                    <span>Sắp tới</span>
                     {isClickable && <span className="text-[9px] text-slate-400">Xem trước</span>}
                   </div>
                 )}
@@ -497,16 +487,16 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
 
       {/* MODAL ĐIỀU CHỈNH GIAI ĐOẠN (CHỈ DÀNH CHO MANAGER / HEAD) */}
       {showStepModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-xl border border-slate-200 text-left space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-md p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 text-left space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3.5">
               <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <SlidersHorizontal className="w-4 h-4 text-indigo-600" />
                 <span>Điều chỉnh Giai đoạn Lộ trình KLTN</span>
               </h4>
               <button
                 onClick={() => setShowStepModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 rounded-lg"
               >
                 ✕
               </button>
@@ -519,9 +509,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
             <div className="space-y-2">
               <label
                 onClick={() => setSelectedStepOption(0)}
-                className={`p-3 rounded-xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
+                className={`p-3 rounded-2xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
                   selectedStepOption === 0
-                    ? 'border-indigo-600 bg-indigo-50/60 font-bold text-indigo-950'
+                    ? 'border-indigo-600 bg-indigo-50/60 font-bold text-indigo-950 shadow-2xs'
                     : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                 }`}
               >
@@ -546,9 +536,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
                 <label
                   key={s.number}
                   onClick={() => setSelectedStepOption(s.number)}
-                  className={`p-3 rounded-xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
+                  className={`p-3 rounded-2xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
                     selectedStepOption === s.number
-                      ? 'border-indigo-600 bg-indigo-50/60 font-bold text-indigo-950'
+                      ? 'border-indigo-600 bg-indigo-50/60 font-bold text-indigo-950 shadow-2xs'
                       : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                   }`}
                 >
@@ -557,7 +547,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
                       {s.number}
                     </span>
                     <div>
-                      <div>Bước {s.number}: {s.title}</div>
+                      <div>
+                        Bước {s.number}: {s.title}
+                      </div>
                       <div className="text-[11px] font-normal text-slate-500">{s.subtitle}</div>
                     </div>
                   </div>
@@ -571,11 +563,11 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
               ))}
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setShowStepModal(false)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
               >
                 Hủy
               </button>
@@ -583,7 +575,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
                 type="button"
                 disabled={savingStep}
                 onClick={handleSaveTimelineStep}
-                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               >
                 {savingStep && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                 <span>Lưu & Đồng bộ ngay</span>
