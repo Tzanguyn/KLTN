@@ -179,10 +179,10 @@ async function main() {
   // Cấu hình hệ thống
   await prisma.systemConfig.upsert({
     where: { key_semesterId_departmentId: { key: 'MAX_GROUP_SIZE', semesterId: semester.id, departmentId: department.id } },
-    update: { value: 3 },
+    update: { value: 2 },
     create: {
       key: 'MAX_GROUP_SIZE',
-      value: 3,
+      value: 2,
       description: 'Số sinh viên tối đa mỗi nhóm',
       semesterId: semester.id,
       departmentId: department.id,

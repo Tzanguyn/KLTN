@@ -44,7 +44,7 @@ export class UsersController {
 
   @ApiOperation({ summary: 'Lấy danh sách sinh viên có phân trang & tìm kiếm' })
   @Get('students')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
+  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.GIANG_VIEN)
   students(@Query() query: { page?: number; limit?: number; search?: string; eligible?: string }) {
     return this.service.students(query);
   }

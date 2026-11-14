@@ -126,6 +126,19 @@ function stripVietnameseDiacritics(str: string): string {
 export interface ParsedScoreNote {
   note: string;
   studentScores: Record<string, number>;
+  role?: string;
+  preservedGvpb?: {
+    value: number;
+    note: string;
+    studentScores: Record<string, number>;
+    status?: string;
+  };
+  preservedCouncil?: {
+    value: number;
+    note: string;
+    studentScores: Record<string, number>;
+    status?: string;
+  };
 }
 
 export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
@@ -137,7 +150,7 @@ export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
       if (
         parsed &&
         typeof parsed === 'object' &&
-        ('studentScores' in parsed || '__perStudent' in parsed)
+        ('studentScores' in parsed || '__perStudent' in parsed || 'role' in parsed)
       ) {
         return {
           note: typeof parsed.note === 'string' ? parsed.note : '',
@@ -145,6 +158,15 @@ export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
             parsed.studentScores && typeof parsed.studentScores === 'object'
               ? parsed.studentScores
               : {},
+          role: typeof parsed.role === 'string' ? parsed.role : undefined,
+          preservedGvpb:
+            parsed.preservedGvpb && typeof parsed.preservedGvpb === 'object'
+              ? parsed.preservedGvpb
+              : undefined,
+          preservedCouncil:
+            parsed.preservedCouncil && typeof parsed.preservedCouncil === 'object'
+              ? parsed.preservedCouncil
+              : undefined,
         };
       }
     } catch {
@@ -157,14 +179,22 @@ export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
 export function serializeScoreNote(
   note?: string | null,
   studentScores?: Record<string, number> | null,
+  role?: string | null,
+  preservedGvpb?: any,
+  preservedCouncil?: any,
 ): string | null {
   const cleanNote = note ? String(note).trim() : '';
-  if (studentScores && Object.keys(studentScores).length > 0) {
-    return JSON.stringify({
+  const hasStudents = studentScores && Object.keys(studentScores).length > 0;
+  if (hasStudents || role || preservedGvpb || preservedCouncil) {
+    const payload: any = {
       __perStudent: true,
       note: cleanNote,
-      studentScores,
-    });
+      studentScores: studentScores || {},
+    };
+    if (role) payload.role = role;
+    if (preservedGvpb) payload.preservedGvpb = preservedGvpb;
+    if (preservedCouncil) payload.preservedCouncil = preservedCouncil;
+    return JSON.stringify(payload);
   }
   return cleanNote || null;
 }
@@ -401,13 +431,61 @@ export class ScoresService {
       orderBy: { code: 'asc' },
     });
 
-    // 4. Lấy điểm hiện tại của người dùng này cho nhóm
-    const existingScores = group
+    // 4. Lấy điểm hiện tại của người dùng này cho nhóm (phân tách theo vai trò để tránh nhầm lẫn giữa GVPB và Hội đồng)
+    const allUserScores = group
       ? await this.prisma.score.findMany({
           where: { groupId: group.id, scorerId: userId },
           include: { criterion: true },
         })
       : [];
+
+    const existingScores = allUserScores
+      .map((s) => {
+        const parsed = parseScoreNote(s.note);
+        if (role === 'HOI_DONG') {
+          if (parsed.role === 'HOI_DONG') return s;
+          if (parsed.preservedCouncil) {
+            return {
+              ...s,
+              value: parsed.preservedCouncil.value,
+              status: parsed.preservedCouncil.status || s.status,
+              note: serializeScoreNote(
+                parsed.preservedCouncil.note,
+                parsed.preservedCouncil.studentScores,
+                'HOI_DONG',
+              ),
+            };
+          }
+          // Nếu điểm không có role mà user là GVHD hoặc GVPB -> không dùng làm điểm Hội đồng
+          if (topic?.ownerId === userId || group?.reviewerAssignments?.some((ra: any) => ra.lecturer?.user?.id === userId)) {
+            return null;
+          }
+          return s;
+        } else if (role === 'PHAN_BIEN') {
+          if (parsed.role === 'PHAN_BIEN') return s;
+          if (parsed.preservedGvpb) {
+            return {
+              ...s,
+              value: parsed.preservedGvpb.value,
+              status: parsed.preservedGvpb.status || s.status,
+              note: serializeScoreNote(
+                parsed.preservedGvpb.note,
+                parsed.preservedGvpb.studentScores,
+                'PHAN_BIEN',
+              ),
+            };
+          }
+          if (topic?.ownerId === userId) return null;
+          return s;
+        } else {
+          // HUONG_DAN
+          if (parsed.role === 'HUONG_DAN') return s;
+          if (parsed.role === 'PHAN_BIEN' || parsed.role === 'HOI_DONG') return null;
+          if (topic?.ownerId === userId) return s;
+          return null;
+        }
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
 
     // Kiểm tra trạng thái khóa điểm & thời hạn mở khóa
     const now = new Date();
@@ -768,7 +846,10 @@ export class ScoresService {
       if (!criterion) continue;
 
       const maxVal = Number(criterion.maxScore) || 10;
-      const clampScore = (v: any) => Math.min(Math.max(Number(v) || 0, 0), maxVal);
+      const clampScore = (v: any) => {
+        const parsed = typeof v === 'string' ? parseFloat(v.replace(',', '.')) : Number(v);
+        return Math.min(Math.max(isNaN(parsed) ? 0 : parsed, 0), maxVal);
+      };
 
       const studentScoresMap: Record<string, number> = {};
       const memberScoreValues: number[] = [];
@@ -816,10 +897,38 @@ export class ScoresService {
         }
       }
 
-      const cleanNote = item.note || dto.generalComment || '';
-      const serializedNote = serializeScoreNote(cleanNote, studentScoresMap);
-
       const existingOne = existingScores.find((s) => s.criterionId === criterion.id);
+      const existingParsed = existingOne ? parseScoreNote(existingOne.note) : null;
+
+      const currentRole = dto.role || 'HUONG_DAN';
+      let preservedGvpb = existingParsed?.preservedGvpb;
+      let preservedCouncil = existingParsed?.preservedCouncil;
+
+      // Bảo toàn điểm nếu cùng một giảng viên đảm nhiệm cả vai trò GVPB và Thành viên Hội đồng
+      if (existingOne && currentRole === 'HOI_DONG' && (existingParsed?.role === 'PHAN_BIEN' || (!existingParsed?.role && existingOne.scorerId !== targetGroup.topic?.ownerId))) {
+        preservedGvpb = {
+          value: Number(existingOne.value),
+          note: existingParsed?.note || '',
+          studentScores: existingParsed?.studentScores || {},
+          status: existingOne.status,
+        };
+      } else if (existingOne && currentRole === 'PHAN_BIEN' && (existingParsed?.role === 'HOI_DONG' || (!existingParsed?.role && existingOne.scorerId !== targetGroup.topic?.ownerId))) {
+        preservedCouncil = {
+          value: Number(existingOne.value),
+          note: existingParsed?.note || '',
+          studentScores: existingParsed?.studentScores || {},
+          status: existingOne.status,
+        };
+      }
+
+      const cleanNote = item.note || dto.generalComment || '';
+      const serializedNote = serializeScoreNote(
+        cleanNote,
+        studentScoresMap,
+        currentRole,
+        preservedGvpb,
+        preservedCouncil,
+      );
 
       const saved = await this.prisma.score.upsert({
         where: {
@@ -1105,6 +1214,10 @@ export class ScoresService {
       throw new BadRequestException('Thời hạn cho phép sửa điểm đã hết. Điểm đã được khóa lại. Vui lòng gửi yêu cầu mở khóa mới.');
     }
 
+    const rawVal: any = dto.value;
+    const parsedVal = typeof rawVal === 'string' ? parseFloat(rawVal.replace(',', '.')) : Number(rawVal);
+    const clampedVal = Math.min(Math.max(isNaN(parsedVal) ? 0 : parsedVal, 0), Number(criterion.maxScore) || 10);
+
     const score = await this.prisma.score.upsert({
       where: {
         groupId_criterionId_scorerId: {
@@ -1114,13 +1227,13 @@ export class ScoresService {
         },
       },
       update: {
-        value: dto.value,
+        value: clampedVal,
         note: dto.note,
         status: 'SUBMITTED',
         history: {
           create: {
             oldValue: existing?.value,
-            newValue: dto.value,
+            newValue: clampedVal,
             changedBy: userId,
             reason: dto.note,
           },
@@ -1130,7 +1243,7 @@ export class ScoresService {
         groupId: dto.groupId,
         criterionId: dto.criterionId,
         scorerId: userId,
-        value: dto.value,
+        value: clampedVal,
         note: dto.note,
         status: 'SUBMITTED',
       },
@@ -1892,8 +2005,68 @@ export class ScoresService {
         if (ra.lecturer?.user?.id) reviewerUserIds.add(ra.lecturer.user.id);
       }
 
+      // Helper lấy điểm của Hội đồng cho 1 thành viên (loại trừ điểm GVHD hoặc điểm phản biện)
+      const getMemberCouncilScores = (userId: string) => {
+        return g.scores
+          .map((s) => {
+            if (s.scorerId !== userId) return null;
+            const parsed = parseScoreNote(s.note);
+            if (parsed.role === 'HOI_DONG') return s;
+            if (parsed.preservedCouncil) {
+              return {
+                ...s,
+                value: parsed.preservedCouncil.value,
+                status: parsed.preservedCouncil.status || s.status,
+                note: serializeScoreNote(
+                  parsed.preservedCouncil.note,
+                  parsed.preservedCouncil.studentScores,
+                  'HOI_DONG',
+                ),
+              };
+            }
+            if (parsed.role === 'HUONG_DAN' || parsed.role === 'PHAN_BIEN') return null;
+            if (s.scorerId === topicOwnerId) return null;
+            if (reviewerUserIds.has(s.scorerId)) return null;
+            return s;
+          })
+          .filter((s): s is any => Boolean(s));
+      };
+
+      // Helper lấy điểm của GVPB cho 1 giảng viên phản biện
+      const getReviewerScores = (revUserId: string) => {
+        return g.scores
+          .map((s) => {
+            if (s.scorerId !== revUserId) return null;
+            const parsed = parseScoreNote(s.note);
+            if (parsed.role === 'PHAN_BIEN') return s;
+            if (parsed.preservedGvpb) {
+              return {
+                ...s,
+                value: parsed.preservedGvpb.value,
+                status: parsed.preservedGvpb.status || s.status,
+                note: serializeScoreNote(
+                  parsed.preservedGvpb.note,
+                  parsed.preservedGvpb.studentScores,
+                  'PHAN_BIEN',
+                ),
+              };
+            }
+            if (parsed.role === 'HUONG_DAN' || parsed.role === 'HOI_DONG') return null;
+            if (s.scorerId === topicOwnerId) return null;
+            return s;
+          })
+          .filter((s): s is any => Boolean(s));
+      };
+
       // 1. Điểm GVHD
-      const gvhdScores = topicOwnerId ? g.scores.filter((s) => s.scorerId === topicOwnerId) : [];
+      const gvhdScores = topicOwnerId
+        ? g.scores.filter((s) => {
+            if (s.scorerId !== topicOwnerId) return false;
+            const parsed = parseScoreNote(s.note);
+            if (parsed.role && parsed.role !== 'HUONG_DAN') return false;
+            return true;
+          })
+        : [];
       const gvhdScoresToCalc = this.getScoresToCalculate(gvhdScores);
       const gvhdHasDraft = gvhdScoresToCalc.some((s) => s.status === 'DRAFT');
       const gvhdIsOpened = gvhdScoresToCalc.some((s) => s.status === 'OPENED');
@@ -1906,7 +2079,7 @@ export class ScoresService {
       // 2. Điểm GVPB
       const reviewers = g.reviewerAssignments.map((ra) => {
         const revId = ra.lecturer?.user?.id;
-        const revScores = revId ? g.scores.filter((s) => s.scorerId === revId) : [];
+        const revScores = revId ? getReviewerScores(revId) : [];
         const revScoresToCalc = this.getScoresToCalculate(revScores);
         const hasDraft = revScoresToCalc.some((s) => s.status === 'DRAFT');
         const isOpened = revScoresToCalc.some((s) => s.status === 'OPENED');
@@ -2021,7 +2194,7 @@ export class ScoresService {
       const defense = g.defenses?.[0] || null;
       const committee = defense?.committee || null;
       const committeeMembers = (committee?.members || []).map((m: any) => {
-        const memScores = g.scores.filter((s) => s.scorerId === m.userId);
+        const memScores = getMemberCouncilScores(m.userId);
         const memScoresToCalc = this.getScoresToCalculate(memScores);
         const hasDraft = memScoresToCalc.some((s) => s.status === 'DRAFT');
         const isOpened = memScoresToCalc.some((s) => s.status === 'OPENED');
@@ -2052,6 +2225,13 @@ export class ScoresService {
       });
 
       const membersWithScores = committeeMembers.filter((m: any) => m.total !== null);
+      const isCouncilRequired = Boolean(committee);
+      const isCouncilComplete =
+        isCouncilRequired &&
+        committeeMembers.length > 0 &&
+        membersWithScores.length === committeeMembers.length &&
+        committeeMembers.every((m: any) => m.isComplete);
+
       const councilTotal =
         membersWithScores.length > 0
           ? Number(
@@ -2079,32 +2259,37 @@ export class ScoresService {
       let diemTongKet: number | null = null;
       let congThucTinh = '';
 
-      const scoreComponents: Array<{ name: string; score: number }> = [];
-      if (gvhdTotal !== null) scoreComponents.push({ name: 'Điểm GVHD', score: gvhdTotal });
-      if (gvpbTotal !== null) scoreComponents.push({ name: 'Điểm GVPB', score: gvpbTotal });
-      if (councilTotal !== null) scoreComponents.push({ name: 'Điểm Hội đồng', score: councilTotal });
+      if (isCouncilRequired && !isCouncilComplete) {
+        // Nhóm có lịch Hội đồng nhưng Hội đồng chưa hoàn tất chấm điểm -> Chưa hoàn tất điểm tổng kết
+        diemTongKet = null;
+        congThucTinh =
+          membersWithScores.length === 0
+            ? 'Đang chờ Hội đồng bảo vệ chấm điểm'
+            : `Hội đồng bảo vệ chưa đủ điểm (${membersWithScores.length}/${committeeMembers.length} thành viên đã chấm)`;
+      } else if (gvhdTotal !== null && gvpbTotal !== null && (!isCouncilRequired || (councilTotal !== null && isCouncilComplete))) {
+        const scoreComponents: Array<{ name: string; score: number }> = [];
+        scoreComponents.push({ name: 'Điểm GVHD', score: gvhdTotal });
+        scoreComponents.push({ name: 'Điểm GVPB', score: gvpbTotal });
+        if (isCouncilRequired && councilTotal !== null) {
+          scoreComponents.push({ name: 'Điểm Hội đồng', score: councilTotal });
+        }
 
-      if (scoreComponents.length > 0) {
         const sum = scoreComponents.reduce((acc, c) => acc + c.score, 0);
         diemTongKet = Number((sum / scoreComponents.length).toFixed(2));
 
-        if (scoreComponents.length === 1) {
-          congThucTinh = `Điểm tổng kết = ${scoreComponents[0].name}`;
-        } else {
-          const names = scoreComponents.map((c) => c.name).join(' + ');
-          congThucTinh = `Điểm tổng kết = (${names}) / ${scoreComponents.length}`;
-        }
-      } else if (g.scores.length > 0) {
-        diemTongKet = this.calculateWeightedTotal(g.scores);
-        congThucTinh = `Điểm tổng kết = Trung bình cộng ${g.scores.length} tiêu chí đã chấm`;
+        const names = scoreComponents.map((c) => c.name).join(' + ');
+        congThucTinh = `Điểm tổng kết = (${names}) / ${scoreComponents.length}`;
+      } else if (g.midtermStatus === 'STOPPED') {
+        diemTongKet = null;
+        congThucTinh = 'Đã dừng đề tài ở giữa kỳ';
       } else {
         diemTongKet = null;
-        congThucTinh = 'Chưa có điểm đánh giá';
+        congThucTinh = 'Chưa đầy đủ các thành phần điểm đánh giá';
       }
 
       if (bonusPoints > 0 && diemTongKet !== null) {
         diemTongKet = Math.min(10, Number((diemTongKet + bonusPoints).toFixed(2)));
-        congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 10đ)`;
+        congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 2.0đ, trần 10đ)`;
       }
 
       const xepLoai = diemTongKet !== null ? getRatingClassification(diemTongKet) : 'Chưa xếp loại';
@@ -2160,9 +2345,7 @@ export class ScoresService {
         } else {
           for (const ra of g.reviewerAssignments) {
             const revName = ra.lecturer?.user?.fullName || 'Cán bộ phản biện';
-            const rScores = ra.lecturer?.user?.id
-              ? g.scores.filter((s) => s.scorerId === ra.lecturer?.user?.id)
-              : [];
+            const rScores = ra.lecturer?.user?.id ? getReviewerScores(ra.lecturer.user.id) : [];
             if (rScores.length === 0) {
               missingComponents.push('THIEU_DIEM_GVPB');
               warnings.push(`GVPB (${revName}) chưa nhập điểm`);
@@ -2211,39 +2394,40 @@ export class ScoresService {
             missingComponents.push('CHUA_GAN_HOI_DONG');
             warnings.push('Lịch bảo vệ chưa được gán Hội đồng đánh giá');
           } else {
-            const unratedMembers = committee.members.filter(
-              (m: any) => !g.scores.some((s) => s.scorerId === m.userId),
-            );
+            const unratedMembers = committeeMembers.filter((m: any) => m.total === null);
             if (unratedMembers.length > 0) {
               missingComponents.push('THIEU_DIEM_HOI_DONG');
               const unratedNames = unratedMembers
-                .map((m: any) => m.user?.fullName || 'Ủy viên')
+                .map((m: any) => m.fullName)
                 .join(', ');
-              warnings.push(
-                `Hội đồng bảo vệ chưa đủ điểm (${
-                  committee.members.length - unratedMembers.length
-                }/${committee.members.length} thành viên đã chấm, còn thiếu: ${unratedNames})`,
-              );
+              if (membersWithScores.length === 0) {
+                warnings.push(
+                  `Hội đồng bảo vệ chưa chấm điểm (0/${committeeMembers.length} thành viên đã chấm)`,
+                );
+              } else {
+                warnings.push(
+                  `Hội đồng bảo vệ chưa đủ điểm (${membersWithScores.length}/${committeeMembers.length} thành viên đã chấm, còn thiếu: ${unratedNames})`,
+                );
+              }
             }
-            for (const m of committee.members) {
-              const mScores = g.scores.filter((s) => s.scorerId === m.userId);
-              if (mScores.length > 0) {
-                if (mScores.length < 10) {
+            for (const m of committeeMembers) {
+              if (m.criteriaCount > 0) {
+                if (m.criteriaCount < 10) {
                   missingComponents.push('HOI_DONG_CHUA_DU_10_TIEU_CHI');
                   warnings.push(
-                    `Thành viên HĐ (${m.user?.fullName}) mới chấm ${mScores.length}/10 tiêu chí`,
+                    `Thành viên HĐ (${m.fullName}) mới chấm ${m.criteriaCount}/10 tiêu chí`,
                   );
                 }
-                if (mScores.some((s) => s.status === 'DRAFT')) {
+                if (m.hasDraft) {
                   missingComponents.push('HOI_DONG_DIEM_NHAP');
                   warnings.push(
-                    `Điểm của Thành viên HĐ (${m.user?.fullName}) vẫn đang ở trạng thái Bản nháp`,
+                    `Điểm của Thành viên HĐ (${m.fullName}) vẫn đang ở trạng thái Bản nháp`,
                   );
                 }
-                if (mScores.some((s) => s.status === 'OPENED')) {
+                if (m.isOpened) {
                   missingComponents.push('HOI_DONG_DIEM_MO_KHOA');
                   warnings.push(
-                    `Điểm của Thành viên HĐ (${m.user?.fullName}) đang được mở khóa để chỉnh sửa`,
+                    `Điểm của Thành viên HĐ (${m.fullName}) đang được mở khóa để chỉnh sửa`,
                   );
                 }
               }
@@ -2280,7 +2464,7 @@ export class ScoresService {
         const stRevScores = g.reviewerAssignments
           .map((ra) => {
             const revId = ra.lecturer?.user?.id;
-            const rScores = revId ? this.getScoresToCalculate(g.scores.filter((s) => s.scorerId === revId)) : [];
+            const rScores = revId ? this.getScoresToCalculate(getReviewerScores(revId)) : [];
             return rScores.length > 0 ? calculateStudentWeightedTotal(rScores, keys) : null;
           })
           .filter((v): v is number => v !== null);
@@ -2296,7 +2480,7 @@ export class ScoresService {
 
         const stCouncilScores = (committee?.members || [])
           .map((cm: any) => {
-            const cScores = this.getScoresToCalculate(g.scores.filter((s) => s.scorerId === cm.userId));
+            const cScores = this.getScoresToCalculate(getMemberCouncilScores(cm.userId));
             return cScores.length > 0 ? calculateStudentWeightedTotal(cScores, keys) : null;
           })
           .filter((v: number | null): v is number => v !== null);
@@ -2314,12 +2498,22 @@ export class ScoresService {
         const stRawBonus = stEvidences.reduce((sum, ev) => sum + (ev.points ? Number(ev.points) : 0), 0);
         const stBonus = Math.min(2.0, Number(stRawBonus.toFixed(2)));
 
-        const stParts = [stGvhd, stGvpb, stCouncil].filter((v): v is number => v !== null);
         let stFinal: number | null = null;
-        if (stParts.length > 0) {
-          stFinal = Number((stParts.reduce((a, b) => a + b, 0) / stParts.length).toFixed(2));
-          if (stBonus > 0) {
-            stFinal = Math.min(10, Number((stFinal + stBonus).toFixed(2)));
+        if (isCouncilRequired) {
+          // Bắt buộc Hội đồng bảo vệ phải hoàn tất chấm điểm mới tính điểm tổng kết cho sinh viên
+          if (isCouncilComplete && stGvhd !== null && stGvpb !== null && stCouncil !== null) {
+            stFinal = Number(((stGvhd + stGvpb + stCouncil) / 3).toFixed(2));
+            if (stBonus > 0) {
+              stFinal = Math.min(10, Number((stFinal + stBonus).toFixed(2)));
+            }
+          }
+        } else {
+          // Trường hợp không có Hội đồng (Báo cáo Poster)
+          if (stGvhd !== null && stGvpb !== null) {
+            stFinal = Number(((stGvhd + stGvpb) / 2).toFixed(2));
+            if (stBonus > 0) {
+              stFinal = Math.min(10, Number((stFinal + stBonus).toFixed(2)));
+            }
           }
         }
 

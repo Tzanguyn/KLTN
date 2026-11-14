@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
+import { fixMojibake } from '../../utils/format';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -90,6 +91,8 @@ export const LecturerWorkspace: React.FC = () => {
   const [showTopicRegsModal, setShowTopicRegsModal] = useState(false);
   const [selectedTopicForRegs, setSelectedTopicForRegs] = useState<any>(null);
   const [topicRegistrations, setTopicRegistrations] = useState<any[]>([]);
+  const [topicGroups, setTopicGroups] = useState<any[]>([]);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [addStudentToTopicId, setAddStudentToTopicId] = useState('');
   const [loadingTopicRegs, setLoadingTopicRegs] = useState(false);
 
@@ -195,10 +198,11 @@ export const LecturerWorkspace: React.FC = () => {
           (st.studentCode ? row?.studentScores?.[st.studentCode] : undefined) ??
           row?.value ??
           '0';
-        const val = parseFloat(String(stRaw)) || 0;
+        const parsed = parseFloat(String(stRaw).replace(',', '.')) || 0;
+        const val = Math.min(10, Math.max(0, parsed));
         return acc + val;
       }, 0);
-      totals[st.key] = Math.round((sum / count) * 100) / 100;
+      totals[st.key] = Math.min(10, Math.max(0, Math.round((sum / count) * 100) / 100));
     }
     return totals;
   }, [scoringFormData, tenScores, scoringStudents]);
@@ -208,7 +212,7 @@ export const LecturerWorkspace: React.FC = () => {
     const vals = scoringStudents.map((st: any) => liveStudentTotals[st.key] ?? 0);
     if (vals.length === 0) return 0;
     const sum = vals.reduce((a: number, b: number) => a + b, 0);
-    return Math.round((sum / vals.length) * 100) / 100;
+    return Math.min(10, Math.max(0, Math.round((sum / vals.length) * 100) / 100));
   }, [scoringStudents, liveStudentTotals]);
 
   const [showMidtermModal, setShowMidtermModal] = useState(false);
@@ -250,10 +254,6 @@ export const LecturerWorkspace: React.FC = () => {
       setMyTopics(tRes.data.data ?? []);
       const groups = gRes.data.data ?? [];
       setMyGroups(groups);
-      if (groups.length > 0 && !selectedGroupId) {
-        const passedGroup = groups.find((g: any) => g.midtermStatus === 'CONTINUE');
-        setSelectedGroupId((passedGroup || groups[0]).id);
-      }
 
       const lecDashData = dashRes?.data?.data ?? {};
       const officialDashData = officialDashRes?.data?.data ?? {};
@@ -282,7 +282,16 @@ export const LecturerWorkspace: React.FC = () => {
 
       setSubmissions(subRes.data.data ?? []);
       setAppointments(appRes.data.data ?? []);
-      setReviewerAssignments(revRes.data?.data ?? []);
+      const revs = revRes.data?.data ?? [];
+      setReviewerAssignments(revs);
+      if (!selectedGroupId) {
+        if (groups.length > 0) {
+          const passedGroup = groups.find((g: any) => g.midtermStatus === 'CONTINUE');
+          setSelectedGroupId((passedGroup || groups[0]).id);
+        } else if (revs.length > 0) {
+          setSelectedGroupId(revs[0].groupId || revs[0].id);
+        }
+      }
       setCommittees(comRes.data?.data ?? []);
       setCriteria(critRes.data?.data ?? []);
       if (propRes?.data) {
@@ -342,7 +351,7 @@ export const LecturerWorkspace: React.FC = () => {
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', sub.fileName || `submission-${sub.id}.pdf`);
+      link.setAttribute('download', fixMojibake(sub.fileName) || `submission-${sub.id}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -356,10 +365,11 @@ export const LecturerWorkspace: React.FC = () => {
     loadData();
   }, []);
 
-  const loadScoringForm = async (groupId: string) => {
+  const loadScoringForm = async (groupId: string, targetRole?: string) => {
     if (!groupId) return;
     try {
-      const res = await api.get(`/scores/scoring-forms/${groupId}`);
+      const roleParam = targetRole ? `?role=${targetRole}` : '';
+      const res = await api.get(`/scores/scoring-forms/${groupId}${roleParam}`);
       const form = res.data.data;
       setScoringFormData(form);
       if (form?.criteria) {
@@ -375,19 +385,28 @@ export const LecturerWorkspace: React.FC = () => {
           const stScoresMap: Record<string, string> = {};
           if (existing?.studentScores && typeof existing.studentScores === 'object') {
             for (const [k, v] of Object.entries(existing.studentScores)) {
-              if (v !== undefined && v !== null) {
-                stScoresMap[k] = String(v);
+              if (v !== undefined && v !== null && String(v).trim() !== '') {
+                const parsed = parseFloat(String(v).replace(',', '.'));
+                const clamped = !isNaN(parsed) ? Math.min(10, Math.max(0, parsed)) : 0;
+                stScoresMap[k] = String(clamped);
               }
             }
           }
           formStudents.forEach((st: any, idx: number) => {
             const stKey = st.id || st.userId || st.studentId || st.studentCode || `sv_${idx + 1}`;
-            const resolvedVal =
+            const rawVal =
               stScoresMap[stKey] ??
               (st.userId ? stScoresMap[st.userId] : undefined) ??
               (st.studentId ? stScoresMap[st.studentId] : undefined) ??
               (st.studentCode ? stScoresMap[st.studentCode] : undefined) ??
               (existing !== undefined && existing !== null ? String(existing.value) : '');
+            let resolvedVal = rawVal;
+            if (rawVal !== '' && rawVal !== undefined) {
+              const parsed = parseFloat(String(rawVal).replace(',', '.'));
+              if (!isNaN(parsed)) {
+                resolvedVal = String(Math.min(10, Math.max(0, parsed)));
+              }
+            }
             stScoresMap[stKey] = resolvedVal;
             if (st.id) stScoresMap[st.id] = resolvedVal;
             if (st.userId) stScoresMap[st.userId] = resolvedVal;
@@ -395,8 +414,16 @@ export const LecturerWorkspace: React.FC = () => {
             if (st.studentCode) stScoresMap[st.studentCode] = resolvedVal;
           });
 
+          const rawExistingVal = existing ? String(existing.value) : '';
+          let normalizedExistingVal = rawExistingVal;
+          if (rawExistingVal !== '') {
+            const parsed = parseFloat(rawExistingVal.replace(',', '.'));
+            if (!isNaN(parsed)) {
+              normalizedExistingVal = String(Math.min(10, Math.max(0, parsed)));
+            }
+          }
           initScores[c.code] = {
-            value: existing ? String(existing.value) : '',
+            value: normalizedExistingVal,
             note: existing?.note || '',
             studentScores: stScoresMap,
           };
@@ -479,6 +506,11 @@ export const LecturerWorkspace: React.FC = () => {
   const handleCreateTopic = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const cap = Number(topicCapacity);
+      if (Number.isNaN(cap) || cap < 1 || cap > 2) {
+        return notify('Số lượng sinh viên của mỗi nhóm tối thiểu là 1 và tối đa là 2 sinh viên', 'error');
+      }
+
       // Find active semester
       const semRes = await api.get('/config/semesters');
       const activeSem = semRes.data.data?.[0];
@@ -541,6 +573,11 @@ export const LecturerWorkspace: React.FC = () => {
     e.preventDefault();
     if (!editTopicId) return;
     try {
+      const cap = Number(editTopicCapacity);
+      if (Number.isNaN(cap) || cap < 1 || cap > 2) {
+        return notify('Số lượng sinh viên của mỗi nhóm tối thiểu là 1 và tối đa là 2 sinh viên', 'error');
+      }
+
       await api.patch(`/topics/${editTopicId}`, {
         tenDeTai: editTopicTitle,
         title: editTopicTitle,
@@ -570,13 +607,63 @@ export const LecturerWorkspace: React.FC = () => {
     setLoadingTopicRegs(true);
     setAddStudentToTopicId('');
     try {
-      const res = await api.get(`/topics/${topic.id}/registrations`);
-      setTopicRegistrations(res.data.data?.data ?? res.data.data ?? []);
+      const [res, stdRes] = await Promise.all([
+        api.get(`/topics/${topic.id}/registrations`),
+        studentsList.length === 0 ? api.get('/users/students?limit=100&eligible=true').catch(() => null) : null,
+      ]);
+      const regPayload = res.data.data?.data ?? res.data.data ?? res.data ?? [];
+      setTopicRegistrations(Array.isArray(regPayload) ? regPayload : (regPayload.registrations || regPayload.data || []));
+      setTopicGroups(res.data.data?.groups ?? res.data?.groups ?? []);
+
+      if (stdRes?.data?.data?.items) {
+        setStudentsList(stdRes.data.data.items);
+      }
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi tải danh sách sinh viên đăng ký', 'error');
       setTopicRegistrations([]);
+      setTopicGroups([]);
     } finally {
       setLoadingTopicRegs(false);
+    }
+  };
+
+  // Lecturer creates group for topic
+  const handleLecturerCreateGroup = async (studentId?: string) => {
+    if (!selectedTopicForRegs) return;
+    try {
+      setIsCreatingGroup(true);
+      const memberIds = studentId
+        ? [studentId]
+        : topicRegistrations.filter((r) => !r.groupId && !r.group).map((r) => r.studentId).slice(0, selectedTopicForRegs.capacity || 2);
+      await api.post('/groups', {
+        topicId: selectedTopicForRegs.id,
+        memberStudentIds: memberIds,
+      });
+      notify('Thành lập nhóm KLTN cho đề tài thành công!');
+      const res = await api.get(`/topics/${selectedTopicForRegs.id}/registrations`);
+      const regPayload = res.data.data?.data ?? res.data.data ?? res.data ?? [];
+      setTopicRegistrations(Array.isArray(regPayload) ? regPayload : (regPayload.registrations || regPayload.data || []));
+      setTopicGroups(res.data.data?.groups ?? res.data?.groups ?? []);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi thành lập nhóm', 'error');
+    } finally {
+      setIsCreatingGroup(false);
+    }
+  };
+
+  // Lecturer adds registered student to existing group
+  const handleLecturerAddMemberToGroup = async (groupId: string, studentId: string) => {
+    try {
+      await api.post(`/groups/${groupId}/members`, { studentId });
+      notify('Đã thêm sinh viên vào nhóm KLTN thành công!');
+      const res = await api.get(`/topics/${selectedTopicForRegs.id}/registrations`);
+      const regPayload = res.data.data?.data ?? res.data.data ?? res.data ?? [];
+      setTopicRegistrations(Array.isArray(regPayload) ? regPayload : (regPayload.registrations || regPayload.data || []));
+      setTopicGroups(res.data.data?.groups ?? res.data?.groups ?? []);
+      loadData();
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi thêm sinh viên vào nhóm', 'error');
     }
   };
 
@@ -592,7 +679,9 @@ export const LecturerWorkspace: React.FC = () => {
       setAddStudentToTopicId('');
       // Reload registrations for this topic
       const res = await api.get(`/topics/${selectedTopicForRegs.id}/registrations`);
-      setTopicRegistrations(res.data.data?.data ?? res.data.data ?? []);
+      const regPayload = res.data.data?.data ?? res.data.data ?? res.data ?? [];
+      setTopicRegistrations(Array.isArray(regPayload) ? regPayload : (regPayload.registrations || regPayload.data || []));
+      setTopicGroups(res.data.data?.groups ?? res.data?.groups ?? []);
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi thêm sinh viên vào đề tài', 'error');
@@ -686,35 +775,6 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
-  // Transfer member between GVHD's groups
-  const handleTransferMember = async (fromGroupId: string, studentId: string, studentName: string) => {
-    const otherGroups = myGroups.filter((g) => g.id !== fromGroupId && g.status !== 'CANCELLED');
-    if (otherGroups.length === 0) {
-      return notify('Bạn chưa có nhóm hướng dẫn nào khác để chuyển sinh viên sang', 'error');
-    }
-    const optionsText = otherGroups.map((g) => `${g.code} (${g.name})`).join(', ');
-    const targetCodeOrId = prompt(
-      `Chuyển sinh viên "${studentName}" sang nhóm nào?\nNhập mã nhóm đích (${optionsText}):`,
-      otherGroups[0].code,
-    );
-    if (!targetCodeOrId) return;
-    const targetGroup = otherGroups.find(
-      (g) => g.code.toLowerCase() === targetCodeOrId.trim().toLowerCase() || g.id === targetCodeOrId.trim(),
-    );
-    if (!targetGroup) {
-      return notify(`Không tìm thấy nhóm có mã "${targetCodeOrId}" trong danh sách nhóm của bạn`, 'error');
-    }
-    try {
-      await api.post(`/groups/${fromGroupId}/transfer-member`, {
-        studentId,
-        targetGroupId: targetGroup.id,
-      });
-      notify(`Đã chuyển sinh viên ${studentName} sang nhóm ${targetGroup.code} thành công!`);
-      loadData();
-    } catch (err: any) {
-      notify(err.response?.data?.message ?? 'Lỗi chuyển nhóm cho sinh viên', 'error');
-    }
-  };
 
   // Cancel / Archive topic
   const handleCancelTopic = async (topicId: string, topicTitle: string) => {
@@ -904,7 +964,8 @@ export const LecturerWorkspace: React.FC = () => {
             (st.studentCode ? row?.studentScores?.[st.studentCode] : undefined) ??
             row?.value ??
             '0';
-          const numVal = Math.min(Math.max(parseFloat(String(rawStVal)) || 0, 0), 10);
+          const parsed = parseFloat(String(rawStVal).replace(',', '.')) || 0;
+          const numVal = Math.min(Math.max(parsed, 0), 10);
           studentScoresPayload[st.key] = numVal;
           if (st.id) studentScoresPayload[st.id] = numVal;
           if (st.userId) studentScoresPayload[st.userId] = numVal;
@@ -913,10 +974,11 @@ export const LecturerWorkspace: React.FC = () => {
           numericVals.push(numVal);
         });
 
+        const rawRowVal = parseFloat(String(row?.value ?? '0').replace(',', '.')) || 0;
         const avgCriterionScore =
           numericVals.length > 0
             ? Math.round((numericVals.reduce((a, b) => a + b, 0) / numericVals.length) * 100) / 100
-            : parseFloat(row?.value ?? '0') || 0;
+            : Math.min(10, Math.max(0, rawRowVal));
 
         return {
           tieuChiId: c.code,
@@ -1363,19 +1425,6 @@ export const LecturerWorkspace: React.FC = () => {
                           <span>{m.student?.user?.fullName ?? 'Sinh viên'} ({m.student?.studentCode})</span>
                           <div className="flex items-center gap-1">
                             {m.isLeader && <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">Nhóm trưởng</span>}
-                            {myGroups.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleTransferMember(group.id, m.studentId, m.student?.user?.fullName || m.student?.studentCode);
-                                }}
-                                className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 font-semibold"
-                                title="Chuyển sinh viên sang nhóm khác của bạn"
-                              >
-                                Chuyển nhóm
-                              </button>
-                            )}
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1942,7 +1991,7 @@ export const LecturerWorkspace: React.FC = () => {
                               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200 transition-colors"
                             >
                               <Download className="w-3.5 h-3.5" />
-                              <span>{sub.fileName}</span>
+                              <span>{fixMojibake(sub.fileName)}</span>
                               {sub.fileSize && (
                                 <span className="text-indigo-400 font-normal">
                                   ({(sub.fileSize / (1024 * 1024)).toFixed(2)} MB)
@@ -2429,11 +2478,11 @@ export const LecturerWorkspace: React.FC = () => {
                       )}
 
                       {/* Latest Submission File */}
-                      {rev.latestSubmission ? (
+                      {rev.latestSubmission && (
                         <div className="p-3 bg-emerald-50/60 border border-emerald-200/70 rounded-xl flex items-center justify-between gap-3 text-xs">
                           <div className="truncate">
                             <div className="text-[10px] font-bold uppercase text-emerald-800">Tài liệu KLTN nộp gần nhất:</div>
-                            <div className="font-bold text-emerald-950 truncate">{rev.latestSubmission.fileName || 'Báo cáo KLTN'}</div>
+                            <div className="font-bold text-emerald-950 truncate">{fixMojibake(rev.latestSubmission.fileName) || 'Báo cáo KLTN'}</div>
                             <div className="text-[10px] text-emerald-700">
                               Nộp lúc: {new Date(rev.latestSubmission.submittedAt).toLocaleString('vi-VN')}
                             </div>
@@ -2448,8 +2497,6 @@ export const LecturerWorkspace: React.FC = () => {
                             Tải về đọc
                           </Button>
                         </div>
-                      ) : (
-                        <div className="text-xs text-slate-400 italic">Nhóm chưa nộp bản báo cáo khóa luận.</div>
                       )}
                     </div>
 
@@ -2628,9 +2675,7 @@ export const LecturerWorkspace: React.FC = () => {
                                     <Download className="w-3 h-3" />
                                     <span>Tải báo cáo</span>
                                   </button>
-                                ) : (
-                                  <span className="text-[11px] text-slate-400">Chưa nộp file</span>
-                                )}
+                                ) : <div />}
 
                                 <Button
                                   size="sm"
@@ -2638,6 +2683,7 @@ export const LecturerWorkspace: React.FC = () => {
                                   onClick={() => {
                                     if (sched.group?.id) {
                                       setSelectedGroupId(sched.group.id);
+                                      loadScoringForm(sched.group.id, 'HOI_DONG');
                                       setActiveTab('scores');
                                     }
                                   }}
@@ -2680,7 +2726,18 @@ export const LecturerWorkspace: React.FC = () => {
 
                 <select
                   value={selectedGroupId}
-                  onChange={(e) => setSelectedGroupId(e.target.value)}
+                  onChange={(e) => {
+                    const newGid = e.target.value;
+                    setSelectedGroupId(newGid);
+                    const isCommittee = committees.some((c) => c.schedules?.some((s: any) => s.group?.id === newGid));
+                    const isReview = reviewerAssignments.some((r) => (r.groupId || r.id) === newGid);
+                    const targetRole = isCommittee && !isReview && !myGroups.some((g) => g.id === newGid)
+                      ? 'HOI_DONG'
+                      : isReview
+                      ? 'PHAN_BIEN'
+                      : 'HUONG_DAN';
+                    loadScoringForm(newGid, targetRole);
+                  }}
                   className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm"
                 >
                   <optgroup label="Nhóm hướng dẫn">
@@ -2703,6 +2760,17 @@ export const LecturerWorkspace: React.FC = () => {
                           {r.groupCode || r.group?.code || 'PB'} - {r.topicTitle || r.group?.name || 'Phản biện'}
                         </option>
                       ))}
+                    </optgroup>
+                  )}
+                  {committees.some((c) => c.schedules?.some((s: any) => s.group?.id)) && (
+                    <optgroup label="Nhóm bảo vệ Hội đồng">
+                      {committees.flatMap((c) => c.schedules || [])
+                        .filter((s: any) => s.group?.id && !myGroups.some((g) => g.id === s.group.id))
+                        .map((s: any) => (
+                          <option key={`hoidong-${s.group.id}`} value={s.group.id}>
+                            {s.group.code} - {s.group.topic?.title || s.group.name} (Hội đồng)
+                          </option>
+                        ))}
                     </optgroup>
                   )}
                 </select>
@@ -3162,15 +3230,17 @@ export const LecturerWorkspace: React.FC = () => {
                               return (
                                 <td key={st.key} className="p-2.5 border-r border-slate-100">
                                   <input
-                                    type="number"
-                                    min="0"
-                                    max="10"
-                                    step="0.1"
+                                    type="text"
+                                    inputMode="decimal"
                                     placeholder={`Điểm SV${stIdx + 1} (0-10)`}
                                     value={stVal}
                                     disabled={isLocked}
                                     onChange={(e) => {
-                                      const val = e.target.value;
+                                      let val = e.target.value.replace(',', '.');
+                                      if (val !== '' && !/^\d*\.?\d*$/.test(val)) return;
+                                      if (val !== '' && parseFloat(val) > 10) {
+                                        val = '10';
+                                      }
                                       setTenScores((prev) => {
                                         const prevRow = prev[c.code] || { value: '', note: '', studentScores: {} };
                                         const nextStScores: Record<string, string> = {
@@ -3183,22 +3253,29 @@ export const LecturerWorkspace: React.FC = () => {
                                         if (st.studentCode) nextStScores[st.studentCode] = val;
 
                                         const nums = scoringStudents
-                                          .map((member: any) =>
-                                            parseFloat(
+                                          .map((member: any) => {
+                                            const raw =
                                               nextStScores[member.key] ??
-                                                (member.userId ? nextStScores[member.userId] : undefined) ??
-                                                prevRow.value ??
-                                                '0',
-                                            ),
-                                          )
-                                          .filter((n: number) => !isNaN(n));
+                                              (member.userId ? nextStScores[member.userId] : undefined) ??
+                                              (member.studentId ? nextStScores[member.studentId] : undefined) ??
+                                              prevRow.value ??
+                                              '0';
+                                            const p = parseFloat(String(raw).replace(',', '.'));
+                                            return isNaN(p) ? 0 : Math.min(10, Math.max(0, p));
+                                          });
                                         const avgStr =
                                           nums.length > 0
                                             ? String(
-                                                Math.round(
-                                                  (nums.reduce((a: number, b: number) => a + b, 0) / nums.length) *
-                                                    100,
-                                                ) / 100,
+                                                Math.min(
+                                                  10,
+                                                  Math.max(
+                                                    0,
+                                                    Math.round(
+                                                      (nums.reduce((a: number, b: number) => a + b, 0) / nums.length) *
+                                                        100,
+                                                    ) / 100,
+                                                  ),
+                                                ),
                                               )
                                             : val;
 
@@ -3212,6 +3289,35 @@ export const LecturerWorkspace: React.FC = () => {
                                           },
                                         };
                                       });
+                                    }}
+                                    onBlur={() => {
+                                      if (stVal && stVal.trim() !== '') {
+                                        const parsed = parseFloat(String(stVal).replace(',', '.'));
+                                        if (!isNaN(parsed)) {
+                                          const clamped = Math.min(10, Math.max(0, parsed));
+                                          const formatted = String(Math.round(clamped * 100) / 100);
+                                          if (formatted !== stVal) {
+                                            setTenScores((prev) => {
+                                              const prevRow = prev[c.code] || { value: '', note: '', studentScores: {} };
+                                              const nextStScores: Record<string, string> = {
+                                                ...(prevRow.studentScores || {}),
+                                                [st.key]: formatted,
+                                              };
+                                              if (st.id) nextStScores[st.id] = formatted;
+                                              if (st.userId) nextStScores[st.userId] = formatted;
+                                              if (st.studentId) nextStScores[st.studentId] = formatted;
+                                              if (st.studentCode) nextStScores[st.studentCode] = formatted;
+                                              return {
+                                                ...prev,
+                                                [c.code]: {
+                                                  ...prevRow,
+                                                  studentScores: nextStScores,
+                                                },
+                                              };
+                                            });
+                                          }
+                                        }
+                                      }
                                     }}
                                     className={`w-full px-2.5 py-1.5 text-center font-bold text-sm rounded-lg border focus:outline-none transition-all ${
                                       isLocked
@@ -3557,8 +3663,9 @@ export const LecturerWorkspace: React.FC = () => {
             <Input
               type="number"
               min={1}
-              max={5}
+              max={2}
               label="Số lượng sinh viên tối đa"
+              helperText="Quy định: Tối thiểu 1, tối đa 2 sinh viên/nhóm"
               value={topicCapacity}
               onChange={(e) => setTopicCapacity(Number(e.target.value))}
               required
@@ -3624,8 +3731,9 @@ export const LecturerWorkspace: React.FC = () => {
             <Input
               type="number"
               min={1}
-              max={10}
+              max={2}
               label="Số lượng sinh viên tối đa"
+              helperText="Quy định: Tối thiểu 1, tối đa 2 sinh viên/nhóm"
               value={editTopicCapacity}
               onChange={(e) => setEditTopicCapacity(Number(e.target.value))}
               required
@@ -3722,7 +3830,7 @@ export const LecturerWorkspace: React.FC = () => {
               </div>
             ) : (
               <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                <table className="w-full min-w-[500px] text-xs text-left">
+                <table className="w-full min-w-[550px] text-xs text-left">
                   <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-2.5">MSSV</th>
@@ -3730,35 +3838,128 @@ export const LecturerWorkspace: React.FC = () => {
                       <th className="p-2.5">Thông tin liên lạc</th>
                       <th className="p-2.5">Lớp</th>
                       <th className="p-2.5">Trạng thái</th>
+                      <th className="p-2.5">Nhóm KLTN & Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {topicRegistrations.map((st, idx) => (
-                      <tr key={st.id || idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="p-2.5 font-mono font-bold text-slate-800">{st.mssv || st.studentCode}</td>
-                        <td className="p-2.5 font-medium text-slate-900">{st.hoTen || st.fullName}</td>
-                        <td className="p-2.5 space-y-0.5">
-                          <div className="flex items-center gap-1.5 text-slate-600">
-                            <Mail className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>{st.email || '—'}</span>
-                          </div>
-                          {st.phone && st.phone !== 'Chưa cập nhật' && (
+                    {topicRegistrations.map((st, idx) => {
+                      const studentMssv = st.mssv || st.studentCode;
+                      const activeTopicGroup = topicGroups?.[0] || null;
+                      const memberInGroup = activeTopicGroup?.members?.find(
+                        (m: any) => m.studentId === st.studentId || m.studentCode === studentMssv
+                      );
+                      const inAnyGroup = st.groupId || st.group || memberInGroup;
+                      const groupCode = st.group?.code || activeTopicGroup?.code || 'Đã có nhóm';
+                      const isGroupFull = (activeTopicGroup?.members?.length || 0) >= (selectedTopicForRegs?.capacity || 2);
+
+                      return (
+                        <tr key={st.id || idx} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="p-2.5 font-mono font-bold text-slate-800">{studentMssv}</td>
+                          <td className="p-2.5 font-medium text-slate-900">{st.hoTen || st.fullName}</td>
+                          <td className="p-2.5 space-y-0.5">
                             <div className="flex items-center gap-1.5 text-slate-600">
-                              <Phone className="w-3 h-3 text-slate-400 shrink-0" />
-                              <span>{st.phone}</span>
+                              <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>{st.email || '—'}</span>
                             </div>
-                          )}
-                        </td>
-                        <td className="p-2.5 text-slate-600">{st.lop || st.className || '—'}</td>
-                        <td className="p-2.5">
-                          <Badge variant={st.status === 'APPROVED' ? 'success' : 'warning'} size="sm">
-                            {st.status === 'APPROVED' ? 'Đã xác nhận' : 'Chờ xác nhận'}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))}
+                            {st.phone && st.phone !== 'Chưa cập nhật' && (
+                              <div className="flex items-center gap-1.5 text-slate-600">
+                                <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span>{st.phone}</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-slate-600">{st.lop || st.className || '—'}</td>
+                          <td className="p-2.5">
+                            <Badge variant={st.status === 'APPROVED' ? 'success' : 'warning'} size="sm">
+                              {st.status === 'APPROVED' ? 'Đã xác nhận' : 'Chờ xác nhận'}
+                            </Badge>
+                          </td>
+                          <td className="p-2.5">
+                            {inAnyGroup ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                {groupCode} {memberInGroup?.isLeader ? '(Trưởng nhóm)' : '(Thành viên)'}
+                              </span>
+                            ) : activeTopicGroup && !isGroupFull ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-[11px] h-7 px-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-semibold"
+                                onClick={() => handleLecturerAddMemberToGroup(activeTopicGroup.id, st.studentId)}
+                              >
+                                + Thêm vào nhóm
+                              </Button>
+                            ) : !activeTopicGroup ? (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="text-[11px] h-7 px-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+                                onClick={() => handleLecturerCreateGroup(st.studentId)}
+                                disabled={isCreatingGroup}
+                              >
+                                + Tạo nhóm cho SV
+                              </Button>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">Chưa vào nhóm</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+
+          {/* Section: Nhóm KLTN của đề tài */}
+          <div className="p-3.5 border border-indigo-100 bg-indigo-50/40 rounded-xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-indigo-600" />
+                <span>Nhóm KLTN thực hiện đề tài</span>
+              </div>
+              {topicGroups.length === 0 && topicRegistrations.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1"
+                  onClick={() => handleLecturerCreateGroup()}
+                  disabled={isCreatingGroup}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>{isCreatingGroup ? 'Đang tạo...' : 'Tạo nhóm cho đề tài này'}</span>
+                </Button>
+              )}
+            </div>
+
+            {topicGroups.length === 0 ? (
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Đề tài hiện chưa có nhóm KLTN nào. Giảng viên có thể bấm <b>"Tạo nhóm cho đề tài này"</b> hoặc bấm <b>"+ Tạo nhóm cho SV"</b> ở bảng trên để khởi tạo nhóm cho sinh viên đã đăng ký.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {topicGroups.map((grp: any) => (
+                  <div key={grp.id} className="p-3 bg-white border border-indigo-100 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-indigo-900">{grp.code}</span>
+                        <span className="font-semibold text-slate-800">{grp.name}</span>
+                        <Badge variant={grp.members?.length >= (selectedTopicForRegs?.capacity || 2) ? 'neutral' : 'success'} size="sm">
+                          {grp.members?.length || 0}/{selectedTopicForRegs?.capacity || 2} SV
+                        </Badge>
+                      </div>
+                      <div className="text-[11px] text-slate-600 flex items-center gap-1.5 flex-wrap">
+                        <span>Thành viên:</span>
+                        {grp.members?.map((m: any, i: number) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                            {m.fullName || m.studentCode} {m.isLeader ? '⭐ (Trưởng nhóm)' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

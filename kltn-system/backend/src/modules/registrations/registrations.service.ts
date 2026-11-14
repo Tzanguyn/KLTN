@@ -166,12 +166,39 @@ export class RegistrationsService {
       }
     }
 
+    // Tự động gán vào nhóm KLTN của đề tài nếu đã có nhóm đang hoạt động và còn chỗ
+    let assignedGroupId: string | null = null;
+    if (topic) {
+      const activeGroup = await this.prisma.group.findFirst({
+        where: {
+          topicId: topic.id,
+          semesterId,
+          status: { not: 'CANCELLED' },
+        },
+        include: { members: true },
+      });
+      if (activeGroup && activeGroup.members.length < (topic.capacity || 2)) {
+        const alreadyMember = activeGroup.members.some((m) => m.studentId === student.id);
+        if (!alreadyMember) {
+          await this.prisma.groupMember.create({
+            data: {
+              groupId: activeGroup.id,
+              studentId: student.id,
+              isLeader: activeGroup.members.length === 0,
+            },
+          });
+        }
+        assignedGroupId = activeGroup.id;
+      }
+    }
+
     // 5. Post-condition: Create Registration with status APPROVED (mặc định được xác nhận)
     const created = await this.prisma.registration.create({
       data: {
         studentId: student.id,
         semesterId,
         topicId: dto.topicId,
+        groupId: assignedGroupId,
         proposal: dto.proposal,
         status: 'APPROVED',
         decidedAt: new Date(),
@@ -215,21 +242,51 @@ export class RegistrationsService {
 
   async mine(userId: string) {
     const student = await this.prisma.studentProfile.findUnique({ where: { userId } });
-    return student
-      ? this.prisma.registration.findMany({
-          where: { studentId: student.id },
+    if (!student) return [];
+
+    const regs = await this.prisma.registration.findMany({
+      where: { studentId: student.id },
+      include: {
+        topic: {
           include: {
-            topic: {
-              include: {
-                owner: { select: { id: true, fullName: true, email: true } },
-              },
-            },
-            semester: true,
-            group: true,
+            owner: { select: { id: true, fullName: true, email: true } },
           },
-          orderBy: { createdAt: 'desc' },
-        })
-      : [];
+        },
+        semester: true,
+        group: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const now = new Date();
+    return Promise.all(
+      regs.map(async (reg) => {
+        const semester = reg.semester;
+        let isWeek1To3 = true;
+        if (semester) {
+          if (semester.status !== 'OPEN') {
+            isWeek1To3 = false;
+          } else if (semester.registrationTo && now > semester.registrationTo) {
+            isWeek1To3 = false;
+          } else {
+            const stepConfig = await this.prisma.systemConfig.findFirst({
+              where: { key: 'TIMELINE_CURRENT_STEP', semesterId: semester.id },
+            });
+            if (stepConfig?.value && Number(stepConfig.value) > 1) {
+              isWeek1To3 = false;
+            }
+          }
+        }
+        const canCancel =
+          isWeek1To3 && ['CHO_XAC_NHAN', 'PENDING', 'APPROVED'].includes(reg.status);
+
+        return {
+          ...reg,
+          isWeek1To3,
+          canCancel,
+        };
+      }),
+    );
   }
 
   async list(query?: QueryRegistrationsDto | string) {
@@ -416,34 +473,89 @@ export class RegistrationsService {
       throw new ForbiddenException('Bạn không có quyền thao tác trên đơn đăng ký này');
     }
 
-    // Nếu sinh viên đã vào nhóm KLTN chính thức -> 403
-    if (registration.status === 'APPROVED' && registration.groupId) {
-      throw new ForbiddenException('Bạn đã thuộc nhóm KLTN chính thức, vui lòng liên hệ GVHD/Quản lý để hủy đề tài');
-    }
-
-    // Tiền điều kiện: status cho phép hủy (CHO_XAC_NHAN, PENDING hoặc APPROVED khi chưa vào nhóm)
+    // Tiền điều kiện: status cho phép hủy (CHO_XAC_NHAN, PENDING hoặc APPROVED)
     if (!['CHO_XAC_NHAN', 'PENDING', 'APPROVED'].includes(registration.status)) {
       throw new BadRequestException('Đơn đăng ký không ở trạng thái cho phép hủy');
     }
 
-    // Tiền điều kiện: còn trong thời hạn
-    // Ngoại lệ: Quá hạn -> 403
+    // Tiền điều kiện: Đợt KLTN phải đang mở
     const semester = registration.semester;
     if (!semester || semester.status !== 'OPEN') {
-      throw new ForbiddenException('Đợt KLTN chưa mở hoặc đã đóng đăng ký');
+      throw new ForbiddenException('Đợt KLTN chưa mở hoặc đã kết thúc');
     }
 
+    // Quy định KLTN: Sinh viên chỉ có thể hủy đề tài đã đăng ký ở tuần 1 - 3, sau đó không thể hủy đề tài đã đăng ký
     const now = new Date();
-    if (semester.registrationTo && now > semester.registrationTo) {
-      throw new ForbiddenException('Đã hết thời hạn đăng ký / hủy đăng ký KLTN');
+    const isAfterRegDeadline = Boolean(semester.registrationTo && now > semester.registrationTo);
+
+    const stepConfig = await this.prisma.systemConfig.findFirst({
+      where: { key: 'TIMELINE_CURRENT_STEP', semesterId: semester.id },
+    });
+    const currentStep = stepConfig?.value ? Number(stepConfig.value) : 1;
+    const isAfterStep1 = currentStep > 1;
+
+    if (isAfterRegDeadline || isAfterStep1) {
+      throw new ForbiddenException(
+        'Sinh viên chỉ có thể hủy đề tài đã đăng ký ở tuần 1 - 3. Sau tuần 3 không thể hủy đề tài đã đăng ký.',
+      );
     }
+
+    // Trong tuần 1 - 3: Cho phép hủy đề tài đã đăng ký.
+    // Nếu sinh viên đã có groupId hoặc thuộc nhóm của đề tài này, tiến hành xóa sinh viên khỏi nhóm
+    if (registration.groupId) {
+      const group = await this.prisma.group.findUnique({
+        where: { id: registration.groupId },
+        include: { members: true },
+      });
+      if (group) {
+        await this.prisma.groupMember.deleteMany({
+          where: {
+            groupId: group.id,
+            studentId: student.id,
+          },
+        });
+        const remainingMembers = group.members.filter((m) => m.studentId !== student.id);
+        if (remainingMembers.length === 0) {
+          await this.prisma.group.update({
+            where: { id: group.id },
+            data: { status: 'CANCELLED' },
+          });
+        } else {
+          const wasLeader = group.members.find((m) => m.studentId === student.id)?.isLeader;
+          if (wasLeader) {
+            await this.prisma.groupMember.update({
+              where: {
+                groupId_studentId: {
+                  groupId: group.id,
+                  studentId: remainingMembers[0].studentId,
+                },
+              },
+              data: { isLeader: true },
+            });
+          }
+        }
+      }
+    }
+
+    // Đảm bảo xóa bất kỳ thành viên nhóm nào của sinh viên trong đợt này cho đề tài này
+    await this.prisma.groupMember.deleteMany({
+      where: {
+        studentId: student.id,
+        group: {
+          semesterId: registration.semesterId,
+          ...(registration.topicId ? { topicId: registration.topicId } : {}),
+          status: { not: 'COMPLETED' },
+        },
+      },
+    });
 
     // Update status = DA_HUY
     const updated = await this.prisma.registration.update({
       where: { id },
       data: {
         status: 'DA_HUY',
-        decisionNote: dto?.reason?.trim() || 'Sinh viên đã hủy / rút đăng ký',
+        groupId: null,
+        decisionNote: dto?.reason?.trim() || 'Sinh viên đã hủy đề tài đã đăng ký (trong thời hạn tuần 1-3)',
         decidedAt: new Date(),
       },
       include: {
@@ -460,20 +572,6 @@ export class RegistrationsService {
         },
       },
     });
-
-    // Hoàn trả chỗ trống (nếu có nhóm tạm thời nào đã liên kết, xóa groupMember)
-    if (registration.topicId) {
-      await this.prisma.groupMember.deleteMany({
-        where: {
-          studentId: student.id,
-          group: {
-            topicId: registration.topicId,
-            semesterId: registration.semesterId,
-            status: { not: 'COMPLETED' },
-          },
-        },
-      });
-    }
 
     // Notification cho GVHD
     let gvhdUserId: string | null = null;

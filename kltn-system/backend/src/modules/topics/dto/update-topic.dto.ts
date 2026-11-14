@@ -47,18 +47,18 @@ export class UpdateTopicDto {
   @IsString()
   congNghe?: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, description: 'Số lượng sinh viên tối đa (từ 1 đến 2)' })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(10)
+  @IsInt({ message: 'Số lượng sinh viên phải là số nguyên' })
+  @Min(1, { message: 'Số lượng sinh viên tối thiểu của mỗi nhóm là 1 sinh viên' })
+  @Max(2, { message: 'Số lượng sinh viên tối đa của mỗi nhóm là 2 sinh viên' })
   capacity?: number;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, description: 'Số lượng sinh viên tối đa (tiếng Việt) (từ 1 đến 2)' })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(10)
+  @IsInt({ message: 'Số lượng sinh viên phải là số nguyên' })
+  @Min(1, { message: 'Số lượng sinh viên tối thiểu của mỗi nhóm là 1 sinh viên' })
+  @Max(2, { message: 'Số lượng sinh viên tối đa của mỗi nhóm là 2 sinh viên' })
   soLuongToiDa?: number;
 
   @ApiProperty({ required: false, description: 'Trạng thái ẩn đề tài khỏi danh sách sinh viên' })

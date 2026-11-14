@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CreateReportDto } from './dto/create-report.dto';
 import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { QuerySubmissionsDto } from './dto/query-submissions.dto';
+import { fixUtf8Mojibake } from '../../common/utils/fix-utf8.util';
 
 @Injectable()
 export class ProgressService {
@@ -47,8 +48,35 @@ export class ProgressService {
   }
 
   async submissions(userId: string, groupId?: string) {
-    return this.prisma.submission.findMany({
-      where: groupId ? { groupId } : { submittedBy: userId },
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { roles: { include: { role: true } }, studentProfile: true },
+    });
+    if (!user) throw new NotFoundException('Không tìm thấy người dùng');
+
+    const isStudent = user.roles.some((r) => r.role.code === RoleCode.SINH_VIEN);
+    const where: any = {};
+
+    if (isStudent) {
+      if (!user.studentProfile) return [];
+      where.group = {
+        members: { some: { studentId: user.studentProfile.id } },
+      };
+      if (groupId) {
+        where.groupId = groupId;
+      }
+    } else {
+      // Chỉ GVHD của nhóm mới có quyền xem bài nộp
+      where.group = {
+        topic: { ownerId: userId },
+      };
+      if (groupId) {
+        where.groupId = groupId;
+      }
+    }
+
+    const items = await this.prisma.submission.findMany({
+      where,
       include: {
         report: true,
         feedbacks: {
@@ -57,6 +85,11 @@ export class ProgressService {
       },
       orderBy: { submittedAt: 'desc' },
     });
+
+    return items.map((sub) => ({
+      ...sub,
+      fileName: fixUtf8Mojibake(sub.fileName),
+    }));
   }
 
   async create(userId: string, dto: CreateReportDto) {
@@ -95,7 +128,7 @@ export class ProgressService {
         groupId: report.groupId,
         reportId,
         submittedBy: userId,
-        fileName: file?.originalname,
+        fileName: file?.originalname ? fixUtf8Mojibake(file.originalname) : undefined,
         fileUrl: file?.path ? file.path.replace(/\\/g, '/') : file?.filename,
         fileSize: file?.size,
         sourceUrl,
@@ -247,7 +280,7 @@ export class ProgressService {
         groupId: targetGroupId,
         reportId: dto.reportId || undefined,
         submittedBy: userId,
-        fileName: file?.originalname || undefined,
+        fileName: file?.originalname ? fixUtf8Mojibake(file.originalname) : undefined,
         fileUrl: file?.path ? file.path.replace(/\\/g, '/') : file?.filename || undefined,
         fileSize: file?.size || undefined,
         sourceUrl: dto.link?.trim() || undefined,
@@ -288,14 +321,17 @@ export class ProgressService {
       'FEEDBACK',
     );
 
-    return created;
+    return {
+      ...created,
+      fileName: fixUtf8Mojibake(created.fileName),
+    };
   }
 
   async getMySubmissions(userId: string, topicId?: string) {
     const student = await this.prisma.studentProfile.findUnique({ where: { userId } });
     if (!student) return [];
 
-    return this.prisma.submission.findMany({
+    const items = await this.prisma.submission.findMany({
       where: {
         group: {
           members: { some: { studentId: student.id } },
@@ -319,6 +355,11 @@ export class ProgressService {
       },
       orderBy: { submittedAt: 'desc' },
     });
+
+    return items.map((sub) => ({
+      ...sub,
+      fileName: fixUtf8Mojibake(sub.fileName),
+    }));
   }
 
   async findSubmissions(userId: string, query: QuerySubmissionsDto) {
@@ -334,29 +375,22 @@ export class ProgressService {
 
     const roleCodes = user.roles.map((r) => r.role.code);
     const isStudent = roleCodes.includes(RoleCode.SINH_VIEN);
-    const isLecturer = roleCodes.includes(RoleCode.GIANG_VIEN);
-    const isManager =
-      roleCodes.includes(RoleCode.TRUONG_BO_MON) || roleCodes.includes(RoleCode.QUAN_LY_BO_MON);
 
     const where: any = {};
 
-    // 1. Phân quyền và phạm vi truy cập
+    // 1. Phân quyền và phạm vi truy cập:
+    // Sinh viên nộp bài thì CHỈ CÓ GVHD của nhóm đó có thể thấy (không hiện trên toàn bộ các actor).
     if (isStudent) {
       if (!user.studentProfile) return [];
       where.group = {
         members: { some: { studentId: user.studentProfile.id } },
       };
-    } else if (isLecturer && !isManager) {
-      // Giảng viên hướng dẫn hoặc phản biện
-      const lecturerConditions: any[] = [{ topic: { ownerId: userId } }];
-      if (user.lecturerProfile) {
-        lecturerConditions.push({
-          reviewerAssignments: { some: { lecturerId: user.lecturerProfile.id } },
-        });
-      }
-      where.group = { OR: lecturerConditions };
+    } else {
+      // Đối với giảng viên hoặc bất kỳ actor nào khác: CHỈ xem được bài nộp của nhóm mà user đó chính là GVHD (topic.ownerId === userId)
+      where.group = {
+        topic: { ownerId: userId },
+      };
     }
-    // TRUONG_BO_MON / QUAN_LY_BO_MON có thể xem tất cả bài nộp (không gán where.group mặc định)
 
     // 2. Lọc theo Topic
     if (query.topicId) {
@@ -402,7 +436,7 @@ export class ProgressService {
       where.type = query.type;
     }
 
-    return this.prisma.submission.findMany({
+    const items = await this.prisma.submission.findMany({
       where,
       include: {
         submitter: { select: { id: true, fullName: true, email: true } },
@@ -430,6 +464,11 @@ export class ProgressService {
       },
       orderBy: { submittedAt: 'desc' },
     });
+
+    return items.map((sub) => ({
+      ...sub,
+      fileName: fixUtf8Mojibake(sub.fileName),
+    }));
   }
 
   async downloadSubmission(
@@ -482,28 +521,23 @@ export class ProgressService {
     const isGroupMember = submission.group?.members?.some(
       (m) => m.student?.userId === userId || (user.studentProfile && m.studentId === user.studentProfile.id),
     );
-    const roleCodes = user.roles.map((r) => r.role.code);
-    const isManager =
-      roleCodes.includes(RoleCode.TRUONG_BO_MON) || roleCodes.includes(RoleCode.QUAN_LY_BO_MON);
 
-    let hasAccess = isSubmitter || isTopicOwner || isGroupMember || isManager;
-    if (!hasAccess && user.lecturerProfile) {
-      const isReviewer = await this.prisma.reviewerAssignment.findFirst({
-        where: {
-          groupId: submission.groupId,
-          lecturerId: user.lecturerProfile.id,
-        },
-      });
-      if (isReviewer) hasAccess = true;
-    }
+    // CHỈ sinh viên nộp bài, thành viên nhóm, hoặc GVHD của nhóm mới có quyền truy cập
+    const hasAccess = isSubmitter || isTopicOwner || isGroupMember;
 
     if (!hasAccess) {
-      throw new BadRequestException('Bạn không có quyền truy cập bài nộp này');
+      throw new BadRequestException('Bạn không có quyền truy cập bài nộp này (chỉ GVHD của nhóm mới có quyền xem)');
     }
 
     // Nếu yêu cầu trả về thông tin chi tiết dạng JSON
     if (options.info === 'true' || options.download === 'false') {
-      return res.json({ success: true, data: submission });
+      return res.json({
+        success: true,
+        data: {
+          ...submission,
+          fileName: fixUtf8Mojibake(submission.fileName),
+        },
+      });
     }
 
     // Tải tệp tin nếu có fileUrl
@@ -513,7 +547,7 @@ export class ProgressService {
         resolvedPath = path.join(process.cwd(), resolvedPath);
       }
       if (fs.existsSync(resolvedPath)) {
-        const downloadName = submission.fileName || path.basename(resolvedPath);
+        const downloadName = fixUtf8Mojibake(submission.fileName) || path.basename(resolvedPath);
         return res.download(resolvedPath, downloadName);
       }
     }
@@ -542,6 +576,11 @@ export class ProgressService {
       },
     });
     if (!submission) throw new NotFoundException('Không tìm thấy bài nộp');
+
+    const isTopicOwner = submission.group?.topic?.ownerId === userId;
+    if (!isTopicOwner) {
+      throw new BadRequestException('Chỉ Giảng viên hướng dẫn (GVHD) của nhóm mới có quyền nhận xét và đánh giá bài nộp này');
+    }
 
     const author = await this.prisma.user.findUnique({
       where: { id: userId },

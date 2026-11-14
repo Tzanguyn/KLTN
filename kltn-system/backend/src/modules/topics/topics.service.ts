@@ -383,8 +383,8 @@ export class TopicsService {
     }
 
     const capacity = Number(capacityRaw);
-    if (Number.isNaN(capacity) || capacity <= 0) {
-      throw new BadRequestException('Số lượng sinh viên tối đa phải là số nguyên dương lớn hơn 0');
+    if (Number.isNaN(capacity) || capacity < 1 || capacity > 2) {
+      throw new BadRequestException('Số lượng sinh viên của mỗi nhóm tối thiểu là 1 và tối đa là 2 sinh viên');
     }
 
     // 2. Tiền điều kiện: Đã đăng nhập role GiangVien / TruongBoMon / QuanLyBoMon
@@ -751,8 +751,8 @@ export class TopicsService {
     let capacity: number | undefined;
     if (capacityRaw !== undefined && capacityRaw !== null) {
       capacity = Number(capacityRaw);
-      if (Number.isNaN(capacity) || capacity <= 0) {
-        throw new BadRequestException('Số lượng sinh viên tối đa phải là số nguyên dương');
+      if (Number.isNaN(capacity) || capacity < 1 || capacity > 2) {
+        throw new BadRequestException('Số lượng sinh viên của mỗi nhóm tối thiểu là 1 và tối đa là 2 sinh viên');
       }
       const pendingCount = (topic.registrations || []).filter((r) =>
         ['PENDING', 'CHO_XAC_NHAN'].includes(r.status),
@@ -1381,6 +1381,9 @@ export class TopicsService {
         semester: true,
         registrations: {
           include: {
+            group: {
+              select: { id: true, code: true, name: true, status: true },
+            },
             student: {
               include: {
                 user: {
@@ -1458,6 +1461,8 @@ export class TopicsService {
         resultList.push({
           id: reg.id,
           registrationId: reg.id,
+          groupId: reg.groupId,
+          group: reg.group ? { id: reg.group.id, code: reg.group.code, name: reg.group.name } : null,
           studentId: reg.studentId,
           userId: reg.student.userId,
           studentCode: reg.student.studentCode,
@@ -1492,6 +1497,8 @@ export class TopicsService {
           resultList.push({
             id: `group-member-${member.studentId}`,
             registrationId: null,
+            groupId: group.id,
+            group: { id: group.id, code: group.code, name: group.name },
             studentId: member.studentId,
             userId: member.student.userId,
             studentCode: member.student.studentCode,

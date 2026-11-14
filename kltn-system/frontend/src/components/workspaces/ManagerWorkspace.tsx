@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
+import { fixMojibake } from '../../utils/format';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -1601,7 +1602,7 @@ export const ManagerWorkspace: React.FC = () => {
                       <p className="text-xs text-slate-600">{ev.description || 'Không có mô tả'}</p>
                       {ev.fileName && (
                         <span className="text-xs text-indigo-600 font-medium block">
-                          Tệp đính kèm: {ev.fileName}
+                          Tệp đính kèm: {fixMojibake(ev.fileName)}
                         </span>
                       )}
                       {ev.reviewNote && (
@@ -2074,7 +2075,7 @@ export const ManagerWorkspace: React.FC = () => {
             </p>
             {selectedEvidence?.fileName && (
               <div className="text-xs text-indigo-600 font-medium mt-1.5">
-                Tệp minh chứng: {selectedEvidence.fileName}
+                Tệp minh chứng: {fixMojibake(selectedEvidence.fileName)}
               </div>
             )}
           </div>

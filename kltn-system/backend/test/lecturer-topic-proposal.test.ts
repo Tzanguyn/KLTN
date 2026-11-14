@@ -117,7 +117,7 @@ async function runTest() {
     });
     assert.equal(missingRes.status, 400, 'Missing fields must return 400');
 
-    // Case 2c: Invalid capacity (0 or negative)
+    // Case 2c: Invalid capacity (0 or negative, or > 2)
     const invalidCapRes = await fetch(`${baseUrl}/topics`, {
       method: 'POST',
       headers: {
@@ -132,7 +132,22 @@ async function runTest() {
       }),
     });
     assert.equal(invalidCapRes.status, 400, 'Zero capacity must return 400');
-    console.log(' -> Exception verified: Missing/invalid fields properly rejected with 400.');
+
+    const exceedCapRes = await fetch(`${baseUrl}/topics`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${gvToken}`,
+      },
+      body: JSON.stringify({
+        tenDeTai: testTopicTitle,
+        moTa: 'Mô tả hợp lệ',
+        yeuCauSinhVien: 'Yêu cầu hợp lệ',
+        soLuongToiDa: 3,
+      }),
+    });
+    assert.equal(exceedCapRes.status, 400, 'Capacity > 2 must return 400');
+    console.log(' -> Exception verified: Missing/invalid fields (capacity < 1 or > 2) properly rejected with 400.');
 
     // 3. Check Exception: Vượt hạn mức → 403 "Bạn đã đạt số nhóm tối đa được phép hướng dẫn"
     console.log('3. Checking Exception: Exceeding quota returns 403 with specific message...');
@@ -374,14 +389,14 @@ async function runTest() {
       body: JSON.stringify({
         tenDeTai: updatedTitle,
         moTa: 'Mô tả mới đã được cập nhật',
-        soLuongToiDa: 3,
+        soLuongToiDa: 1,
       }),
     });
     const patchJson1 = await patchRes1.json();
     assert.equal(patchRes1.status, 200, 'PATCH /topics/:id must return 200 OK');
     assert.equal(patchJson1.data.title, updatedTitle);
     assert.equal(patchJson1.data.tenDeTai, updatedTitle);
-    assert.equal(patchJson1.data.capacity, 3);
+    assert.equal(patchJson1.data.capacity, 1);
     assert.equal(patchJson1.data.status, 'CHO_DUYET', 'Topic status must be reset to CHO_DUYET upon content change');
     console.log(' -> 10a verified: Successfully updated title and capacity (status reset to CHO_DUYET).');
 
@@ -391,8 +406,8 @@ async function runTest() {
     });
     const myTopicsJson2 = await myTopicsRes2.json();
     const myTopic2 = myTopicsJson2.data.find((t: any) => t.id === createdData.id);
-    assert.equal(myTopic2.capacity, 3);
-    assert.equal(myTopic2.soChoConLai, 3);
+    assert.equal(myTopic2.capacity, 1);
+    assert.equal(myTopic2.soChoConLai, 1);
 
     // 10b. Reject update by non-owner (giangvien2)
     const patchNonOwnerRes = await fetch(`${baseUrl}/topics/${createdData.id}`, {

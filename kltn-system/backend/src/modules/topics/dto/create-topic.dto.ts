@@ -47,18 +47,18 @@ export class CreateTopicDto {
   @IsString()
   congNghe?: string;
 
-  @ApiProperty({ example: 2, default: 2, description: 'Số lượng sinh viên tối đa', required: false })
+  @ApiProperty({ example: 2, default: 2, description: 'Số lượng sinh viên tối đa (từ 1 đến 2)', required: false })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(10)
+  @IsInt({ message: 'Số lượng sinh viên phải là số nguyên' })
+  @Min(1, { message: 'Số lượng sinh viên tối thiểu của mỗi nhóm là 1 sinh viên' })
+  @Max(2, { message: 'Số lượng sinh viên tối đa của mỗi nhóm là 2 sinh viên' })
   capacity?: number;
 
-  @ApiProperty({ example: 2, default: 2, description: 'Số lượng sinh viên tối đa (tiếng Việt)', required: false })
+  @ApiProperty({ example: 2, default: 2, description: 'Số lượng sinh viên tối đa (tiếng Việt) (từ 1 đến 2)', required: false })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(10)
+  @IsInt({ message: 'Số lượng sinh viên phải là số nguyên' })
+  @Min(1, { message: 'Số lượng sinh viên tối thiểu của mỗi nhóm là 1 sinh viên' })
+  @Max(2, { message: 'Số lượng sinh viên tối đa của mỗi nhóm là 2 sinh viên' })
   soLuongToiDa?: number;
 
   @ApiProperty({ example: 'uuid-department', required: false, description: 'ID Bộ môn (tuỳ chọn, tự động nhận từ profile)' })

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
+import { fixMojibake } from '../../utils/format';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -44,6 +45,7 @@ import {
   ArrowRight,
   Video,
   Crown,
+  Trash2,
 } from 'lucide-react';
 import { StudentWelcomeView } from '../dashboard/StudentWelcomeView';
 import { WelcomeTimeline } from '../dashboard/WelcomeTimeline';
@@ -707,20 +709,15 @@ export const StudentWorkspace: React.FC = () => {
     }
   };
 
-  // Withdraw registration
-  // Withdraw / Cancel registration
+  // Withdraw / Cancel registration (Chỉ được phép trong tuần 1 - 3)
   const handleWithdrawRegistration = async (regId: string) => {
-    if (!confirm('Bạn có chắc chắn muốn rút/hủy đơn đăng ký này không?')) return;
-    if (!confirm('Bạn có chắc chắn muốn rút / hủy đơn đăng ký đề tài này không?')) return;
+    if (!confirm('Bạn có chắc chắn muốn hủy đề tài đã đăng ký này không?\nLưu ý theo quy chế KLTN: Sinh viên chỉ có thể hủy đề tài ở tuần 1 - 3, sau đó không thể hủy đề tài đã đăng ký.')) return;
     try {
-      await api.patch(`/registrations/${regId}/withdraw`);
-      notify('Đã rút đơn đăng ký thành công!');
       await api.post(`/registrations/${regId}/cancel`);
-      notify('Đã hủy / rút đơn đăng ký thành công!', 'success');
+      notify('Đã hủy đề tài đã đăng ký thành công!', 'success');
       loadData();
     } catch (err: any) {
-      notify(err.response?.data?.message ?? 'Không thể rút đơn', 'error');
-      notify(err.response?.data?.message ?? 'Không thể hủy đơn đăng ký', 'error');
+      notify(err.response?.data?.message ?? 'Không thể hủy đề tài đã đăng ký', 'error');
     }
   };
   const handleCancelRegistration = handleWithdrawRegistration;
@@ -912,6 +909,28 @@ export const StudentWorkspace: React.FC = () => {
       notify('Đã tải phiếu điểm PDF thành công!');
     } catch (err: any) {
       notify('Không thể tải phiếu điểm', 'error');
+    }
+  };
+
+  // Download Submission File
+  const handleDownloadSubmission = async (sub: any) => {
+    try {
+      if (sub.sourceUrl && !sub.fileUrl) {
+        window.open(sub.sourceUrl, '_blank');
+        return;
+      }
+      const res = await api.get(`/submissions/${sub.id}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fixMojibake(sub.fileName) || `submission-${sub.id}.docx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Error downloading submission:', err);
+      notify('Không thể tải tệp tin bài nộp', 'error');
     }
   };
 
@@ -2576,6 +2595,12 @@ export const StudentWorkspace: React.FC = () => {
               <Badge variant="neutral">{registrations.length} đơn</Badge>
             </CardHeader>
             <CardContent>
+              <div className="mb-3 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
+                <Clock className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Quy chế KLTN:</strong> Sinh viên không được chuyển nhóm trong suốt quá trình thực hiện đề tài và chỉ có thể hủy đề tài đã đăng ký ở tuần 1 - 3. Sau tuần 3 không thể hủy đề tài đã đăng ký.
+                </span>
+              </div>
               {registrations.length === 0 ? (
                 <div className="p-8 text-center text-slate-400">
                   Bạn chưa đăng ký đề tài nào trong đợt này. Hãy chuyển sang mục Đề tài để đăng ký.
@@ -2644,15 +2669,27 @@ export const StudentWorkspace: React.FC = () => {
                             <span>Xem SV cùng ĐK & Chọn nhóm</span>
                           </Button>
                         )}
-                        {!item.groupId && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-rose-600 border-rose-200 hover:bg-rose-50"
-                            onClick={() => handleWithdrawRegistration(item.id)}
-                          >
-                            Rút / Hủy đăng ký
-                          </Button>
+                        {['CHO_XAC_NHAN', 'PENDING', 'APPROVED'].includes(item.status) && (
+                          (item.canCancel ?? (topicsMeta?.registrationOpen && (item.isWeek1To3 ?? true))) ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-rose-600 border-rose-200 hover:bg-rose-50 text-xs flex items-center gap-1 font-medium"
+                              onClick={() => handleWithdrawRegistration(item.id)}
+                              title="Hủy đề tài đã đăng ký (khả dụng trong tuần 1 - 3)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Hủy đề tài đã đăng ký
+                            </Button>
+                          ) : (
+                            <span
+                              className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 flex items-center gap-1 font-medium"
+                              title="Theo quy chế KLTN, sau tuần 3 không thể hủy đề tài đã đăng ký"
+                            >
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              Sau tuần 3: Không thể hủy đề tài
+                            </span>
+                          )
                         )}
                       </div>
                     </div>
@@ -3337,7 +3374,7 @@ export const StudentWorkspace: React.FC = () => {
                               {sub.type || sub.report?.reportType || 'BAO_CAO_TIEN_DO'}
                             </span>
                             <h4 className="font-bold text-sm text-slate-900">
-                              {sub.report?.title || sub.fileName || 'Tài liệu KLTN'}
+                              {sub.report?.title || fixMojibake(sub.fileName) || 'Tài liệu KLTN'}
                             </h4>
                           </div>
 
@@ -3376,21 +3413,19 @@ export const StudentWorkspace: React.FC = () => {
                             Thời gian nộp: {new Date(sub.submittedAt).toLocaleString('vi-VN')}
                           </span>
                           {sub.fileName && (
-                            <a
-                              href={`http://localhost:3000/api/submissions/${sub.id}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              download
-                              className="flex items-center gap-1 text-indigo-600 font-semibold hover:underline"
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadSubmission(sub)}
+                              className="inline-flex items-center gap-1 text-indigo-600 font-semibold hover:underline bg-transparent border-0 p-0 cursor-pointer text-xs"
                             >
                               <Download className="w-3.5 h-3.5" />
-                              <span>{sub.fileName}</span>
+                              <span>{fixMojibake(sub.fileName)}</span>
                               {sub.fileSize && (
                                 <span className="text-slate-400 font-normal">
                                   ({(sub.fileSize / (1024 * 1024)).toFixed(2)} MB)
                                 </span>
                               )}
-                            </a>
+                            </button>
                           )}
                           {sub.sourceUrl && (
                             <a
@@ -4023,7 +4058,12 @@ export const StudentWorkspace: React.FC = () => {
                           <tbody className="divide-y divide-slate-50">
                             {defenseInfo.diemChiTiet.diemHuongDan.tieuChi?.map((tc: any, i: number) => (
                               <tr key={i}>
-                                <td className="py-2 text-slate-700">{tc.ten}</td>
+                                <td className="py-2 text-slate-700">
+                                  <span className="font-semibold text-slate-900 mr-2">
+                                    {tc.maTieuChi ? `${tc.maTieuChi}:` : `TC${String(i + 1).padStart(2, '0')}:`}
+                                  </span>
+                                  <span>{tc.tenTieuChi || tc.ten || 'Tiêu chí đánh giá'}</span>
+                                </td>
                                 <td className="py-2 text-right font-bold text-indigo-600">{tc.diem}</td>
                               </tr>
                             ))}
@@ -4051,7 +4091,12 @@ export const StudentWorkspace: React.FC = () => {
                           <tbody className="divide-y divide-slate-50">
                             {defenseInfo.diemChiTiet.diemPhanBien.tieuChi?.map((tc: any, i: number) => (
                               <tr key={i}>
-                                <td className="py-2 text-slate-700">{tc.ten}</td>
+                                <td className="py-2 text-slate-700">
+                                  <span className="font-semibold text-slate-900 mr-2">
+                                    {tc.maTieuChi ? `${tc.maTieuChi}:` : `TC${String(i + 1).padStart(2, '0')}:`}
+                                  </span>
+                                  <span>{tc.tenTieuChi || tc.ten || 'Tiêu chí đánh giá'}</span>
+                                </td>
                                 <td className="py-2 text-right font-bold text-indigo-600">{tc.diem}</td>
                               </tr>
                             ))}
@@ -4079,7 +4124,12 @@ export const StudentWorkspace: React.FC = () => {
                           <tbody className="divide-y divide-slate-50">
                             {defenseInfo.diemChiTiet.diemHoiDong.tieuChi?.map((tc: any, i: number) => (
                               <tr key={i}>
-                                <td className="py-2 text-slate-700">{tc.ten}</td>
+                                <td className="py-2 text-slate-700">
+                                  <span className="font-semibold text-slate-900 mr-2">
+                                    {tc.maTieuChi ? `${tc.maTieuChi}:` : `TC${String(i + 1).padStart(2, '0')}:`}
+                                  </span>
+                                  <span>{tc.tenTieuChi || tc.ten || 'Tiêu chí đánh giá'}</span>
+                                </td>
                                 <td className="py-2 text-right font-bold text-indigo-600">{tc.diem}</td>
                               </tr>
                             ))}
@@ -4089,13 +4139,51 @@ export const StudentWorkspace: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Tổng điểm & Công thức */}
-                  <div className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-center justify-between">
-                    <div>
-                      <div className="text-xs text-indigo-900 font-bold uppercase">TỔNG ĐIỂM KHÓA LUẬN (HỆ 10)</div>
-                      <div className="text-xs text-slate-500 mt-0.5">{defenseInfo.diemChiTiet.congThucTinh}</div>
+                  {/* Tổng điểm & Công thức & Phân rã thành phần điểm */}
+                  <div className="p-4 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 pb-3">
+                      <div>
+                        <div className="text-xs text-indigo-950 font-black uppercase tracking-wider">TỔNG ĐIỂM KHÓA LUẬN (HỆ 10)</div>
+                        <div className="text-xs text-slate-600 mt-0.5">{defenseInfo.diemChiTiet.congThucTinh}</div>
+                      </div>
+                      <div className="text-2xl font-black text-indigo-700">
+                        {defenseInfo.diemChiTiet.diemTongKet !== null && defenseInfo.diemChiTiet.diemTongKet !== undefined
+                          ? `${defenseInfo.diemChiTiet.diemTongKet}/10`
+                          : 'Chưa hoàn tất'}
+                      </div>
                     </div>
-                    <div className="text-2xl font-black text-indigo-700">{defenseInfo.diemChiTiet.diemTongKet}/10</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      {defenseInfo.diemChiTiet.diemHuongDan?.tong !== undefined && defenseInfo.diemChiTiet.diemHuongDan?.tong !== null && (
+                        <div className="bg-white p-2.5 rounded-lg border border-indigo-100 shadow-2xs">
+                          <span className="text-slate-500 block text-[11px]">1. Điểm GVHD</span>
+                          <span className="font-bold text-slate-900 text-sm">{defenseInfo.diemChiTiet.diemHuongDan.tong} / 10</span>
+                        </div>
+                      )}
+                      {defenseInfo.diemChiTiet.diemPhanBien?.tong !== undefined && defenseInfo.diemChiTiet.diemPhanBien?.tong !== null && (
+                        <div className="bg-white p-2.5 rounded-lg border border-indigo-100 shadow-2xs">
+                          <span className="text-slate-500 block text-[11px]">2. Điểm GVPB</span>
+                          <span className="font-bold text-slate-900 text-sm">{defenseInfo.diemChiTiet.diemPhanBien.tong} / 10</span>
+                        </div>
+                      )}
+                      {defenseInfo.diemChiTiet.diemHoiDong?.tong !== undefined && defenseInfo.diemChiTiet.diemHoiDong?.tong !== null && (
+                        <div className="bg-white p-2.5 rounded-lg border border-indigo-100 shadow-2xs">
+                          <span className="text-slate-500 block text-[11px]">3. Điểm Hội đồng</span>
+                          <span className="font-bold text-slate-900 text-sm">{defenseInfo.diemChiTiet.diemHoiDong.tong} / 10</span>
+                        </div>
+                      )}
+                      {defenseInfo.diemChiTiet.diemTrungBinhDanhGia !== undefined && defenseInfo.diemChiTiet.diemTrungBinhDanhGia !== null && (
+                        <div className="bg-white p-2.5 rounded-lg border border-indigo-100 shadow-2xs">
+                          <span className="text-slate-500 block text-[11px]">Trung bình đánh giá</span>
+                          <span className="font-bold text-indigo-700 text-sm">{defenseInfo.diemChiTiet.diemTrungBinhDanhGia} / 10</span>
+                        </div>
+                      )}
+                      {(defenseInfo.diemChiTiet.diemThuongNckh ?? 0) > 0 && (
+                        <div className="bg-emerald-50 p-2.5 rounded-lg border border-emerald-200 shadow-2xs col-span-2 sm:col-span-1">
+                          <span className="text-emerald-700 block text-[11px]">Thưởng NCKH (Đã duyệt)</span>
+                          <span className="font-bold text-emerald-800 text-sm">+{defenseInfo.diemChiTiet.diemThuongNckh}đ (max 2.0đ)</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : scores?.scores?.length > 0 ? (
@@ -4410,6 +4498,56 @@ export const StudentWorkspace: React.FC = () => {
                               >
                                 + Thêm vào nhóm
                               </Button>
+                            ) : !activeTopicGroup && !isMe ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-[11px] h-7 px-2 border-indigo-300 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100 font-semibold"
+                                onClick={async () => {
+                                  try {
+                                    setIsCreatingGroup(true);
+                                    await api.post('/groups', {
+                                      topicId: selectedTopicForRegs.id,
+                                      memberStudentIds: [st.studentId],
+                                    });
+                                    notify('Thành lập nhóm và ghép cùng bạn thành công!', 'success');
+                                    await loadData();
+                                    await openTopicRegistrationsModal(selectedTopicForRegs);
+                                  } catch (err: any) {
+                                    notify(err.response?.data?.message ?? 'Lỗi tạo nhóm', 'error');
+                                  } finally {
+                                    setIsCreatingGroup(false);
+                                  }
+                                }}
+                                disabled={isCreatingGroup}
+                              >
+                                + Ghép nhóm cùng bạn này
+                              </Button>
+                            ) : !activeTopicGroup && isMe ? (
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="text-[11px] h-7 px-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+                                onClick={async () => {
+                                  try {
+                                    setIsCreatingGroup(true);
+                                    await api.post('/groups', {
+                                      topicId: selectedTopicForRegs.id,
+                                      memberStudentIds: [],
+                                    });
+                                    notify('Khởi tạo nhóm KLTN thành công!', 'success');
+                                    await loadData();
+                                    await openTopicRegistrationsModal(selectedTopicForRegs);
+                                  } catch (err: any) {
+                                    notify(err.response?.data?.message ?? 'Lỗi tạo nhóm', 'error');
+                                  } finally {
+                                    setIsCreatingGroup(false);
+                                  }
+                                }}
+                                disabled={isCreatingGroup}
+                              >
+                                + Khởi tạo nhóm
+                              </Button>
                             ) : (
                               <span className="text-[11px] text-slate-400">Chưa vào nhóm</span>
                             )}
@@ -4502,10 +4640,10 @@ export const StudentWorkspace: React.FC = () => {
               /* Case B: No group exists yet */
               <div className="space-y-3 bg-white p-3.5 rounded-xl border border-indigo-100">
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Hiện chưa có nhóm nào được thành lập cho đề tài này. Bạn có thể khởi tạo nhóm KLTN và chọn bạn cùng nhóm từ danh sách các bạn đã đăng ký đề tài!
+                  Hiện chưa có nhóm nào được thành lập cho đề tài này. Bạn có thể khởi tạo nhóm KLTN và chọn bạn cùng nhóm từ danh sách các bạn đã đăng ký đề tài (Quy định: tối thiểu 1, tối đa 2 sinh viên/nhóm)!
                 </p>
 
-                {topicRegistrations.filter(
+                {(selectedTopicForRegs?.capacity ?? selectedTopicForRegs?.soLuongToiDa ?? 2) > 1 && topicRegistrations.filter(
                   (st) =>
                     (st.mssv || st.studentCode) !== user?.studentProfile?.studentCode &&
                     (st.mssv || st.studentCode) !== user?.mssv &&

@@ -660,7 +660,7 @@ export class GroupsService {
     const sizeConfig = await this.prisma.systemConfig.findFirst({
       where: { key: 'MAX_GROUP_SIZE', semesterId: group.semesterId },
     });
-    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 3;
+    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 2;
     const effectiveMax = group.topic?.capacity ? Math.min(group.topic.capacity, maxSize) : maxSize;
 
     if (group.members.length >= effectiveMax) {
@@ -784,7 +784,7 @@ export class GroupsService {
     const sizeConfig = await this.prisma.systemConfig.findFirst({
       where: { key: 'MAX_GROUP_SIZE', semesterId: group.semesterId },
     });
-    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 3;
+    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 2;
 
     // 3. Xử lý đổi đề tài (nếu có)
     let targetTopicCapacity = group.topic?.capacity;
@@ -808,11 +808,14 @@ export class GroupsService {
     if (dto.memberIds) {
       const uniqueMemberIds = Array.from(new Set(dto.memberIds));
 
-      // Kiểm tra số lượng thành viên không vượt quy định
+      // Kiểm tra số lượng thành viên không vượt quy định (tối thiểu 1, tối đa effectiveMax)
       if (uniqueMemberIds.length > effectiveMax) {
         throw new BadRequestException(
           `Số lượng thành viên không được vượt quá quy định (${effectiveMax} sinh viên)`,
         );
+      }
+      if (uniqueMemberIds.length < 1) {
+        throw new BadRequestException('Mỗi nhóm phải có tối thiểu 1 sinh viên');
       }
 
       // Kiểm tra SV không thuộc 2 nhóm trong cùng học kỳ
@@ -1020,119 +1023,10 @@ export class GroupsService {
     fromGroupId: string,
     dto: { studentId: string; targetGroupId: string },
   ) {
-    if (!dto.studentId || !dto.targetGroupId) {
-      throw new BadRequestException('Vui lòng cung cấp studentId và targetGroupId');
-    }
-    if (fromGroupId === dto.targetGroupId) {
-      throw new BadRequestException('Nhóm chuyển đến phải khác nhóm hiện tại');
-    }
-
-    const [fromGroup, targetGroup] = await Promise.all([
-      this.prisma.group.findUnique({
-        where: { id: fromGroupId },
-        include: {
-          topic: { select: { id: true, ownerId: true, capacity: true, title: true } },
-          members: { include: { student: { include: { user: true } } } },
-        },
-      }),
-      this.prisma.group.findUnique({
-        where: { id: dto.targetGroupId },
-        include: {
-          topic: { select: { id: true, ownerId: true, capacity: true, title: true } },
-          members: { include: { student: { include: { user: true } } } },
-        },
-      }),
-    ]);
-
-    if (!fromGroup) throw new NotFoundException('Không tìm thấy nhóm nguồn');
-    if (!targetGroup) throw new NotFoundException('Không tìm thấy nhóm đích');
-
-    if (fromGroup.semesterId !== targetGroup.semesterId) {
-      throw new BadRequestException('Chỉ có thể chuyển sinh viên giữa các nhóm trong cùng học kỳ');
-    }
-
-    const isManager = await this.isManager(userId);
-    const isAdvisorOfBoth =
-      fromGroup.topic?.ownerId === userId && targetGroup.topic?.ownerId === userId;
-
-    if (!isManager && !isAdvisorOfBoth) {
-      throw new ForbiddenException(
-        'Chỉ Giảng viên hướng dẫn của cả hai nhóm hoặc Quản lý bộ môn mới có quyền chuyển sinh viên giữa các nhóm',
-      );
-    }
-
-    const memberInSource = fromGroup.members.find((m) => m.studentId === dto.studentId);
-    if (!memberInSource) {
-      throw new NotFoundException('Sinh viên không thuộc nhóm nguồn');
-    }
-
-    if (targetGroup.status === 'CANCELLED' || targetGroup.status === 'COMPLETED') {
-      throw new BadRequestException('Không thể chuyển sinh viên vào nhóm đã hủy hoặc đã hoàn thành');
-    }
-
-    const sizeConfig = await this.prisma.systemConfig.findFirst({
-      where: { key: 'MAX_GROUP_SIZE', semesterId: targetGroup.semesterId },
-    });
-    const maxSize = typeof sizeConfig?.value === 'number' ? sizeConfig.value : 3;
-    const effectiveMax = targetGroup.topic?.capacity
-      ? Math.min(targetGroup.topic.capacity, maxSize)
-      : maxSize;
-
-    if (targetGroup.members.length >= effectiveMax) {
-      throw new BadRequestException(
-        `Nhóm đích (${targetGroup.code}) đã đủ số lượng thành viên tối đa (${effectiveMax} sinh viên)`,
-      );
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      // 1. Xóa khỏi nhóm nguồn
-      await tx.groupMember.delete({
-        where: {
-          groupId_studentId: { groupId: fromGroupId, studentId: dto.studentId },
-        },
-      });
-
-      // Nếu là trưởng nhóm nguồn, chuyển quyền trưởng nhóm cho thành viên còn lại
-      if (memberInSource.isLeader) {
-        const remaining = fromGroup.members.find((m) => m.studentId !== dto.studentId);
-        if (remaining) {
-          await tx.groupMember.update({
-            where: {
-              groupId_studentId: { groupId: fromGroupId, studentId: remaining.studentId },
-            },
-            data: { isLeader: true },
-          });
-        }
-      }
-
-      // 2. Thêm vào nhóm đích
-      await tx.groupMember.create({
-        data: {
-          groupId: dto.targetGroupId,
-          studentId: dto.studentId,
-          isLeader: targetGroup.members.length === 0,
-        },
-      });
-
-      // 3. Đồng bộ đơn đăng ký đề tài (Registration)
-      await tx.registration.updateMany({
-        where: {
-          studentId: dto.studentId,
-          semesterId: targetGroup.semesterId,
-          status: { in: ['APPROVED', 'CHO_XAC_NHAN', 'PENDING'] },
-        },
-        data: {
-          groupId: dto.targetGroupId,
-          ...(targetGroup.topicId ? { topicId: targetGroup.topicId } : {}),
-        },
-      });
-    });
-
-    return {
-      message: `Đã chuyển sinh viên sang nhóm ${targetGroup.code} thành công`,
-      fromGroup: await this.findById(fromGroupId, userId),
-      targetGroup: await this.findById(dto.targetGroupId, userId),
-    };
+    // Quy định KLTN: Sinh viên không được chuyển nhóm trong suốt quá trình thực hiện đề tài
+    throw new BadRequestException(
+      'Sinh viên không được chuyển nhóm trong suốt quá trình thực hiện đề tài',
+    );
   }
 
   async midterm(userId: string, groupId: string, dto: MidtermDto) {

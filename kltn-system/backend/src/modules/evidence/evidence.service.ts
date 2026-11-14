@@ -7,6 +7,7 @@ import { ReviewEvidenceDto } from './dto/review-evidence.dto';
 import { ApproveEvidenceDto } from './dto/approve-evidence.dto';
 import { RejectEvidenceDto } from './dto/reject-evidence.dto';
 import { RequestMoreInfoEvidenceDto } from './dto/request-more-info-evidence.dto';
+import { fixUtf8Mojibake } from '../../common/utils/fix-utf8.util';
 
 export interface NckhRule {
   name: string;
@@ -197,7 +198,7 @@ export class EvidenceService {
         userId,
         title: dto.title,
         description: dto.description,
-        fileName: file?.originalname,
+        fileName: file?.originalname ? fixUtf8Mojibake(file.originalname) : undefined,
         fileUrl: file?.path ?? file?.filename,
       },
     });

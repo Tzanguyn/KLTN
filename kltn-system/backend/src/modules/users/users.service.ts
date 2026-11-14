@@ -4,6 +4,8 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateEligibilityDto } from './dto/update-eligibility.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
 import { UpdateStudentProfileDto } from './dto/update-student-profile.dto';
+import { fixUtf8Mojibake } from '../../common/utils/fix-utf8.util';
+import { DEFAULT_TEN_CRITERIA } from '../scores/scores.service';
 
 @Injectable()
 export class UsersService {
@@ -1471,6 +1473,8 @@ export class UsersService {
           tongDiem?: number;
         }>;
       } | null;
+      diemTrungBinhDanhGia?: number | null;
+      diemThuongNckh?: number;
       diemTongKet: number | null;
       congThucTinh: string;
     } | null = null;
@@ -1486,11 +1490,74 @@ export class UsersService {
         }
       }
 
-      const gvhdScores = publishedScores.filter((s: any) => s.scorerId === topic?.ownerId);
-      const gvpbScores = publishedScores.filter((s: any) => reviewerUserIds.has(s.scorerId));
-      const councilScores = publishedScores.filter(
-        (s: any) => s.scorerId !== topic?.ownerId && !reviewerUserIds.has(s.scorerId),
-      );
+      const parseScoreRoleAndData = (s: any) => {
+        let role: string | undefined = undefined;
+        let preservedGvpb: any = undefined;
+        let preservedCouncil: any = undefined;
+        if (s.note && typeof s.note === 'string' && s.note.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(s.note.trim());
+            if (parsed && typeof parsed === 'object') {
+              role = parsed.role;
+              preservedGvpb = parsed.preservedGvpb;
+              preservedCouncil = parsed.preservedCouncil;
+            }
+          } catch {}
+        }
+        return { role, preservedGvpb, preservedCouncil };
+      };
+
+      const gvhdScores = publishedScores.filter((s: any) => {
+        if (s.scorerId !== topic?.ownerId) return false;
+        const { role } = parseScoreRoleAndData(s);
+        if (role && role !== 'HUONG_DAN') return false;
+        return true;
+      });
+
+      const gvpbScores = publishedScores
+        .map((s: any) => {
+          if (!reviewerUserIds.has(s.scorerId)) return null;
+          const { role, preservedGvpb } = parseScoreRoleAndData(s);
+          if (role === 'PHAN_BIEN') return s;
+          if (preservedGvpb) {
+            return {
+              ...s,
+              value: preservedGvpb.value,
+              note: JSON.stringify({
+                __perStudent: true,
+                note: preservedGvpb.note,
+                studentScores: preservedGvpb.studentScores,
+                role: 'PHAN_BIEN',
+              }),
+            };
+          }
+          if (role === 'HUONG_DAN' || role === 'HOI_DONG') return null;
+          if (s.scorerId === topic?.ownerId) return null;
+          return s;
+        })
+        .filter((s: any): s is any => s !== null);
+
+      const councilScores = publishedScores
+        .map((s: any) => {
+          const { role, preservedCouncil } = parseScoreRoleAndData(s);
+          if (role === 'HOI_DONG') return s;
+          if (preservedCouncil) {
+            return {
+              ...s,
+              value: preservedCouncil.value,
+              note: JSON.stringify({
+                __perStudent: true,
+                note: preservedCouncil.note,
+                studentScores: preservedCouncil.studentScores,
+                role: 'HOI_DONG',
+              }),
+            };
+          }
+          if (role === 'HUONG_DAN' || role === 'PHAN_BIEN') return null;
+          if (s.scorerId === topic?.ownerId || reviewerUserIds.has(s.scorerId)) return null;
+          return s;
+        })
+        .filter((s: any): s is any => s !== null);
 
       const extractStudentScoreAndNote = (s: any) => {
         let cleanNote: string | null = s.note || null;
@@ -1517,17 +1584,24 @@ export class UsersService {
       // A. Điểm Hướng Dẫn
       let diemHuongDan: any = null;
       if (gvhdScores.length > 0) {
-        const tieuChi = gvhdScores.map((s: any) => {
+        const tieuChi = gvhdScores.map((s: any, idx: number) => {
           const { score, note } = extractStudentScoreAndNote(s);
+          const defaultTc =
+            DEFAULT_TEN_CRITERIA[idx] ||
+            DEFAULT_TEN_CRITERIA.find((d) => d.code === s.criterion?.code || d.code === s.criterionId);
+          const maTieuChi = s.criterion?.code || defaultTc?.code || `TC${String(idx + 1).padStart(2, '0')}`;
+          const tenTieuChi = s.criterion?.name || defaultTc?.name || `Tiêu chí ${idx + 1}`;
           return {
-            maTieuChi: s.criterion.code,
-            tenTieuChi: s.criterion.name,
-            trongSo: Number(s.criterion.weight),
+            maTieuChi,
+            tenTieuChi,
+            ten: tenTieuChi,
+            trongSo: Number(s.criterion?.weight ?? defaultTc?.weight ?? 10),
             diem: score,
-            diemToiDa: Number(s.criterion.maxScore),
+            diemToiDa: Number(s.criterion?.maxScore ?? defaultTc?.maxScore ?? 10),
             ghiChu: note,
           };
         });
+        tieuChi.sort((a: any, b: any) => a.maTieuChi.localeCompare(b.maTieuChi, undefined, { numeric: true }));
         const tong =
           tieuChi.length > 0
             ? Number(
@@ -1546,17 +1620,24 @@ export class UsersService {
       // B. Điểm Phản Biện
       let diemPhanBien: any = null;
       if (gvpbScores.length > 0) {
-        const tieuChi = gvpbScores.map((s: any) => {
+        const tieuChi = gvpbScores.map((s: any, idx: number) => {
           const { score, note } = extractStudentScoreAndNote(s);
+          const defaultTc =
+            DEFAULT_TEN_CRITERIA[idx] ||
+            DEFAULT_TEN_CRITERIA.find((d) => d.code === s.criterion?.code || d.code === s.criterionId);
+          const maTieuChi = s.criterion?.code || defaultTc?.code || `TC${String(idx + 1).padStart(2, '0')}`;
+          const tenTieuChi = s.criterion?.name || defaultTc?.name || `Tiêu chí ${idx + 1}`;
           return {
-            maTieuChi: s.criterion.code,
-            tenTieuChi: s.criterion.name,
-            trongSo: Number(s.criterion.weight),
+            maTieuChi,
+            tenTieuChi,
+            ten: tenTieuChi,
+            trongSo: Number(s.criterion?.weight ?? defaultTc?.weight ?? 10),
             diem: score,
-            diemToiDa: Number(s.criterion.maxScore),
+            diemToiDa: Number(s.criterion?.maxScore ?? defaultTc?.maxScore ?? 10),
             ghiChu: note,
           };
         });
+        tieuChi.sort((a: any, b: any) => a.maTieuChi.localeCompare(b.maTieuChi, undefined, { numeric: true }));
         const tong =
           tieuChi.length > 0
             ? Number(
@@ -1583,16 +1664,23 @@ export class UsersService {
           criteriaMap.set(s.criterionId, existing);
         }
 
-        const tieuChi = Array.from(criteriaMap.values()).map((item) => {
+        const tieuChi = Array.from(criteriaMap.values()).map((item, idx) => {
           const avg = item.scores.reduce((a: number, b: number) => a + b, 0) / item.scores.length;
+          const defaultTc =
+            DEFAULT_TEN_CRITERIA[idx] ||
+            DEFAULT_TEN_CRITERIA.find((d) => d.code === item.criterion?.code || d.code === item.criterion?.id);
+          const maTieuChi = item.criterion?.code || defaultTc?.code || `TC${String(idx + 1).padStart(2, '0')}`;
+          const tenTieuChi = item.criterion?.name || defaultTc?.name || `Tiêu chí ${idx + 1}`;
           return {
-            maTieuChi: item.criterion.code,
-            tenTieuChi: item.criterion.name,
-            trongSo: Number(item.criterion.weight),
+            maTieuChi,
+            tenTieuChi,
+            ten: tenTieuChi,
+            trongSo: Number(item.criterion?.weight ?? defaultTc?.weight ?? 10),
             diem: Number(avg.toFixed(2)),
-            diemToiDa: Number(item.criterion.maxScore),
+            diemToiDa: Number(item.criterion?.maxScore ?? defaultTc?.maxScore ?? 10),
           };
         });
+        tieuChi.sort((a: any, b: any) => a.maTieuChi.localeCompare(b.maTieuChi, undefined, { numeric: true }));
 
         const tong =
           tieuChi.length > 0
@@ -1639,47 +1727,55 @@ export class UsersService {
       let diemTongKet: number | null = null;
       let congThucTinh = '';
 
-      const studentScoreParts: Array<{ name: string; score: number }> = [];
-      if (diemHuongDan?.tong !== undefined && diemHuongDan.tong !== null) {
-        studentScoreParts.push({ name: 'Điểm GVHD', score: Number(diemHuongDan.tong) });
-      }
-      if (diemPhanBien?.tong !== undefined && diemPhanBien.tong !== null) {
-        studentScoreParts.push({ name: 'Điểm GVPB', score: Number(diemPhanBien.tong) });
-      }
-      if (diemHoiDong?.tong !== undefined && diemHoiDong.tong !== null) {
-        studentScoreParts.push({ name: 'Điểm Hội đồng', score: Number(diemHoiDong.tong) });
-      }
+      const hasDefenseSchedule = group?.defenses?.some(
+        (d: any) => d.status !== 'CANCELLED' && d.committeeId,
+      );
 
-      if (studentScoreParts.length > 0) {
-        const sum = studentScoreParts.reduce((acc, p) => acc + p.score, 0);
-        diemTongKet = Number((sum / studentScoreParts.length).toFixed(2));
-        if (studentScoreParts.length === 1) {
-          congThucTinh = `Điểm tổng kết = ${studentScoreParts[0].name}`;
-        } else {
-          const names = studentScoreParts.map((p) => p.name).join(' + ');
-          congThucTinh = `Điểm tổng kết = (${names}) / ${studentScoreParts.length}`;
-        }
+      // Nếu nhóm có lịch Hội đồng nhưng Hội đồng chưa chấm điểm -> Chưa có điểm tổng kết
+      if (hasDefenseSchedule && !diemHoiDong) {
+        diemTongKet = null;
+        congThucTinh = 'Đang chờ Hội đồng bảo vệ đánh giá & chấm điểm';
       } else {
-        const avg = publishedScores.length > 0
-          ? publishedScores.reduce((acc: number, s: any) => acc + (Number(s.value) || 0), 0) / publishedScores.length
-          : 0;
-        diemTongKet = Number(avg.toFixed(2));
-        congThucTinh = publishedScores.length > 0
-          ? `Điểm tổng kết = Trung bình cộng ${publishedScores.length} tiêu chí đánh giá KLTN`
-          : 'Chưa có điểm đánh giá';
+        const studentScoreParts: Array<{ name: string; score: number }> = [];
+        if (diemHuongDan?.tong !== undefined && diemHuongDan.tong !== null) {
+          studentScoreParts.push({ name: 'Điểm GVHD', score: Number(diemHuongDan.tong) });
+        }
+        if (diemPhanBien?.tong !== undefined && diemPhanBien.tong !== null) {
+          studentScoreParts.push({ name: 'Điểm GVPB', score: Number(diemPhanBien.tong) });
+        }
+        if (diemHoiDong?.tong !== undefined && diemHoiDong.tong !== null) {
+          studentScoreParts.push({ name: 'Điểm Hội đồng', score: Number(diemHoiDong.tong) });
+        }
+
+        if (studentScoreParts.length > 0) {
+          const sum = studentScoreParts.reduce((acc, p) => acc + p.score, 0);
+          diemTongKet = Number((sum / studentScoreParts.length).toFixed(2));
+          if (studentScoreParts.length === 1) {
+            congThucTinh = `Điểm tổng kết = ${studentScoreParts[0].name}`;
+          } else {
+            const names = studentScoreParts.map((p) => p.name).join(' + ');
+            congThucTinh = `Điểm tổng kết = (${names}) / ${studentScoreParts.length}`;
+          }
+        } else {
+          diemTongKet = null;
+          congThucTinh = 'Chưa có điểm đánh giá';
+        }
       }
 
-      // Cộng điểm NCKH (nếu có minh chứng được duyệt)
+      // Cộng điểm NCKH (nếu có minh chứng được duyệt - Quy chế đào tạo: tối đa không quá 2.0 điểm)
       const approvedEvidence = await this.prisma.evidence.findMany({
         where: { userId, status: 'APPROVED' },
       });
-      const bonusPoints = approvedEvidence.reduce(
+      const rawBonus = approvedEvidence.reduce(
         (sum: number, ev: any) => sum + (ev.points ? Number(ev.points) : 0),
         0,
       );
+      const bonusPoints = Math.min(2.0, Number(rawBonus.toFixed(2)));
+      const diemTrungBinhDanhGia = diemTongKet;
+
       if (bonusPoints > 0 && diemTongKet !== null) {
         diemTongKet = Math.min(10, Number((diemTongKet + bonusPoints).toFixed(2)));
-        congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 10đ)`;
+        congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 2.0đ, trần 10đ)`;
       }
 
       if (diemTongKet !== null) {
@@ -1690,6 +1786,8 @@ export class UsersService {
         diemHuongDan,
         diemPhanBien,
         diemHoiDong,
+        diemTrungBinhDanhGia,
+        diemThuongNckh: bonusPoints,
         diemTongKet,
         congThucTinh,
       };
@@ -2074,7 +2172,7 @@ export class UsersService {
           groupSubmissions.length > 0
             ? {
                 id: groupSubmissions[0].id,
-                fileName: groupSubmissions[0].fileName,
+                fileName: fixUtf8Mojibake(groupSubmissions[0].fileName),
                 submittedAt: groupSubmissions[0].submittedAt,
                 status: groupSubmissions[0].status,
               }
@@ -2159,10 +2257,6 @@ export class UsersService {
             },
           },
         },
-        submissions: {
-          orderBy: { submittedAt: 'desc' },
-          take: 1,
-        },
         defenses: {
           include: {
             committee: true,
@@ -2184,7 +2278,6 @@ export class UsersService {
           (lecturerProfile && ra.lecturerId === lecturerProfile.id),
       );
 
-      const latestSub = group.submissions && group.submissions.length > 0 ? group.submissions[0] : null;
       const latestDefense = group.defenses && group.defenses.length > 0 ? group.defenses[0] : null;
 
       const scoredList = group.scores || [];
@@ -2231,16 +2324,7 @@ export class UsersService {
           phone: m.student.user?.phone,
           isLeader: m.isLeader,
         })),
-        latestSubmission: latestSub
-          ? {
-              id: latestSub.id,
-              fileName: latestSub.fileName,
-              fileUrl: latestSub.fileUrl,
-              fileSize: latestSub.fileSize,
-              submittedAt: latestSub.submittedAt,
-              status: latestSub.status,
-            }
-          : null,
+        latestSubmission: null,
         defenseSchedule: latestDefense
           ? {
               id: latestDefense.id,
@@ -2299,10 +2383,6 @@ export class UsersService {
                     scores: {
                       where: { scorerId: userId },
                     },
-                    submissions: {
-                      orderBy: { submittedAt: 'desc' },
-                      take: 1,
-                    },
                   },
                 },
               },
@@ -2327,8 +2407,6 @@ export class UsersService {
 
       const schedulesMapped = nonGuidedSchedules.map((sched) => {
         const group = sched.group;
-        const latestSub =
-          group?.submissions && group.submissions.length > 0 ? group.submissions[0] : null;
         const hasScored = (group?.scores?.length || 0) > 0;
         const isLocked = group?.scores?.some((s) => s.status === 'LOCKED') || false;
 
@@ -2367,15 +2445,7 @@ export class UsersService {
                   phone: m.student.user?.phone,
                   isLeader: m.isLeader,
                 })),
-                latestSubmission: latestSub
-                  ? {
-                      id: latestSub.id,
-                      fileName: latestSub.fileName,
-                      fileUrl: latestSub.fileUrl,
-                      submittedAt: latestSub.submittedAt,
-                      status: latestSub.status,
-                    }
-                  : null,
+                latestSubmission: null,
                 hasScored,
                 isLocked,
               }
