@@ -1190,12 +1190,16 @@ Hãy trả về kết quả dưới định dạng JSON DUY NHẤT:
   }
 
   /**
-   * Định dạng chuẩn hóa tên kèm học vị, tránh lặp "TS. TS. Nguyễn..."
+   * Định dạng chuẩn hóa tên kèm học vị, tránh lặp "TS. TS. Nguyễn..." và triệt tiêu lỗi dấu chấm kép ".."
    */
   private formatTitleAndName(title: string, fullName: string): string {
     const cleanName = (fullName || '').trim();
-    const cleanTitle = (title || '').trim();
+    if (!title) return cleanName;
+    let cleanTitle = title.trim().replace(/\.+$/, '');
     if (!cleanTitle) return cleanName;
+    if (cleanTitle.toLowerCase() !== 'gv') {
+      cleanTitle = `${cleanTitle}.`;
+    }
     if (cleanName.toLowerCase().startsWith(cleanTitle.toLowerCase())) return cleanName;
     const prefixes = ['ts.', 'ths.', 'pgs.ts.', 'pgs.', 'gs.ts.', 'gs.', 'cn.', 'ks.'];
     for (const p of prefixes) {

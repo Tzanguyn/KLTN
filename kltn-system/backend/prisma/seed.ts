@@ -140,7 +140,7 @@ async function main() {
       const targetTitle =
         (account as any).title ??
         (account.role === RoleCode.TRUONG_BO_MON ? 'PGS. TS.' : 'ThS.');
-      await prisma.lecturerProfile.upsert({
+      const lecProfile = await prisma.lecturerProfile.upsert({
         where: { userId: user.id },
         update: { maxGroups: 10, departmentId: targetDeptId, title: targetTitle },
         create: {
@@ -149,6 +149,20 @@ async function main() {
           title: targetTitle,
           specialization: 'Hệ thống thông tin',
           departmentId: targetDeptId,
+          maxGroups: 10,
+        },
+      });
+      await prisma.lecturerQuota.upsert({
+        where: {
+          lecturerId_semesterId: {
+            lecturerId: lecProfile.id,
+            semesterId: semester.id,
+          },
+        },
+        update: { maxGroups: 10 },
+        create: {
+          lecturerId: lecProfile.id,
+          semesterId: semester.id,
           maxGroups: 10,
         },
       });
@@ -277,6 +291,54 @@ async function main() {
     prisma.notification.deleteMany({}),
     prisma.auditLog.deleteMany({}),
   ]);
+
+  // Xóa toàn bộ tài khoản test và dữ liệu rác phát sinh từ quá trình chạy unit test
+  const altProfiles = await prisma.lecturerProfile.findMany({
+    where: {
+      OR: [
+        { lecturerCode: 'TBM001_ALT' },
+        { lecturerCode: { startsWith: 'HOD_UL_' } },
+        { lecturerCode: { startsWith: 'GV_UL_' } },
+        { lecturerCode: { startsWith: 'HOD_SC_' } },
+        { lecturerCode: { startsWith: 'GV_SC_' } },
+        { lecturerCode: { startsWith: 'GVA_' } },
+        { lecturerCode: { startsWith: 'GVB_' } },
+      ],
+    },
+    select: { userId: true },
+  });
+  const altUserIds = altProfiles.map((p) => p.userId);
+
+  const testUsers = await prisma.user.findMany({
+    where: {
+      OR: [
+        { id: { in: altUserIds } },
+        { email: { contains: '_17' } },
+        { email: { contains: 'truongbomôn' } },
+        { email: { startsWith: 'hod_' } },
+        { email: { startsWith: 'gv_score_' } },
+        { email: { startsWith: 'gv_unlock_' } },
+        { email: { startsWith: 'gv_b_' } },
+        { email: { startsWith: 'gv_a_' } },
+        { email: { startsWith: 'sv_score_' } },
+        { email: { startsWith: 'sv_unlock_' } },
+        { email: { startsWith: 'sv_test_' } },
+        { email: { startsWith: 'test_' } },
+      ],
+    },
+    select: { id: true },
+  });
+
+  const testUserIds = testUsers.map((u) => u.id);
+  if (testUserIds.length > 0) {
+    await prisma.topic.deleteMany({ where: { ownerId: { in: testUserIds } } });
+    await prisma.lecturerQuota.deleteMany({ where: { lecturer: { userId: { in: testUserIds } } } });
+    await prisma.lecturerProfile.deleteMany({ where: { userId: { in: testUserIds } } });
+    await prisma.studentProfile.deleteMany({ where: { userId: { in: testUserIds } } });
+    await prisma.userRole.deleteMany({ where: { userId: { in: testUserIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: testUserIds } } });
+    console.log(`Đã dọn dẹp ${testUserIds.length} tài khoản test rác khỏi database.`);
+  }
 
   console.log('Seed completed successfully. Đã đặt lại toàn bộ dữ liệu về trạng thái Mới mở học kỳ (88 đề tài trống 100%).');
   console.log('Demo accounts (mật khẩu chung: Password@123):');

@@ -34,7 +34,19 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/auth/login') && !originalRequest.url?.includes('/auth/refresh')) {
+    if (!originalRequest) return Promise.reject(error);
+
+    const isAuthRoute =
+      originalRequest.url?.includes('/auth/login') ||
+      originalRequest.url?.includes('/auth/refresh') ||
+      originalRequest.url?.includes('/auth/captcha') ||
+      originalRequest.url?.includes('/auth/system-status');
+
+    const currentToken = useAuthStore.getState().accessToken;
+
+    // Chỉ tự động refresh khi người dùng ĐANG ĐĂNG NHẬP (có token) và gặp lỗi 401 trên route nghiệp vụ.
+    // Tránh triệt để việc gọi ngầm /auth/refresh khi chưa đăng nhập gây lỗi CORS ngầm và spam console 401.
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthRoute && currentToken) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });

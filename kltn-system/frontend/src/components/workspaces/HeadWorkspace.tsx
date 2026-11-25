@@ -40,9 +40,10 @@ import {
 } from 'lucide-react';
 import { HeadWelcomeView } from '../dashboard/HeadWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
+import { formatLecturerName, formatGroupName } from '../../utils/format';
 
 export const HeadWorkspace: React.FC = () => {
-  const { user, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
+  const { user, accessToken, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
   const [activeTab, setActiveTab] = useState<string>(storeActiveTab || 'welcome');
 
   useEffect(() => {
@@ -201,21 +202,54 @@ export const HeadWorkspace: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  const loadData = async () => {
+  // Fetch Councils / Defense Committees & Schedules
+  const fetchCouncils = async () => {
     try {
-      const [pendingTopRes, topRes, quotaRes, lecRes, comRes, schRes, scrRes, eviRes, dashRes] = await Promise.all([
+      const [comRes, schRes] = await Promise.all([
+        api.get('/defense-committees').catch(() => api.get('/defense/committees')).catch(() => null),
+        api.get('/defense-schedules').catch(() => api.get('/defense/schedules')).catch(() => null),
+      ]);
+
+      const rawCommittees = comRes?.data?.data ?? comRes?.data ?? [];
+      const cleanCommittees = Array.from(
+        new Map(
+          (Array.isArray(rawCommittees) ? rawCommittees : [])
+            .filter((c: any) => c && (!c.name || (!c.name.includes('17') && !c.name.toLowerCase().includes('test'))))
+            .map((c: any) => [c.id || (c.name ? c.name.trim().toLowerCase() : Math.random().toString()), c])
+        ).values()
+      );
+      setCommittees(cleanCommittees);
+
+      if (schRes?.data?.data) {
+        const schList = Array.isArray(schRes.data.data) ? schRes.data.data : [];
+        setSchedules(schList);
+      }
+      return cleanCommittees;
+    } catch (err) {
+      console.error('Error fetching councils:', err);
+      return [];
+    }
+  };
+
+  const loadData = async () => {
+    if (!accessToken) return;
+    try {
+      const [pendingTopRes, topRes, quotaRes, lecRes, dashRes] = await Promise.all([
         api.get('/topics?status=CHO_DUYET').catch(() => null),
-        api.get('/topics?limit=100'),
+        api.get('/topics?limit=100').catch(() => null),
         api.get('/quotas').catch(() => null),
-        api.get('/users/lecturers'),
-        api.get('/defense-committees').catch(() => api.get('/defense/committees')),
-        api.get('/defense-schedules').catch(() => api.get('/defense/schedules')),
-        api.get('/score-unlock-requests').catch(() => api.get('/scores/change-requests')),
-        api.get('/evidences?status=PENDING').catch(() => api.get('/evidence/pending')),
+        api.get('/users/lecturers').catch(() => null),
         api.get('/dashboard?role=TRUONG_BO_MON').catch(() => null),
       ]);
 
-      const tList = topRes.data.data.items ?? [];
+      const [scrRes, eviRes] = await Promise.all([
+        api.get('/score-unlock-requests').catch(() => api.get('/scores/change-requests')).catch(() => null),
+        api.get('/evidences?status=PENDING').catch(() => api.get('/evidence/pending')).catch(() => null),
+      ]);
+
+      await fetchCouncils();
+
+      const tList = topRes?.data?.data?.items ?? topRes?.data?.data ?? [];
       setAllTopics(tList);
 
       if (pendingTopRes?.data?.data) {
@@ -239,9 +273,33 @@ export const HeadWorkspace: React.FC = () => {
         setCurrentSemester(officialSem);
       }
 
+      const filterWorkload = (items: any[]) => {
+        return items.filter((lec: any) => {
+          const code = (lec.lecturerCode || lec.code || '').toUpperCase();
+          const email = (lec.email || '').toLowerCase();
+          return (
+            !code.endsWith('_ALT') &&
+            !code.includes('TBM001_ALT') &&
+            !code.startsWith('HOD_') &&
+            !code.startsWith('GV_UL_') &&
+            !code.startsWith('GV_SC_') &&
+            !code.startsWith('GVA_') &&
+            !code.startsWith('GVB_') &&
+            !email.includes('truongbomôn') &&
+            !email.startsWith('hod_') &&
+            !email.includes('_ul_') &&
+            !email.includes('_sc_') &&
+            !email.includes('_score_') &&
+            !email.includes('_unlock_') &&
+            !email.startsWith('test_')
+          );
+        });
+      };
+
       if (quotaRes?.data?.data) {
         const qData = quotaRes.data.data;
-        setWorkload(qData.items ?? qData);
+        const rawWl = qData.items ?? qData;
+        setWorkload(Array.isArray(rawWl) ? filterWorkload(rawWl) : rawWl);
         const hasDef = Boolean(qData.hasSemesterDefaultQuota ?? qData.semester?.hasSemesterDefaultQuota);
         const defVal = qData.semesterDefaultQuota ?? qData.semester?.semesterDefaultQuota;
         setHasSemesterDefaultQuota(hasDef);
@@ -251,14 +309,47 @@ export const HeadWorkspace: React.FC = () => {
         }
       } else {
         const wlRes = await api.get('/reports/workload').catch(() => null);
-        setWorkload(wlRes?.data?.data ?? []);
+        const rawWl = wlRes?.data?.data ?? [];
+        setWorkload(Array.isArray(rawWl) ? filterWorkload(rawWl) : rawWl);
       }
 
-      setLecturers(lecRes.data.data ?? []);
-      setCommittees(comRes.data.data ?? []);
-      setSchedules(schRes.data.data ?? []);
-      setScoreRequests(scrRes.data.data ?? []);
-      setPendingEvidence(eviRes.data.data ?? []);
+      const rawLecturers = lecRes?.data?.data ?? [];
+      const cleanLecturers = Array.from(
+        new Map(
+          rawLecturers
+            .filter((l: any) => {
+              const email = (l.user?.email || l.email || '').toLowerCase();
+              const code = (l.lecturerCode || l.code || '').toUpperCase();
+              return (
+                !code.endsWith('_ALT') &&
+                !code.includes('TBM001_ALT') &&
+                !code.startsWith('HOD_') &&
+                !code.startsWith('GV_UL_') &&
+                !code.startsWith('GV_SC_') &&
+                !code.startsWith('GVA_') &&
+                !code.startsWith('GVB_') &&
+                !email.includes('truongbomôn') &&
+                !email.startsWith('hod_') &&
+                !email.includes('_ul_') &&
+                !email.includes('_sc_') &&
+                !/\d{10,}@kltn\.edu\.vn/.test(email) &&
+                !email.includes('_score_') &&
+                !email.includes('_unlock_') &&
+                !email.startsWith('gv_b_') &&
+                !email.startsWith('gv_a_') &&
+                !email.startsWith('test_')
+              );
+            })
+            .map((l: any) => [
+              (l.user?.fullName || l.fullName || l.user?.email || l.id).trim().toLowerCase(),
+              l,
+            ])
+        ).values()
+      );
+      setLecturers(cleanLecturers);
+
+      setScoreRequests(scrRes?.data?.data ?? []);
+      setPendingEvidence(eviRes?.data?.data ?? []);
 
       // Load all groups
       try {
@@ -337,6 +428,8 @@ export const HeadWorkspace: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'scores') {
       fetchSemesterScores(scoreIncompleteOnly, scoreSearch);
+    } else if (activeTab === 'committees') {
+      fetchCouncils();
     }
   }, [activeTab, scoreIncompleteOnly]);
 
@@ -600,6 +693,7 @@ export const HeadWorkspace: React.FC = () => {
       setCommitteeName('');
       setSelectedMemberIds([]);
       setSelectedCommitteeGroupIds([]);
+      await fetchCouncils();
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi lập hội đồng bảo vệ', 'error');
@@ -761,6 +855,7 @@ export const HeadWorkspace: React.FC = () => {
       });
       notify(res.data?.message || 'Phân công nhóm cho Hội đồng thành công!', 'success');
       setShowAssignGroupsModal(false);
+      await fetchCouncils();
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message || 'Lỗi khi phân nhóm cho hội đồng', 'error');
@@ -776,6 +871,7 @@ export const HeadWorkspace: React.FC = () => {
     try {
       await api.delete(`/defense-committees/${committeeId}`);
       notify(`Đã xóa hội đồng "${name}" thành công!`);
+      await fetchCouncils();
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message || 'Lỗi khi xóa hội đồng', 'error');
@@ -848,6 +944,7 @@ export const HeadWorkspace: React.FC = () => {
       setScheduleRoom('');
       setScheduleStartsAt('');
       setScheduleEndsAt('');
+      await fetchCouncils();
       loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi xếp lịch bảo vệ', 'error');
@@ -1898,7 +1995,10 @@ export const HeadWorkspace: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200">
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setCommitteeSubTab('committees-schedules')}
+                onClick={() => {
+                  setCommitteeSubTab('committees-schedules');
+                  fetchCouncils();
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
                   committeeSubTab === 'committees-schedules'
                     ? 'bg-indigo-600 text-white shadow-xs'
@@ -1937,7 +2037,7 @@ export const HeadWorkspace: React.FC = () => {
                     }}
                     className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
                   />
-                  <span>Chỉ hiện nhóm đủ điều kiện bảo vệ (readyForDefense=true)</span>
+                  <span>Chỉ hiện nhóm đủ điều kiện bảo vệ</span>
                 </label>
                 <Button
                   size="sm"
@@ -1966,6 +2066,15 @@ export const HeadWorkspace: React.FC = () => {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fetchCouncils()}
+                      title="Làm mới danh sách hội đồng"
+                    >
+                      <RotateCw className="w-3.5 h-3.5 mr-1" />
+                      Làm mới
+                    </Button>
                     {committees.length > 0 && (
                       <Button
                         size="sm"
@@ -2350,7 +2459,7 @@ export const HeadWorkspace: React.FC = () => {
                     const lecTitle = lec.title || lec.lecturerProfile?.title;
                     return (
                       <option key={lecUserId} value={lecUserId}>
-                        {lecTitle ? `${lecTitle}. ` : ''}{lecName}
+                        {formatLecturerName(lecTitle, lecName)}
                       </option>
                     );
                   })}
@@ -3457,7 +3566,7 @@ export const HeadWorkspace: React.FC = () => {
                         const disabled = !l.isAvailable || l.id === assignReviewer2Id;
                         return (
                           <option key={l.id} value={l.id} disabled={disabled}>
-                            {l.fullName} ({l.lecturerCode}) {l.isAdvisor ? ' [GVHD - Không thể chọn]' : l.isOverloaded ? ` [Đã đủ tải ${l.currentReviewCount}/${l.maxReviews}]` : ` (Còn ${l.remainingSlots} lượt)`}
+                            {formatLecturerName(l.title, l.fullName)} ({l.lecturerCode}) {l.isAdvisor ? ' [GVHD - Không thể chọn]' : l.isOverloaded ? ` [Đã đủ tải ${l.currentReviewCount}/${l.maxReviews}]` : ` (Còn ${l.remainingSlots} lượt)`}
                           </option>
                         );
                       })}
@@ -3479,7 +3588,7 @@ export const HeadWorkspace: React.FC = () => {
                         const disabled = !l.isAvailable || l.id === assignReviewer1Id;
                         return (
                           <option key={l.id} value={l.id} disabled={disabled}>
-                            {l.fullName} ({l.lecturerCode}) {l.isAdvisor ? ' [GVHD - Không thể chọn]' : l.isOverloaded ? ` [Đã đủ tải ${l.currentReviewCount}/${l.maxReviews}]` : ` (Còn ${l.remainingSlots} lượt)`}
+                            {formatLecturerName(l.title, l.fullName)} ({l.lecturerCode}) {l.isAdvisor ? ' [GVHD - Không thể chọn]' : l.isOverloaded ? ` [Đã đủ tải ${l.currentReviewCount}/${l.maxReviews}]` : ` (Còn ${l.remainingSlots} lượt)`}
                           </option>
                         );
                       })}
@@ -3613,7 +3722,7 @@ export const HeadWorkspace: React.FC = () => {
                     .filter((l: any) => !l.isAlreadyAssigned && !l.isSupervisor)
                     .map((lec: any) => (
                       <option key={lec.id} value={lec.id} disabled={lec.quotaReached}>
-                        {lec.fullName} ({lec.code || lec.email}) — Hiện nhận: {lec.assignedCount}/{lec.quota} nhóm {lec.quotaReached ? '[Đã đạt hạn mức]' : ''}
+                        {formatLecturerName(lec.title, lec.fullName)} ({lec.code || lec.email}) — Hiện nhận: {lec.assignedCount}/{lec.quota} nhóm {lec.quotaReached ? '[Đã đạt hạn mức]' : ''}
                       </option>
                     ))}
                 </select>
@@ -3795,7 +3904,7 @@ export const HeadWorkspace: React.FC = () => {
                         className="rounded text-purple-600 focus:ring-purple-500 disabled:opacity-40"
                       />
                       <div>
-                        <span className="font-semibold">{l.user?.fullName || l.fullName}</span>
+                        <span className="font-semibold">{formatLecturerName(l.title || l.lecturerProfile?.title, l.user?.fullName || l.fullName)}</span>
                         <span className="text-slate-500 text-[11px] ml-1.5">
                           ({l.lecturerCode || l.code || l.department?.name || 'Giảng viên'})
                         </span>

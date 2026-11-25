@@ -70,8 +70,12 @@ export class ScoresController {
 
   @Get('groups/:groupId/pdf')
   @ApiOperation({ summary: 'Xuất PDF phiếu điểm theo nhóm' })
-  async pdf(@Param('groupId') groupId: string, @Res() response: Response) {
-    const file = await this.service.exportPdf(groupId);
+  async pdf(
+    @CurrentUser() user: { id: string },
+    @Param('groupId') groupId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.service.exportPdf(groupId, undefined, undefined, user?.id);
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader('Content-Disposition', `attachment; filename="score-${groupId}.pdf"`);
     response.send(file);

@@ -74,7 +74,6 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
   const title = user?.lecturerProfile?.title || 'ThS.';
   const fullName = user?.fullName || dashboardData?.user?.fullName || 'Giảng viên';
   const specialization = user?.lecturerProfile?.specialization || 'Công nghệ thông tin';
-  const isHeadUser = user?.roles?.includes('TRUONG_BO_MON') || user?.role === 'TRUONG_BO_MON';
 
   const maxGroups = dashboardData?.summary?.maxGuidingGroups ?? user?.lecturerProfile?.maxGroups ?? 5;
   const guidedCount =
@@ -91,9 +90,17 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
   const committeesCount =
     dashboardData?.summary?.committeesCount ?? workspaceData?.committees?.length ?? 0;
 
-  const actionItems: string[] = dashboardData?.actionItems?.length
-    ? dashboardData.actionItems
+  let actionItems: string[] = dashboardData?.actionItems?.length
+    ? [...dashboardData.actionItems]
     : [];
+
+  // Lọc an toàn: Cảnh báo "chưa hoàn thành khóa điểm" CHỈ hiển thị cho nhóm đã được duyệt qua Giữa kỳ (CHO LÀM TIẾP)
+  const hasContinueGroup = (workspaceData?.myGroups || []).some(
+    (g: any) => g.midtermStatus === 'CONTINUE' || (g.midtermStatus as any) === 'CHO_LAM_TIEP',
+  );
+  if (!hasContinueGroup) {
+    actionItems = actionItems.filter((item) => !item.includes('chưa hoàn thành khóa điểm'));
+  }
 
   if (!actionItems.length) {
     if (workspaceData?.proposals?.length) {
@@ -179,15 +186,29 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
           </span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-          {actionItems.map((item, idx) => (
-            <div
-              key={idx}
-              className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-emerald-200/60 shadow-xs text-xs text-slate-700"
-            >
-              <div className="w-2 h-2 rounded-full bg-emerald-600 mt-1.5 shrink-0" />
-              <span className="leading-relaxed font-medium">{item}</span>
-            </div>
-          ))}
+          {actionItems.map((item, idx) => {
+            const isCriticalWarning =
+              item.includes('chưa hoàn thành khóa điểm') ||
+              item.includes('chưa hoàn tất nhập điểm') ||
+              item.includes('Dừng đề tài');
+            return (
+              <div
+                key={idx}
+                className={`flex items-start gap-2.5 p-3 rounded-xl border shadow-xs text-xs transition-colors ${
+                  isCriticalWarning
+                    ? 'bg-rose-50/70 border-rose-200 text-rose-950 font-medium'
+                    : 'bg-white border-emerald-200/60 text-slate-700'
+                }`}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                    isCriticalWarning ? 'bg-rose-500 ring-2 ring-rose-200' : 'bg-emerald-600'
+                  }`}
+                />
+                <span className="leading-relaxed font-medium">{item}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -395,7 +416,7 @@ export const LecturerWelcomeView: React.FC<LecturerWelcomeViewProps> = ({ onNavi
         currentStep={dashboardData?.semester?.currentStep}
         semesterInfo={dashboardData?.semester}
         role="GIANG_VIEN"
-        canManageTimeline={isHeadUser}
+        canManageTimeline={false}
         onTimelineStepChange={fetchDashboard}
         onNavigate={onNavigate}
       />

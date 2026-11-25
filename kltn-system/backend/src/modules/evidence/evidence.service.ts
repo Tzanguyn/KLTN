@@ -190,14 +190,39 @@ export class EvidenceService {
    * Sinh viên nộp minh chứng NCKH
    */
   async create(userId: string, dto: CreateEvidenceDto, file?: Express.Multer.File) {
-    if (!file && !dto.description) {
-      throw new BadRequestException('Cần tải tệp hoặc nhập mô tả minh chứng');
+    const title = dto.title?.trim();
+    if (!title) {
+      throw new BadRequestException('Vui lòng nhập tiêu đề minh chứng NCKH');
     }
+
+    const hasFile = Boolean(file && (file.filename || file.path || file.originalname));
+    const hasDesc = Boolean(dto.description && dto.description.trim().length > 0);
+
+    if (!hasFile && !hasDesc) {
+      throw new BadRequestException(
+        'Bắt buộc (required) phải đính kèm tệp minh chứng (PDF/ảnh/zip) hoặc nhập liên kết / mô tả chi tiết công trình NCKH.',
+      );
+    }
+
+    // Chống nộp trùng lặp bản ghi cùng tiêu đề đang chờ duyệt
+    const existingPending = await this.prisma.evidence.findFirst({
+      where: {
+        userId,
+        title,
+        status: EvidenceStatus.PENDING,
+      },
+    });
+    if (existingPending) {
+      throw new BadRequestException(
+        'Bạn đã nộp một hồ sơ minh chứng NCKH với tiêu đề này đang chờ duyệt. Vui lòng không nộp trùng lặp.',
+      );
+    }
+
     return this.prisma.evidence.create({
       data: {
         userId,
-        title: dto.title,
-        description: dto.description,
+        title,
+        description: dto.description?.trim() || undefined,
         fileName: file?.originalname ? fixUtf8Mojibake(file.originalname) : undefined,
         fileUrl: file?.path ?? file?.filename,
       },

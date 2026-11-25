@@ -34,6 +34,27 @@ export class AuthService {
     return this.captchaService.generateCaptcha();
   }
 
+  /**
+   * Lấy trạng thái hoạt động / bảo trì của hệ thống (công khai cho màn hình Login)
+   */
+  async getSystemStatus() {
+    const config = await this.prisma.systemConfig.findFirst({
+      where: { key: 'SYSTEM_STATUS', semesterId: null, departmentId: null },
+    });
+
+    if (config?.value && typeof config.value === 'object') {
+      return config.value as any;
+    }
+
+    return {
+      status: 'OPEN',
+      message: 'Hệ thống KLTN đang mở và hoạt động bình thường.',
+      maintenanceUntil: null,
+      allowAdminOnly: false,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   private checkRateLimit(key: string) {
     const now = Date.now();
     const record = this.failedAttempts.get(key);
@@ -270,6 +291,34 @@ export class AuthService {
       // Bỏ qua lỗi ghi audit để không chặn luồng đăng nhập
     }
 
+    const isLecturerRole =
+      roles.includes('GIANG_VIEN') ||
+      roles.includes('TRUONG_BO_MON') ||
+      roles.includes('QUAN_LY_BO_MON');
+
+    if (!user.lecturerProfile && isLecturerRole) {
+      const defaultDept = await this.prisma.department.findFirst({
+        where: { code: { in: ['IS', 'CNTT'] } },
+      });
+      if (defaultDept) {
+        user.lecturerProfile = await this.prisma.lecturerProfile.create({
+          data: {
+            userId: user.id,
+            lecturerCode: user.email === 'quanly@kltn.edu.vn' ? 'QL001' : `GV_${user.id.slice(0, 6).toUpperCase()}`,
+            title: roles.includes('TRUONG_BO_MON') ? 'PGS. TS.' : 'ThS.',
+            specialization: 'Hệ thống thông tin',
+            departmentId: defaultDept.id,
+            maxGroups: 10,
+          },
+          include: { department: true },
+        });
+      }
+    }
+
+    if (user.lecturerProfile && user.email === 'quanly@kltn.edu.vn') {
+      user.lecturerProfile.maxGroups = 10;
+    }
+
     const formattedUser = {
       id: user.id,
       mssv: user.studentProfile?.studentCode ?? null,
@@ -410,6 +459,34 @@ export class AuthService {
 
     const hasContactInfo = Boolean(user.phone && user.studentProfile?.personalEmail);
     const requireProfileUpdate = isStudent && !hasContactInfo;
+
+    const isLecturerRole =
+      roles.includes('GIANG_VIEN') ||
+      roles.includes('TRUONG_BO_MON') ||
+      roles.includes('QUAN_LY_BO_MON');
+
+    if (!user.lecturerProfile && isLecturerRole) {
+      const defaultDept = await this.prisma.department.findFirst({
+        where: { code: { in: ['IS', 'CNTT'] } },
+      });
+      if (defaultDept) {
+        user.lecturerProfile = await this.prisma.lecturerProfile.create({
+          data: {
+            userId: user.id,
+            lecturerCode: user.email === 'quanly@kltn.edu.vn' ? 'QL001' : `GV_${user.id.slice(0, 6).toUpperCase()}`,
+            title: roles.includes('TRUONG_BO_MON') ? 'PGS. TS.' : 'ThS.',
+            specialization: 'Hệ thống thông tin',
+            departmentId: defaultDept.id,
+            maxGroups: 10,
+          },
+          include: { department: true },
+        });
+      }
+    }
+
+    if (user.lecturerProfile && user.email === 'quanly@kltn.edu.vn') {
+      user.lecturerProfile.maxGroups = 10;
+    }
 
     return {
       ...user,

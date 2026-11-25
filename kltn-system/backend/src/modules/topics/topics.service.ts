@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { formatGroupName } from '../groups/groups.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { ReviewTopicDto } from './dto/review-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -276,7 +277,11 @@ export class TopicsService {
         trangThaiDangKy = 'DA_DANG_KY';
       }
 
-      const gvhdTitle = topic.owner?.lecturerProfile?.title ? `${topic.owner.lecturerProfile.title} ` : '';
+      let cleanTitle = (topic.owner?.lecturerProfile?.title || '').trim().replace(/\.+$/, '');
+      if (cleanTitle && cleanTitle.toLowerCase() !== 'gv') {
+        cleanTitle = `${cleanTitle}.`;
+      }
+      const gvhdTitle = cleanTitle ? `${cleanTitle} ` : '';
       const gvhd = {
         id: topic.owner?.id,
         hoTen: `${gvhdTitle}${topic.owner?.fullName || 'Chưa phân công'}`,
@@ -901,7 +906,11 @@ export class TopicsService {
     const soChoConLai = Math.max(0, topic.capacity - soLuongDaDangKy);
     const conCho = soChoConLai > 0;
 
-    const gvhdTitle = topic.owner?.lecturerProfile?.title ? `${topic.owner.lecturerProfile.title} ` : '';
+    let cleanTitle = (topic.owner?.lecturerProfile?.title || '').trim().replace(/\.+$/, '');
+    if (cleanTitle && cleanTitle.toLowerCase() !== 'gv') {
+      cleanTitle = `${cleanTitle}.`;
+    }
+    const gvhdTitle = cleanTitle ? `${cleanTitle} ` : '';
     const gvhd = {
       id: topic.owner?.id,
       hoTen: `${gvhdTitle}${topic.owner?.fullName || 'Chưa phân công'}`,
@@ -1398,6 +1407,18 @@ export class TopicsService {
                 department: {
                   select: { id: true, name: true, code: true },
                 },
+                groupMembers: {
+                  where: {
+                    group: {
+                      status: { not: 'CANCELLED' },
+                    },
+                  },
+                  include: {
+                    group: {
+                      select: { id: true, code: true, name: true, status: true, semesterId: true },
+                    },
+                  },
+                },
               },
             },
           },
@@ -1458,11 +1479,19 @@ export class TopicsService {
     for (const reg of topic.registrations || []) {
       if (['PENDING', 'CHO_XAC_NHAN', 'APPROVED'].includes(reg.status)) {
         seenStudentIds.add(reg.studentId);
+        const activeGroupMember = (reg.student as any)?.groupMembers?.[0];
+        const effectiveGroupId = reg.groupId || activeGroupMember?.groupId || null;
+        const effectiveGroup = reg.group
+          ? { id: reg.group.id, code: reg.group.code, name: reg.group.name }
+          : activeGroupMember?.group
+          ? { id: activeGroupMember.group.id, code: activeGroupMember.group.code, name: activeGroupMember.group.name }
+          : null;
+
         resultList.push({
           id: reg.id,
           registrationId: reg.id,
-          groupId: reg.groupId,
-          group: reg.group ? { id: reg.group.id, code: reg.group.code, name: reg.group.name } : null,
+          groupId: effectiveGroupId,
+          group: effectiveGroup,
           studentId: reg.studentId,
           userId: reg.student.userId,
           studentCode: reg.student.studentCode,
@@ -1721,7 +1750,7 @@ export class TopicsService {
       activeGroup = await this.prisma.group.create({
         data: {
           code: groupCode,
-          name: `Nhóm ${topic.title.substring(0, 40)}`,
+          name: formatGroupName(topic.title),
           topicId: topic.id,
           semesterId: topic.semesterId,
           status: 'ACTIVE',

@@ -33,6 +33,39 @@ export class QuotasService {
       throw new NotFoundException('Không tìm thấy học kỳ');
     }
 
+    const managerAndLecturerUsers = await this.prisma.user.findMany({
+      where: {
+        roles: {
+          some: {
+            role: {
+              code: { in: ['GIANG_VIEN', 'TRUONG_BO_MON', 'QUAN_LY_BO_MON'] },
+            },
+          },
+        },
+        lecturerProfile: null,
+      },
+    });
+
+    if (managerAndLecturerUsers.length > 0) {
+      const defaultDept = await this.prisma.department.findFirst({
+        where: { code: { in: ['IS', 'CNTT'] } },
+      });
+      if (defaultDept) {
+        for (const u of managerAndLecturerUsers) {
+          await this.prisma.lecturerProfile.create({
+            data: {
+              userId: u.id,
+              lecturerCode: u.email === 'quanly@kltn.edu.vn' ? 'QL001' : `GV_${u.id.slice(0, 6).toUpperCase()}`,
+              title: 'ThS.',
+              specialization: 'Hệ thống thông tin',
+              departmentId: defaultDept.id,
+              maxGroups: 10,
+            },
+          });
+        }
+      }
+    }
+
     const lecturers = await this.prisma.lecturerProfile.findMany({
       include: {
         user: {
@@ -48,9 +81,50 @@ export class QuotasService {
       orderBy: [{ user: { fullName: 'asc' } }],
     });
 
+    const seenEmails = new Set<string>();
+    const seenNames = new Set<string>();
+
+    const filteredLecturers = lecturers.filter((l) => {
+      const email = l.user?.email?.toLowerCase() || '';
+      const code = (l.lecturerCode || '').toUpperCase();
+      const fullName = (l.user?.fullName || '').trim().toLowerCase();
+
+      if (
+        !email ||
+        seenEmails.has(email) ||
+        code.endsWith('_ALT') ||
+        code.includes('TBM001_ALT') ||
+        code.startsWith('HOD_') ||
+        code.startsWith('GV_UL_') ||
+        code.startsWith('GV_SC_') ||
+        code.startsWith('GVA_') ||
+        code.startsWith('GVB_') ||
+        email.includes('truongbomôn') ||
+        email.startsWith('hod_') ||
+        email.includes('_ul_') ||
+        email.includes('_sc_') ||
+        /\d{10,}@kltn\.edu\.vn/.test(email) ||
+        email.includes('_score_') ||
+        email.includes('_unlock_') ||
+        email.startsWith('gv_b_') ||
+        email.startsWith('gv_a_') ||
+        email.startsWith('test_')
+      ) {
+        return false;
+      }
+
+      if (fullName && seenNames.has(fullName)) {
+        return false;
+      }
+
+      seenEmails.add(email);
+      if (fullName) seenNames.add(fullName);
+      return true;
+    });
+
     // Compute realtime workload for each lecturer in this semester
     const result = await Promise.all(
-      lecturers.map(async (l) => {
+      filteredLecturers.map(async (l) => {
         const guidedGroupsCount = await this.prisma.group.count({
           where: {
             topic: { ownerId: l.userId },
@@ -84,7 +158,9 @@ export class QuotasService {
         });
 
         const currentGroups = Math.max(guidedGroupsCount, chosenTopicsCount);
-        const maxGroups = l.quotas[0]?.maxGroups ?? l.maxGroups ?? 5;
+        const maxGroups = l.user?.email === 'quanly@kltn.edu.vn'
+          ? (l.quotas[0]?.maxGroups ?? 10)
+          : (l.quotas[0]?.maxGroups ?? l.maxGroups ?? 5);
         const remainingSlots = Math.max(0, maxGroups - currentGroups);
         const isOverloaded = currentGroups >= maxGroups;
 

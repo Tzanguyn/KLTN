@@ -732,13 +732,27 @@ export class DefenseService {
   }
 
   async committees(departmentId?: string) {
-    return this.prisma.defenseCommittee.findMany({
-      where: departmentId ? { departmentId } : undefined,
+    const list = await this.prisma.defenseCommittee.findMany({
+      where: {
+        ...(departmentId ? { departmentId } : {}),
+        NOT: [
+          { name: { contains: '17' } },
+          { name: { contains: 'Test' } },
+        ],
+      },
       include: {
         members: { include: { user: { select: { id: true, fullName: true, email: true } } } },
         schedules: true,
       },
       orderBy: { name: 'asc' },
+    });
+
+    // Deduplicate by name just in case
+    const seenNames = new Set<string>();
+    return list.filter((c) => {
+      if (seenNames.has(c.name.trim().toLowerCase())) return false;
+      seenNames.add(c.name.trim().toLowerCase());
+      return true;
     });
   }
 
@@ -1576,7 +1590,48 @@ export class DefenseService {
       orderBy: [{ user: { fullName: 'asc' } }],
     });
 
-    return lecturers.map((lec) => {
+    const seenEmails = new Set<string>();
+    const seenNames = new Set<string>();
+
+    const filteredLecturers = lecturers.filter((lec) => {
+      const email = lec.user?.email?.toLowerCase() || '';
+      const code = (lec.lecturerCode || '').toUpperCase();
+      const fullName = (lec.user?.fullName || '').trim().toLowerCase();
+
+      if (
+        !email ||
+        seenEmails.has(email) ||
+        code.endsWith('_ALT') ||
+        code.includes('TBM001_ALT') ||
+        code.startsWith('HOD_') ||
+        code.startsWith('GV_UL_') ||
+        code.startsWith('GV_SC_') ||
+        code.startsWith('GVA_') ||
+        code.startsWith('GVB_') ||
+        email.includes('truongbomôn') ||
+        email.startsWith('hod_') ||
+        email.includes('_ul_') ||
+        email.includes('_sc_') ||
+        /\d{10,}@kltn\.edu\.vn/.test(email) ||
+        email.includes('_score_') ||
+        email.includes('_unlock_') ||
+        email.startsWith('gv_b_') ||
+        email.startsWith('gv_a_') ||
+        email.startsWith('test_')
+      ) {
+        return false;
+      }
+
+      if (fullName && seenNames.has(fullName)) {
+        return false;
+      }
+
+      seenEmails.add(email);
+      if (fullName) seenNames.add(fullName);
+      return true;
+    });
+
+    return filteredLecturers.map((lec) => {
       const isAdvisorOfSelectedGroup = advisorUserIds.has(lec.userId);
       const groupCode = isAdvisorOfSelectedGroup ? advisorMap.get(lec.userId) : null;
       const isEligible = !isAdvisorOfSelectedGroup;

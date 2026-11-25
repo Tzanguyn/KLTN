@@ -8,6 +8,7 @@ import { Input } from '../ui/Input';
 import { Modal } from '../ui/Modal';
 import { WorkspaceSidebar, NavItem } from './WorkspaceSidebar';
 import { WelcomeTimeline } from '../dashboard/WelcomeTimeline';
+import { formatLecturerName } from '../../utils/format';
 import {
   LayoutDashboard,
   Users,
@@ -45,7 +46,7 @@ import {
 } from 'lucide-react';
 
 export const AdminWorkspace: React.FC = () => {
-  const { user } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const [activeTab, setActiveTab] = useState<string>('overview');
 
   // Stats state
@@ -235,7 +236,25 @@ export const AdminWorkspace: React.FC = () => {
     try {
       const res = await api.get('/users/lecturers');
       const items = res.data?.data ?? res.data;
-      setLecturersList(Array.isArray(items) ? items : []);
+      const raw = Array.isArray(items) ? items : [];
+      const clean = Array.from(
+        new Map(
+          raw
+            .filter((l: any) => {
+              const email = l.user?.email || l.email || '';
+              return (
+                !/\d{10,}@kltn\.edu\.vn/.test(email) &&
+                !email.includes('_score_') &&
+                !email.includes('_unlock_') &&
+                !email.startsWith('gv_b_') &&
+                !email.startsWith('gv_a_') &&
+                !email.startsWith('test_')
+              );
+            })
+            .map((l: any) => [l.user?.email || l.email || l.id, l])
+        ).values()
+      );
+      setLecturersList(clean);
     } catch {}
   };
 
@@ -274,11 +293,12 @@ export const AdminWorkspace: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!accessToken) return;
     fetchStats();
     fetchUsers(1);
     fetchSemesters();
     fetchLecturers();
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     if (activeTab === 'users') {
@@ -2605,13 +2625,14 @@ export const AdminWorkspace: React.FC = () => {
                 const name = gv.user?.fullName || gv.fullName || 'Giảng viên';
                 const email = gv.user?.email || gv.email || '';
                 const code = gv.lecturerCode || gv.lecturerProfile?.lecturerCode || '';
-                const title = gv.title || gv.lecturerProfile?.title || 'GV';
+                const title = gv.title || gv.lecturerProfile?.title;
+                const formattedName = formatLecturerName(title, name);
                 const isCurrent =
                   (transferTargetRole === 'TRUONG_BO_MON' && uId === stats?.leadership?.head?.id) ||
                   (transferTargetRole === 'QUAN_LY_BO_MON' && uId === stats?.leadership?.manager?.id);
                 return (
                   <option key={uId} value={uId} disabled={isCurrent}>
-                    {title} {name} ({email}){code ? ` · Mã: ${code}` : ''}{isCurrent ? ' — [Đang giữ vị trí này]' : ''}
+                    {formattedName} ({email}){code ? ` · Mã: ${code}` : ''}{isCurrent ? ' — [Đang giữ vị trí này]' : ''}
                   </option>
                 );
               })}

@@ -37,7 +37,7 @@ export class UsersController {
 
   @ApiOperation({ summary: 'Lấy danh sách tất cả giảng viên' })
   @Get('lecturers')
-  @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.GIANG_VIEN, RoleCode.SINH_VIEN)
+  @Roles(RoleCode.ADMIN, RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.GIANG_VIEN, RoleCode.SINH_VIEN)
   lecturers() {
     return this.service.lecturers();
   }
@@ -45,7 +45,17 @@ export class UsersController {
   @ApiOperation({ summary: 'Lấy danh sách sinh viên có phân trang & tìm kiếm' })
   @Get('students')
   @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON, RoleCode.GIANG_VIEN)
-  students(@Query() query: { page?: number; limit?: number; search?: string; eligible?: string }) {
+  students(
+    @Query()
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      eligible?: string;
+      withoutGroup?: string;
+      hasGroup?: string;
+    },
+  ) {
     return this.service.students(query);
   }
 

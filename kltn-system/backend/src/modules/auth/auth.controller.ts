@@ -27,6 +27,18 @@ export class AuthController {
   }
 
   @ApiOperation({
+    summary: 'Lấy trạng thái đóng / mở toàn hệ thống (công khai cho màn hình Login)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Trả về trạng thái hoạt động của hệ thống (OPEN, MAINTENANCE, v.v.)',
+  })
+  @Get('system-status')
+  getSystemStatus() {
+    return this.authService.getSystemStatus();
+  }
+
+  @ApiOperation({
     summary: 'Đăng nhập hệ thống (MSSV/Email + Mật khẩu)',
     description: 'Xác thực tài khoản, kiểm tra điều kiện KLTN và trả về Access Token + Refresh Token (kèm HttpOnly cookie)',
   })

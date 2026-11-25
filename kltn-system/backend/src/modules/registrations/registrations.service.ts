@@ -118,8 +118,12 @@ export class RegistrationsService {
       },
     });
 
-    if (existingActiveRegistration || existingGroupMembership) {
-      throw new ConflictException('Bạn đã đăng ký hoặc thuộc một đề tài khác');
+    if (existingGroupMembership) {
+      throw new ConflictException('Bạn đã thuộc một nhóm KLTN chính thức, không thể đăng ký thêm đề tài khác');
+    }
+
+    if (existingActiveRegistration) {
+      throw new ConflictException('Bạn đã có đơn đăng ký đề tài đang chờ xử lý hoặc đã được xác nhận');
     }
 
     // 4. Pre-condition & E1: Check topic availability and capacity

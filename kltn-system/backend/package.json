@@ -10,7 +10,8 @@
     "test:integration": "ts-node test/full-workflow.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:clean": "tsx prisma/cleanup-test-data.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

@@ -53,15 +53,51 @@ interface AuthState {
   logout: () => void;
 }
 
+function isTokenExpired(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join(''),
+    );
+    const payload = JSON.parse(jsonPayload);
+    if (!payload.exp) return false;
+    // Hết hạn hoặc sắp hết hạn trong 10 giây
+    return Date.now() >= (payload.exp - 10) * 1000;
+  } catch {
+    return true;
+  }
+}
+
 function getInitialToken(): string | null {
   try {
-    return localStorage.getItem('kltn_token') ?? null;
+    const token = localStorage.getItem('kltn_token');
+    if (!token) return null;
+    if (isTokenExpired(token)) {
+      localStorage.removeItem('kltn_token');
+      localStorage.removeItem('kltn_user');
+      localStorage.removeItem('kltn_active_role');
+      return null;
+    }
+    return token;
   } catch {
     return null;
   }
 }
 
-function getInitialUser(): User | null {
+function getInitialUser(token: string | null): User | null {
+  if (!token) {
+    try {
+      localStorage.removeItem('kltn_user');
+      localStorage.removeItem('kltn_active_role');
+    } catch {}
+    return null;
+  }
   try {
     const raw = localStorage.getItem('kltn_user');
     if (raw && raw !== 'undefined' && raw !== 'null') {
@@ -94,10 +130,11 @@ function getInitialActiveRole(user: User | null): string | null {
   return user?.role || user?.roles?.[0] || null;
 }
 
-const initialUser = getInitialUser();
+const initialToken = getInitialToken();
+const initialUser = getInitialUser(initialToken);
 
 export const useAuthStore = create<AuthState>((set) => ({
-  accessToken: getInitialToken(),
+  accessToken: initialToken,
   user: initialUser,
   activeRole: getInitialActiveRole(initialUser),
   activeTab: null,

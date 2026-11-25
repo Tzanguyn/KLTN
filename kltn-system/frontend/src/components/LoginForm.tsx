@@ -85,8 +85,10 @@ export function LoginForm() {
 
   useEffect(() => {
     api
-      .get('/admin/system-status')
+      .get('/auth/system-status')
+      .catch(() => api.get('/admin/system-status').catch(() => null))
       .then((res) => {
+        if (!res) return;
         const data = res.data?.data ?? res.data;
         if (data && data.status && data.status !== 'OPEN') {
           setSystemInfo(data);

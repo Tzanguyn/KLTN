@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
-import { fixMojibake } from '../../utils/format';
+import { fixMojibake, removeVietnameseTones, formatGroupName } from '../../utils/format';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -37,8 +37,91 @@ import {
 import { ManagerWelcomeView } from '../dashboard/ManagerWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 
+const MODULE_LABELS: Record<string, string> = {
+  registrationOpen: 'Đăng ký đề tài',
+  proposalOpen: 'Đề xuất đề tài',
+  submissionOpen: 'Nộp báo cáo/Khóa luận',
+  scoringOpen: 'Chấm điểm & Phản biện',
+  scoreAppealOpen: 'Phúc khảo điểm',
+  registration: 'Đăng ký đề tài',
+  proposal: 'Đề xuất đề tài',
+  submission: 'Nộp báo cáo',
+  scoring: 'Chấm điểm',
+  scoreAppeal: 'Phúc khảo',
+};
+
+function renderConfigValue(key: string, value: any) {
+  if (value === null || value === undefined) {
+    return <span className="text-slate-400 italic font-normal">Chưa thiết lập</span>;
+  }
+
+  if (typeof value === 'boolean') {
+    return (
+      <Badge variant={value ? 'success' : 'danger'} size="sm">
+        {value ? 'Đang mở (Bật)' : 'Đang đóng (Tắt)'}
+      </Badge>
+    );
+  }
+
+  if (typeof value === 'number') {
+    return <span className="font-mono font-bold text-indigo-700 text-sm">{value}</span>;
+  }
+
+  if (typeof value === 'string') {
+    return <span className="font-semibold text-slate-800">{value}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    return (
+      <div className="flex flex-wrap gap-1">
+        {value.map((item, idx) => (
+          <Badge key={idx} variant="sky" size="sm">
+            {String(item)}
+          </Badge>
+        ))}
+      </div>
+    );
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).filter(([k]) => k !== 'updatedAt' && !k.endsWith('Note'));
+    if (entries.length === 0) {
+      return <span className="text-slate-400 italic font-normal">Rỗng</span>;
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5 max-w-lg py-1">
+        {entries.map(([k, v]) => {
+          const label = MODULE_LABELS[k] || k;
+          const isBool = typeof v === 'boolean';
+          return (
+            <div
+              key={k}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200/80 text-xs shadow-2xs"
+            >
+              <span className="font-medium text-slate-700">{label}:</span>
+              {isBool ? (
+                <span
+                  className={`font-bold px-1.5 py-0.5 rounded text-[11px] ${
+                    v ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                  }`}
+                >
+                  {v ? 'Mở' : 'Đóng'}
+                </span>
+              ) : (
+                <span className="font-mono font-semibold text-slate-800 text-[11px]">{String(v)}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return <span className="text-slate-800">{String(value)}</span>;
+}
+
 export const ManagerWorkspace: React.FC = () => {
-  const { user } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const [activeTab, setActiveTab] = useState<string>('welcome');
 
   // Data states
@@ -57,10 +140,12 @@ export const ManagerWorkspace: React.FC = () => {
   const [selectedSemesterId, setSelectedSemesterId] = useState<string>('');
   const [progressFilter, setProgressFilter] = useState<string>('ALL');
   const [midtermFilter, setMidtermFilter] = useState<string>('ALL');
+  const [loadingReports, setLoadingReports] = useState(false);
 
   // Search & Filter
   const [searchStudent, setSearchStudent] = useState('');
   const [filterEligible, setFilterEligible] = useState('');
+  const [loadingStudents, setLoadingStudents] = useState(false);
 
   // Defense Eligibility & Scores Tracking
   const [defenseSubTab, setDefenseSubTab] = useState<'schedules' | 'eligibility' | 'scores'>('schedules');
@@ -109,9 +194,100 @@ export const ManagerWorkspace: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  const loadData = async () => {
+  // Client-side instant filter for students
+  const filteredStudents = useMemo(() => {
+    return students.filter((st) => {
+      // 1. Search keyword (MSSV, Họ tên, Lớp, Email) - case & accent insensitive
+      if (searchStudent.trim()) {
+        const query = removeVietnameseTones(searchStudent.trim().toLowerCase());
+        const studentCode = (st.studentCode || '').toLowerCase();
+        const fullName = removeVietnameseTones((st.user?.fullName || '').toLowerCase());
+        const className = removeVietnameseTones((st.className || '').toLowerCase());
+        const email = (st.user?.email || '').toLowerCase();
+
+        const match =
+          studentCode.includes(query) ||
+          fullName.includes(query) ||
+          className.includes(query) ||
+          email.includes(query);
+
+        if (!match) return false;
+      }
+
+      // 2. Filter eligibility
+      if (filterEligible !== '') {
+        const isEligible = filterEligible === 'true';
+        if (st.eligible !== isEligible) return false;
+      }
+
+      return true;
+    });
+  }, [students, searchStudent, filterEligible]);
+
+  // Load students specifically (with debouncing / targeted params)
+  const loadStudents = async (search = searchStudent, eligible = filterEligible) => {
+    if (!accessToken) return;
+    setLoadingStudents(true);
     try {
-      const semParam = selectedSemesterId ? `?semesterId=${selectedSemesterId}` : '';
+      const params = new URLSearchParams();
+      params.set('limit', '100');
+      if (search.trim()) params.set('search', search.trim());
+      if (eligible !== '') params.set('eligible', eligible);
+
+      const res = await api.get(`/users/students?${params.toString()}`);
+      setStudents(res.data?.data?.items ?? res.data?.data ?? []);
+    } catch (err) {
+      console.error('Error loading students:', err);
+    } finally {
+      setLoadingStudents(false);
+    }
+  };
+
+  // Dedicated loader for reports and statistics when semester changes
+  const loadReportsAndStatistics = async (semId: string = selectedSemesterId) => {
+    if (!accessToken) return;
+    setLoadingReports(true);
+    try {
+      const semParam = semId ? `?semesterId=${encodeURIComponent(semId)}` : '';
+      const [
+        dashRes,
+        regStatRes,
+        progStatRes,
+        milesStatRes,
+        midStatRes,
+        grpRes,
+      ] = await Promise.all([
+        api.get(`/reports/dashboard${semParam}`).catch(() => null),
+        api.get(`/statistics/registration-status${semParam}`).catch(() => null),
+        api.get(`/statistics/progress${semParam}`).catch(() => null),
+        api.get(`/statistics/milestones${semParam}`).catch(() => null),
+        api.get(`/statistics/midterm-results${semParam}`).catch(() => null),
+        api.get(`/groups${semParam}`).catch(() => null),
+      ]);
+
+      if (dashRes?.data?.data !== undefined) setDashboardStats(dashRes.data.data);
+      if (regStatRes?.data?.data !== undefined) setRegStats(regStatRes.data.data);
+      if (progStatRes?.data?.data !== undefined) setProgressStats(progStatRes.data.data);
+      if (milesStatRes?.data?.data !== undefined) setMilestoneStats(milesStatRes.data.data);
+      if (midStatRes?.data?.data !== undefined) setMidtermStats(midStatRes.data.data);
+      if (grpRes?.data?.data !== undefined) setMyGroups(grpRes.data.data);
+    } catch (err) {
+      console.error('Error loading reports & statistics:', err);
+    } finally {
+      setLoadingReports(false);
+    }
+  };
+
+  // Dropdown handler when user selects a different semester
+  const handleSemesterChange = async (semId: string) => {
+    setSelectedSemesterId(semId);
+    await loadReportsAndStatistics(semId);
+  };
+
+  const loadData = async (semId: string = selectedSemesterId) => {
+    if (!accessToken) return;
+    try {
+      const semParam = semId ? `?semesterId=${encodeURIComponent(semId)}` : '';
       const [
         semRes,
         cfgRes,
@@ -126,14 +302,12 @@ export const ManagerWorkspace: React.FC = () => {
         evPendingRes,
         evAllRes,
       ] = await Promise.all([
-        api.get('/config/semesters'),
-        api.get('/config'),
-        api.get(
-          `/users/students?limit=100&search=${encodeURIComponent(searchStudent)}&eligible=${filterEligible}`,
-        ),
-        api.get(`/groups${semParam}`),
-        api.get('/defense/schedules'),
-        api.get('/reports/dashboard'),
+        api.get('/config/semesters').catch(() => ({ data: { data: [] } })),
+        api.get('/config').catch(() => ({ data: { data: [] } })),
+        api.get('/users/students?limit=100').catch(() => ({ data: { data: { items: [] } } })),
+        api.get(`/groups${semParam}`).catch(() => ({ data: { data: [] } })),
+        api.get(`/defense/schedules${semParam}`).catch(() => ({ data: { data: [] } })),
+        api.get(`/reports/dashboard${semParam}`).catch(() => ({ data: { data: null } })),
         api.get(`/statistics/registration-status${semParam}`).catch(() => null),
         api.get(`/statistics/progress${semParam}`).catch(() => null),
         api.get(`/statistics/milestones${semParam}`).catch(() => null),
@@ -142,12 +316,12 @@ export const ManagerWorkspace: React.FC = () => {
         api.get('/evidences').catch(() => ({ data: { data: [] } })),
       ]);
 
-      setSemesters(semRes.data.data ?? []);
-      setConfigs(cfgRes.data.data ?? []);
-      setStudents(stdRes.data.data.items ?? []);
-      setMyGroups(grpRes.data.data ?? []);
-      setSchedules(schRes.data.data ?? []);
-      setDashboardStats(dashRes.data.data ?? null);
+      setSemesters(semRes.data?.data ?? []);
+      setConfigs(cfgRes.data?.data ?? []);
+      setStudents(stdRes.data?.data?.items ?? stdRes.data?.data ?? []);
+      setMyGroups(grpRes.data?.data ?? []);
+      setSchedules(schRes.data?.data ?? []);
+      setDashboardStats(dashRes.data?.data ?? null);
       setRegStats(regStatRes?.data?.data ?? null);
       setProgressStats(progStatRes?.data?.data ?? null);
       setMilestoneStats(milesStatRes?.data?.data ?? null);
@@ -161,7 +335,23 @@ export const ManagerWorkspace: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [searchStudent, filterEligible, selectedSemesterId]);
+  }, []);
+
+  // When switching to reports tab, ensure data is fresh
+  useEffect(() => {
+    if (activeTab === 'reports') {
+      loadReportsAndStatistics(selectedSemesterId);
+    }
+  }, [activeTab]);
+
+  // Debounced search on server for students (only when on students tab)
+  useEffect(() => {
+    if (activeTab !== 'students') return;
+    const timer = setTimeout(() => {
+      loadStudents(searchStudent, filterEligible);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchStudent, filterEligible, activeTab]);
 
   const loadDefenseEligibility = async (readyOnly = filterReadyForDefense) => {
     setLoadingEligible(true);
@@ -312,8 +502,12 @@ export const ManagerWorkspace: React.FC = () => {
       await api.patch(`/users/students/${studentId}/eligibility`, {
         eligible: !currentEligible,
       });
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? { ...s, eligible: !currentEligible } : s)),
+      );
       notify(`Đã cập nhật điều kiện sinh viên thành ${!currentEligible ? 'ĐỦ ĐIỀU KIỆN' : 'CHƯA ĐẠT'}!`);
-      loadData();
+      loadStudents(searchStudent, filterEligible);
+      loadReportsAndStatistics(selectedSemesterId);
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi cập nhật', 'error');
     }
@@ -622,7 +816,7 @@ export const ManagerWorkspace: React.FC = () => {
                   {configs.map((cfg) => (
                     <tr key={cfg.id}>
                       <td className="p-3 font-mono font-bold text-indigo-700">{cfg.key}</td>
-                      <td className="p-3 font-bold text-slate-900 text-sm">{JSON.stringify(cfg.value)}</td>
+                      <td className="p-3">{renderConfigValue(cfg.key, cfg.value)}</td>
                       <td className="p-3 text-slate-600">{cfg.description || '—'}</td>
                       <td className="p-3 text-slate-400">
                         {new Date(cfg.updatedAt).toLocaleDateString('vi-VN')}
@@ -643,7 +837,7 @@ export const ManagerWorkspace: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Users className="w-5 h-5 text-amber-600" />
-                Quản lý Sinh viên & Xét điều kiện KLTN ({students.length})
+                Quản lý Sinh viên & Xét điều kiện KLTN ({filteredStudents.length}{students.length !== filteredStudents.length ? ` / ${students.length}` : ''})
               </h3>
               <div className="flex items-center gap-2">
                 <div className="relative w-64">
@@ -653,18 +847,35 @@ export const ManagerWorkspace: React.FC = () => {
                     placeholder="Tìm MSSV, tên, lớp..."
                     value={searchStudent}
                     onChange={(e) => setSearchStudent(e.target.value)}
-                    className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                    className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
+                  {searchStudent && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchStudent('')}
+                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      title="Xóa tìm kiếm"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
                 <select
                   value={filterEligible}
-                  onChange={(e) => setFilterEligible(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilterEligible(val);
+                    loadStudents(searchStudent, val);
+                  }}
+                  className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none cursor-pointer"
                 >
                   <option value="">Tất cả trạng thái</option>
                   <option value="true">Đủ điều kiện</option>
                   <option value="false">Chưa đủ điều kiện</option>
                 </select>
+                {loadingStudents && (
+                  <RotateCw className="w-4 h-4 text-amber-600 animate-spin" />
+                )}
               </div>
             </div>
           </CardHeader>
@@ -683,32 +894,49 @@ export const ManagerWorkspace: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {students.map((st) => (
-                    <tr key={st.id}>
-                      <td className="p-3 font-mono font-bold text-slate-900">{st.studentCode}</td>
-                      <td className="p-3 font-semibold text-slate-800">
-                        {st.user?.fullName}
-                        <div className="text-[10px] text-slate-400 font-normal">{st.user?.email}</div>
-                      </td>
-                      <td className="p-3 text-slate-600">{st.className || '—'}</td>
-                      <td className="p-3 font-bold text-indigo-600">{st.creditsEarned} TC</td>
-                      <td className="p-3 text-slate-700">{st.gpa ?? '—'}</td>
-                      <td className="p-3">
-                        <Badge variant={st.eligible ? 'success' : 'danger'}>
-                          {st.eligible ? 'Đủ điều kiện' : 'Chưa đạt'}
-                        </Badge>
-                      </td>
-                      <td className="p-3 text-right">
-                        <Button
-                          size="sm"
-                          variant={st.eligible ? 'outline' : 'primary'}
-                          onClick={() => handleToggleEligibility(st.id, st.eligible)}
-                        >
-                          {st.eligible ? 'Hủy duyệt' : 'Duyệt điều kiện'}
-                        </Button>
+                  {filteredStudents.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400">
+                        {loadingStudents ? (
+                          <div className="flex items-center justify-center gap-2 text-amber-600">
+                            <RotateCw className="w-4 h-4 animate-spin" />
+                            <span>Đang tìm kiếm sinh viên...</span>
+                          </div>
+                        ) : searchStudent || filterEligible ? (
+                          'Không tìm thấy sinh viên nào phù hợp với bộ lọc tìm kiếm.'
+                        ) : (
+                          'Chưa có dữ liệu sinh viên.'
+                        )}
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    filteredStudents.map((st) => (
+                      <tr key={st.id}>
+                        <td className="p-3 font-mono font-bold text-slate-900">{st.studentCode}</td>
+                        <td className="p-3 font-semibold text-slate-800">
+                          {st.user?.fullName}
+                          <div className="text-[10px] text-slate-400 font-normal">{st.user?.email}</div>
+                        </td>
+                        <td className="p-3 text-slate-600">{st.className || '—'}</td>
+                        <td className="p-3 font-bold text-indigo-600">{st.creditsEarned} TC</td>
+                        <td className="p-3 text-slate-700">{st.gpa ?? '—'}</td>
+                        <td className="p-3">
+                          <Badge variant={st.eligible ? 'success' : 'danger'}>
+                            {st.eligible ? 'Đủ điều kiện' : 'Chưa đạt'}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-right">
+                          <Button
+                            size="sm"
+                            variant={st.eligible ? 'outline' : 'primary'}
+                            onClick={() => handleToggleEligibility(st.id, st.eligible)}
+                          >
+                            {st.eligible ? 'Hủy duyệt' : 'Duyệt điều kiện'}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1005,7 +1233,7 @@ export const ManagerWorkspace: React.FC = () => {
                     }}
                     className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
                   />
-                  <span>Chỉ hiện nhóm đủ điều kiện (readyForDefense=true)</span>
+                  <span>Chỉ hiện nhóm đủ điều kiện bảo vệ</span>
                 </label>
                 <Button
                   size="sm"
@@ -1087,7 +1315,7 @@ export const ManagerWorkspace: React.FC = () => {
                     <tbody className="divide-y divide-slate-100">
                       {schedules.map((sch) => (
                         <tr key={sch.id}>
-                          <td className="p-3 font-bold text-slate-800">{sch.group?.name ?? sch.group?.code}</td>
+                          <td className="p-3 font-bold text-slate-800">{formatGroupName(sch.group?.name, sch.group?.topic?.title) ?? sch.group?.code}</td>
                           <td className="p-3 font-semibold">{new Date(sch.startsAt).toLocaleString('vi-VN')}</td>
                           <td className="p-3 font-bold text-amber-800">{sch.room || 'Chưa xếp'}</td>
                           <td className="p-3 text-slate-600">{sch.committee?.name ?? '—'}</td>
@@ -1654,8 +1882,8 @@ export const ManagerWorkspace: React.FC = () => {
               <label className="text-xs font-bold text-slate-600">Đợt KLTN:</label>
               <select
                 value={selectedSemesterId}
-                onChange={(e) => setSelectedSemesterId(e.target.value)}
-                className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg font-medium"
+                onChange={(e) => handleSemesterChange(e.target.value)}
+                className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg font-medium cursor-pointer"
               >
                 <option value="">Đợt hiện tại (Mặc định)</option>
                 {semesters.map((s) => (
@@ -1664,6 +1892,12 @@ export const ManagerWorkspace: React.FC = () => {
                   </option>
                 ))}
               </select>
+              {loadingReports && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-600 font-semibold animate-pulse">
+                  <RotateCw className="w-4 h-4 animate-spin" />
+                  <span>Đang tải số liệu...</span>
+                </div>
+              )}
             </div>
           </div>
 

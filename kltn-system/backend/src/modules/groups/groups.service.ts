@@ -11,6 +11,53 @@ import { MidtermDto } from './dto/midterm.dto';
 import { QueryGroupsDto } from './dto/query-groups.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 
+/**
+ * Định dạng tên nhóm khóa luận chuẩn mực:
+ * - Giữ trọn vẹn tên đề tài nếu độ dài hợp lý (cột name có dung lượng đến 150 ký tự).
+ * - Nếu đề tài quá dài (vượt 85 ký tự), cắt tại ranh giới từ nguyên vẹn và luôn kèm theo dấu '...'.
+ * - Tránh triệt để lỗi cắt cụt giữa chừng từ (VD: 'trong bài toán dự ' -> 'trong bài toán dự đoán...')
+ */
+export function formatGroupName(topicTitle?: string | null, maxLen = 85): string {
+  const prefix = 'Nhóm ';
+  if (!topicTitle) return 'Nhóm KLTN';
+  const cleanTitle = topicTitle.trim();
+  const maxTitleLen = maxLen - prefix.length;
+  if (cleanTitle.length <= maxTitleLen) {
+    return `${prefix}${cleanTitle}`;
+  }
+  let truncated = cleanTitle.substring(0, maxTitleLen - 3);
+  const lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > 20) {
+    truncated = truncated.substring(0, lastSpace);
+  }
+  return `${prefix}${truncated.trim()}...`;
+}
+
+/**
+ * Khắc phục tên nhóm đã lưu trong CSDL bị cắt cụt giữa từ không có dấu '...'
+ * (VD: 'Nhóm Phân tích dữ liệu ứng dụng trong bài toán dự ')
+ */
+export function formatExistingGroupName(name?: string | null, topicTitle?: string | null): string {
+  if (!name) return topicTitle ? formatGroupName(topicTitle) : 'Nhóm KLTN';
+  const cleanName = name.trim();
+
+  if (topicTitle) {
+    const cleanTopic = topicTitle.trim();
+    const prefix = 'Nhóm ';
+    const coreName = cleanName.startsWith(prefix) ? cleanName.substring(prefix.length).trim() : cleanName;
+    if (cleanTopic.startsWith(coreName) && coreName.length < cleanTopic.length) {
+      return formatGroupName(cleanTopic);
+    }
+  }
+
+  // Nếu tên nhóm bị cắt ngang lưng ở độ dài lớn mà không có dấu chấm hay ba chấm
+  if (cleanName.startsWith('Nhóm ') && cleanName.length >= 35 && !cleanName.endsWith('...') && !cleanName.endsWith('.')) {
+    return `${cleanName}...`;
+  }
+
+  return cleanName;
+}
+
 @Injectable()
 export class GroupsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -313,6 +360,7 @@ export class GroupsService {
 
       return {
         ...g,
+        name: formatExistingGroupName(g.name, g.topic?.title),
         memberCount: g.members.length,
         gvhdScore,
         hasGvhdScore: gvhdScore !== null,
@@ -545,6 +593,7 @@ export class GroupsService {
 
     return {
       ...group,
+      name: formatExistingGroupName(group.name, group.topic?.title),
       memberCount: group.members.length,
       gvhdScore,
       hasGvhdScore: gvhdScore !== null,
@@ -593,7 +642,7 @@ export class GroupsService {
   }
 
   async list(userId: string) {
-    return this.prisma.group.findMany({
+    const groups = await this.prisma.group.findMany({
       where: {
         OR: [{ topic: { ownerId: userId } }, { members: { some: { student: { userId } } } }],
       },
@@ -616,6 +665,11 @@ export class GroupsService {
       },
       orderBy: { code: 'asc' },
     });
+
+    return groups.map((g) => ({
+      ...g,
+      name: formatExistingGroupName(g.name, g.topic?.title),
+    }));
   }
 
   async addMember(userId: string, groupId: string, dto: AddMemberDto) {
@@ -1154,7 +1208,7 @@ export class GroupsService {
         const count = await this.prisma.group.count({ where: { semesterId: topic.semesterId } });
         const semCode = topic.semester?.code || 'KLTN';
         const groupCode = `GRP-${semCode}-${String(count + 1).padStart(3, '0')}`;
-        const groupName = dto.name || `Nhóm ${topic.title.substring(0, 45)}`;
+        const groupName = dto.name || formatGroupName(topic.title);
 
         group = await this.prisma.group.create({
           data: {
@@ -1254,7 +1308,7 @@ export class GroupsService {
       const count = await this.prisma.group.count({ where: { semesterId: topic.semesterId } });
       const semCode = topic.semester?.code || 'KLTN';
       const groupCode = `GRP-${semCode}-${String(count + 1).padStart(3, '0')}`;
-      const groupName = dto.name || `Nhóm ${topic.title.substring(0, 45)}`;
+      const groupName = dto.name || formatGroupName(topic.title);
 
       const group = await this.prisma.group.create({
         data: {

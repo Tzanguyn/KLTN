@@ -293,10 +293,14 @@ export class AppointmentsService {
         }
 
         const studentNames = students.map((s) => s.user.fullName).join(', ');
+        const safeStudentNames =
+          studentNames.length <= 50
+            ? studentNames
+            : `${studentNames.slice(0, 47).replace(/\s+\S*$/, '')}...`;
         targetGroup = await this.prisma.group.create({
           data: {
             code: `GRP-${Date.now().toString().slice(-6)}`,
-            name: `Nhóm ${studentNames.slice(0, 50)}`,
+            name: `Nhóm ${safeStudentNames}`,
             status: 'ACTIVE',
             semesterId: semester.id,
           },

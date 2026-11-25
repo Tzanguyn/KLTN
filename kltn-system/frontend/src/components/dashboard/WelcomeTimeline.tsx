@@ -322,7 +322,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
             </span>
           </span>
 
-          {canManageTimeline && semesterInfo?.id && (
+          {canManageTimeline && roleKey !== 'GIANG_VIEN' && roleKey !== 'SINH_VIEN' && semesterInfo?.id && (
             <button
               onClick={() => {
                 setSelectedStepOption(effectiveStep);

@@ -418,7 +418,9 @@ export class AdminService {
           data: {
             userId: user.id,
             lecturerCode,
-            title: dto.title?.trim() || (dto.role === RoleCode.TRUONG_BO_MON ? 'PGS. TS.' : 'ThS.'),
+            title: dto.title?.trim()
+              ? dto.title.trim().replace(/\.+$/, '.')
+              : (dto.role === RoleCode.TRUONG_BO_MON ? 'PGS. TS.' : 'ThS.'),
             specialization: dto.specialization?.trim() || 'Công nghệ phần mềm',
             maxGroups: dto.maxGroups || 5,
             departmentId: department.id,
@@ -921,7 +923,7 @@ export class AdminService {
         gpa: !isNaN(gpa as any) ? gpa : undefined,
         eligible,
         lecturerCode: lecturerCode || undefined,
-        title: title || undefined,
+        title: title ? title.trim().replace(/\.+$/, '.') : undefined,
         specialization: specialization || undefined,
         maxGroups: !isNaN(maxGroups as any) ? maxGroups : undefined,
         departmentCode: departmentCode || undefined,

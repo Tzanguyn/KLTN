@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import { api } from '../../api';
 import { useAuthStore } from '../../store';
-import { fixMojibake } from '../../utils/format';
+import { fixMojibake, formatLecturerName } from '../../utils/format';
 import { Card, CardHeader, CardContent } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -44,9 +44,10 @@ import {
 } from 'lucide-react';
 import { LecturerWelcomeView } from '../dashboard/LecturerWelcomeView';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
+import { formatGroupName } from '../../utils/format';
 
 export const LecturerWorkspace: React.FC = () => {
-  const { user, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
+  const { user, accessToken, setActiveRole, activeTab: storeActiveTab, setActiveTab: setStoreActiveTab } = useAuthStore();
   const [activeTab, setActiveTab] = useState<string>(storeActiveTab || 'welcome');
   const isHeadUser = user?.roles?.includes('TRUONG_BO_MON') || user?.role === 'TRUONG_BO_MON';
 
@@ -230,6 +231,7 @@ export const LecturerWorkspace: React.FC = () => {
   };
 
   const loadData = async () => {
+    if (!accessToken) return;
     try {
       const [tRes, gRes, subRes, appRes, revRes, comRes, critRes, propRes, midRes, dashRes, officialDashRes, meetRes] = await Promise.all([
         api.get('/topics/my').catch(() => api.get('/topics/mine')),
@@ -262,8 +264,8 @@ export const LecturerWorkspace: React.FC = () => {
         ...officialDashData,
         semester: officialDashData?.semester || lecDashData?.semester || null,
         soNhomHuongDan: lecDashData?.soNhomHuongDan ?? officialDashData?.summary?.guidedGroupsCount ?? groups.length,
-        maxGroupsQuota: lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? 5,
-        choTrong: lecDashData?.choTrong ?? officialDashData?.summary?.remainingGuidingSlots ?? 5,
+        maxGroupsQuota: lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? user?.lecturerProfile?.maxGroups ?? 10,
+        choTrong: lecDashData?.choTrong ?? officialDashData?.summary?.remainingGuidingSlots ?? Math.max(0, (lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? user?.lecturerProfile?.maxGroups ?? 10) - groups.length),
         phanTramHoanThanhTrungBinh: lecDashData?.phanTramHoanThanhTrungBinh ?? 0,
         soLanNop: lecDashData?.soLanNop,
         canhBaoChamTienDo: lecDashData?.canhBaoChamTienDo ?? [],
@@ -292,7 +294,15 @@ export const LecturerWorkspace: React.FC = () => {
           setSelectedGroupId(revs[0].groupId || revs[0].id);
         }
       }
-      setCommittees(comRes.data?.data ?? []);
+      const rawComms = comRes.data?.data ?? [];
+      const cleanComms = Array.from(
+        new Map(
+          rawComms
+            .filter((c: any) => !c.name.includes('17') && !c.name.toLowerCase().includes('test'))
+            .map((c: any) => [c.name.trim().toLowerCase(), c])
+        ).values()
+      );
+      setCommittees(cleanComms);
       setCriteria(critRes.data?.data ?? []);
       if (propRes?.data) {
         setProposals(propRes.data?.data ?? propRes.data ?? []);
@@ -307,6 +317,32 @@ export const LecturerWorkspace: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Error loading lecturer data:', err);
+    }
+  };
+
+  const refreshDashboard = async () => {
+    try {
+      const [dashRes, officialDashRes] = await Promise.all([
+        api.get('/lecturers/me/dashboard').catch(() => null),
+        api.get('/dashboard?role=GIANG_VIEN').catch(() => null),
+      ]);
+      const lecDashData = dashRes?.data?.data ?? {};
+      const officialDashData = officialDashRes?.data?.data ?? {};
+      setDashboardData((prev: any) => ({
+        ...prev,
+        ...lecDashData,
+        ...officialDashData,
+        semester: officialDashData?.semester || lecDashData?.semester || prev?.semester || null,
+        soNhomHuongDan: lecDashData?.soNhomHuongDan ?? officialDashData?.summary?.guidedGroupsCount ?? prev?.soNhomHuongDan ?? myGroups.length,
+        maxGroupsQuota: lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? prev?.maxGroupsQuota ?? user?.lecturerProfile?.maxGroups ?? 10,
+        choTrong: lecDashData?.choTrong ?? officialDashData?.summary?.remainingGuidingSlots ?? prev?.choTrong ?? Math.max(0, (lecDashData?.maxGroupsQuota ?? officialDashData?.summary?.maxGuidingGroups ?? prev?.maxGroupsQuota ?? user?.lecturerProfile?.maxGroups ?? 10) - myGroups.length),
+        phanTramHoanThanhTrungBinh: lecDashData?.phanTramHoanThanhTrungBinh ?? prev?.phanTramHoanThanhTrungBinh ?? 0,
+        soLanNop: lecDashData?.soLanNop ?? prev?.soLanNop,
+        canhBaoChamTienDo: lecDashData?.canhBaoChamTienDo ?? prev?.canhBaoChamTienDo ?? [],
+        trangThaiGiuaKy: lecDashData?.trangThaiGiuaKy ?? prev?.trangThaiGiuaKy,
+      }));
+    } catch (err: any) {
+      console.error('Error refreshing lecturer dashboard:', err);
     }
   };
 
@@ -748,16 +784,105 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
+  // Kiểm tra xem sinh viên đã có nhóm KLTN hay chưa (ở bất kỳ nhóm nào trong hệ thống hoặc các nhóm của GV)
+  const isStudentInAnyGroup = (st: any) => {
+    if (!st) return false;
+    const stId = st.id || st.studentId;
+    const stCode = st.studentCode || st.mssv;
+
+    // 1. Kiểm tra từ relation groupMembers trả về từ backend
+    if (st.groupMembers && Array.isArray(st.groupMembers) && st.groupMembers.length > 0) {
+      return true;
+    }
+    // 2. Kiểm tra từ relation registrations nếu có groupId hoặc group
+    if (st.registrations && Array.isArray(st.registrations) && st.registrations.some((r: any) => r.groupId || r.group)) {
+      return true;
+    }
+    // 3. Kiểm tra trực tiếp groupId / group
+    if (st.groupId || st.group) {
+      return true;
+    }
+
+    // 4. Kiểm tra trong toàn bộ danh sách nhóm KLTN của giảng viên (myGroups)
+    if (myGroups.some((g: any) =>
+      (g.members || []).some((m: any) =>
+        (stId && (m.studentId === stId || m.student?.id === stId)) ||
+        (stCode && (m.studentCode === stCode || m.student?.studentCode === stCode))
+      )
+    )) {
+      return true;
+    }
+
+    // 5. Kiểm tra trong các nhóm thuộc đề tài đang xem (topicGroups)
+    if (topicGroups.some((g: any) =>
+      (g.members || []).some((m: any) =>
+        (stId && (m.studentId === stId || m.student?.id === stId)) ||
+        (stCode && (m.studentCode === stCode || m.student?.studentCode === stCode))
+      )
+    )) {
+      return true;
+    }
+
+    // 6. Kiểm tra trong danh sách đăng ký đề tài nếu sinh viên đã được gán nhóm
+    if (topicRegistrations.some((r: any) =>
+      ((stId && (r.studentId === stId || r.student?.id === stId)) ||
+       (stCode && (r.studentCode === stCode || r.mssv === stCode || r.student?.studentCode === stCode))) &&
+      (r.groupId || r.group)
+    )) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Danh sách sinh viên đủ điều kiện và CHƯA có nhóm để thêm vào nhóm KLTN
+  const availableStudentsForGroup = useMemo(() => {
+    return studentsList.filter((st) => !isStudentInAnyGroup(st));
+  }, [studentsList, myGroups, topicGroups, topicRegistrations]);
+
+  // Danh sách sinh viên đủ điều kiện, CHƯA có nhóm và CHƯA đăng ký đề tài này để thêm vào đề tài
+  const availableStudentsForTopic = useMemo(() => {
+    return studentsList.filter((st) => {
+      // 1. Loại trừ nếu đã có nhóm ở bất kỳ đâu
+      if (isStudentInAnyGroup(st)) return false;
+
+      const stId = st.id || st.studentId;
+      const stCode = st.studentCode || st.mssv;
+
+      // 2. Loại trừ nếu đã có trong danh sách đăng ký của đề tài này
+      const alreadyInTopicRegs = topicRegistrations.some((r: any) =>
+        (stId && (r.studentId === stId || r.student?.id === stId)) ||
+        (stCode && (r.studentCode === stCode || r.mssv === stCode || r.student?.studentCode === stCode))
+      );
+      if (alreadyInTopicRegs) return false;
+
+      // 3. Loại trừ nếu đã nằm trong nhóm của đề tài này
+      const alreadyInTopicGroup = topicGroups.some((g: any) =>
+        (g.members || []).some((m: any) =>
+          (stId && (m.studentId === stId || m.student?.id === stId)) ||
+          (stCode && (m.studentCode === stCode || m.student?.studentCode === stCode))
+        )
+      );
+      if (alreadyInTopicGroup) return false;
+
+      return true;
+    });
+  }, [studentsList, myGroups, topicGroups, topicRegistrations]);
+
   // Add member to group
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedGroupId || !selectedStudentId) return;
+    const targetGroupId = selectedGroupId || myGroups[0]?.id;
+    if (!targetGroupId || !selectedStudentId) {
+      notify('Vui lòng chọn nhóm và sinh viên cần thêm', 'error');
+      return;
+    }
     try {
-      await api.post(`/groups/${selectedGroupId}/members`, { studentId: selectedStudentId });
-      notify('Đã thêm sinh viên vào nhóm!');
+      await api.post(`/groups/${targetGroupId}/members`, { studentId: selectedStudentId });
+      notify('Đã thêm sinh viên vào nhóm thành công!');
       setShowAddMemberModal(false);
       setSelectedStudentId('');
-      loadData();
+      await loadData();
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Không thể thêm thành viên', 'error');
     }
@@ -776,6 +901,24 @@ export const LecturerWorkspace: React.FC = () => {
   };
 
 
+  // Real-time submission counters for top KPI card
+  const currentSoLanNop = useMemo(() => {
+    if (dashboardData?.soLanNop) {
+      return dashboardData.soLanNop;
+    }
+    const daDuyet = submissions.filter((s) => s.status === 'ACCEPTED').length;
+    const canChinhSua = submissions.filter((s) => s.status === 'REVISION_REQUIRED').length;
+    const dangXem = submissions.filter(
+      (s) => s.status === 'CHUA_XEM' || s.status === 'SUBMITTED' || s.status === 'UNDER_REVIEW'
+    ).length;
+    return {
+      tong: submissions.length,
+      daDuyet,
+      canChinhSua,
+      dangXem,
+    };
+  }, [dashboardData?.soLanNop, submissions]);
+
   // Cancel / Archive topic
   const handleCancelTopic = async (topicId: string, topicTitle: string) => {
     if (!confirm(`Bạn có chắc chắn muốn hủy / lưu trữ đề tài "${topicTitle}"?`)) return;
@@ -788,26 +931,143 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
+  // Quick approve submission (Doc1.docx -> Đã duyệt)
+  const handleQuickApproveSubmission = async (subId: string) => {
+    const prevSub = submissions.find((s) => s.id === subId);
+
+    // Optimistic UI updates
+    setSubmissions((prev) =>
+      prev.map((s) => (s.id === subId ? { ...s, status: 'ACCEPTED' } : s))
+    );
+    setDashboardData((prev: any) => {
+      if (!prev) return prev;
+      const cur = prev.soLanNop || {
+        tong: submissions.length,
+        daDuyet: 0,
+        canChinhSua: 0,
+        dangXem: 0,
+      };
+      const wasDangXem =
+        !prevSub ||
+        prevSub.status === 'CHUA_XEM' ||
+        prevSub.status === 'SUBMITTED' ||
+        prevSub.status === 'UNDER_REVIEW';
+      const wasCanChinhSua = prevSub?.status === 'REVISION_REQUIRED';
+      const wasDaDuyet = prevSub?.status === 'ACCEPTED';
+      if (wasDaDuyet) return prev;
+
+      return {
+        ...prev,
+        soLanNop: {
+          ...cur,
+          daDuyet: cur.daDuyet + 1,
+          dangXem: Math.max(0, cur.dangXem - (wasDangXem ? 1 : 0)),
+          canChinhSua: Math.max(0, cur.canChinhSua - (wasCanChinhSua ? 1 : 0)),
+        },
+      };
+    });
+
+    try {
+      await api.post(`/submissions/${subId}/feedback`, {
+        content: 'Đã xem và duyệt bài nộp.',
+        yeuCauChinhSua: false,
+      });
+      notify('Đã duyệt bài nộp thành công!');
+      await Promise.all([loadSubmissions(), refreshDashboard()]);
+    } catch (err: any) {
+      notify(err.response?.data?.message ?? 'Lỗi duyệt bài nộp', 'error');
+      loadSubmissions();
+      refreshDashboard();
+    }
+  };
+
   // Send feedback
   const handleSendFeedback = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSubId || !feedbackContent.trim()) return;
+    const subId = selectedSubId;
+    const content = feedbackContent.trim();
+    const isRevision = feedbackYeuCauChinhSua;
+    const prevSub = submissions.find((s) => s.id === subId);
+
+    // Optimistic UI updates
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s.id === subId
+          ? {
+              ...s,
+              status: isRevision ? 'REVISION_REQUIRED' : 'ACCEPTED',
+              feedbacks: [
+                ...(s.feedbacks || []),
+                {
+                  id: 'temp-' + Date.now(),
+                  content,
+                  createdAt: new Date().toISOString(),
+                  author: { fullName: user?.fullName || 'Giảng viên' },
+                },
+              ],
+            }
+          : s
+      )
+    );
+    setDashboardData((prev: any) => {
+      if (!prev) return prev;
+      const cur = prev.soLanNop || {
+        tong: submissions.length,
+        daDuyet: 0,
+        canChinhSua: 0,
+        dangXem: 0,
+      };
+      const wasDangXem =
+        !prevSub ||
+        prevSub.status === 'CHUA_XEM' ||
+        prevSub.status === 'SUBMITTED' ||
+        prevSub.status === 'UNDER_REVIEW';
+      const wasCanChinhSua = prevSub?.status === 'REVISION_REQUIRED';
+      const wasDaDuyet = prevSub?.status === 'ACCEPTED';
+
+      if (isRevision) {
+        return {
+          ...prev,
+          soLanNop: {
+            ...cur,
+            canChinhSua: cur.canChinhSua + (wasCanChinhSua ? 0 : 1),
+            dangXem: Math.max(0, cur.dangXem - (wasDangXem ? 1 : 0)),
+            daDuyet: Math.max(0, cur.daDuyet - (wasDaDuyet ? 1 : 0)),
+          },
+        };
+      } else {
+        return {
+          ...prev,
+          soLanNop: {
+            ...cur,
+            daDuyet: cur.daDuyet + (wasDaDuyet ? 0 : 1),
+            dangXem: Math.max(0, cur.dangXem - (wasDangXem ? 1 : 0)),
+            canChinhSua: Math.max(0, cur.canChinhSua - (wasCanChinhSua ? 1 : 0)),
+          },
+        };
+      }
+    });
+
+    setShowFeedbackModal(false);
+    setFeedbackContent('');
+    setFeedbackYeuCauChinhSua(false);
+
     try {
-      await api.post(`/submissions/${selectedSubId}/feedback`, {
-        content: feedbackContent.trim(),
-        yeuCauChinhSua: feedbackYeuCauChinhSua,
+      await api.post(`/submissions/${subId}/feedback`, {
+        content,
+        yeuCauChinhSua: isRevision,
       });
       notify(
-        feedbackYeuCauChinhSua
+        isRevision
           ? 'Đã gửi yêu cầu chỉnh sửa cho sinh viên!'
-          : 'Đã gửi nhận xét cho sinh viên!',
+          : 'Đã duyệt bài nộp và gửi nhận xét cho sinh viên!',
       );
-      setShowFeedbackModal(false);
-      setFeedbackContent('');
-      setFeedbackYeuCauChinhSua(false);
-      loadSubmissions();
+      await Promise.all([loadSubmissions(), refreshDashboard()]);
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi gửi phản hồi', 'error');
+      loadSubmissions();
+      refreshDashboard();
     }
   };
 
@@ -1053,7 +1313,11 @@ export const LecturerWorkspace: React.FC = () => {
     }
   };
 
-  const maxGroupsQuota = user?.lecturerProfile?.maxGroups ?? 5;
+  const maxGroupsQuota =
+    dashboardData?.maxGroupsQuota ??
+    dashboardData?.maxGuidingGroups ??
+    user?.lecturerProfile?.maxGroups ??
+    10;
   const currentGroupsCount = myGroups.length;
   const isOverload = currentGroupsCount >= maxGroupsQuota;
 
@@ -1142,7 +1406,7 @@ export const LecturerWorkspace: React.FC = () => {
                 <div className="flex items-center gap-2 text-emerald-200 text-xs font-semibold uppercase tracking-wider">
                   <span>Cổng Giảng viên KLTN</span>
                   <span>•</span>
-                  <span>{user?.lecturerProfile?.title ?? 'ThS.'} {user?.fullName}</span>
+                  <span>{formatLecturerName(user?.lecturerProfile?.title ?? 'ThS.', user?.fullName)}</span>
                 </div>
                 <h2 className="text-2xl font-bold mt-1 text-white">Không gian Giảng dạy & Hướng dẫn</h2>
                 <p className="text-emerald-100 text-sm mt-1">
@@ -1220,7 +1484,10 @@ export const LecturerWorkspace: React.FC = () => {
             </Card>
 
             {/* Card 3: Số lần nộp bài */}
-            <Card className="p-4 bg-white border border-slate-200/90 shadow-xs flex flex-col justify-between">
+            <Card
+              onClick={() => setActiveTab('submissions')}
+              className="p-4 bg-white border border-slate-200/90 shadow-xs flex flex-col justify-between cursor-pointer hover:border-indigo-300 hover:shadow-sm transition-all"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Lượt nộp báo cáo</span>
                 <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
@@ -1229,15 +1496,15 @@ export const LecturerWorkspace: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold text-slate-900">
-                  {dashboardData?.soLanNop?.tong ?? submissions.length}
+                  {currentSoLanNop.tong}
                   <span className="text-xs font-normal text-slate-500 ml-1">lượt</span>
                 </div>
                 <div className="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5 flex-wrap">
-                  <span className="text-emerald-700 font-bold">{dashboardData?.soLanNop?.daDuyet ?? 0} duyệt</span>
+                  <span className="text-emerald-700 font-bold">{currentSoLanNop.daDuyet} duyệt</span>
                   <span>•</span>
-                  <span className="text-rose-600 font-semibold">{dashboardData?.soLanNop?.canChinhSua ?? 0} cần sửa</span>
+                  <span className="text-rose-600 font-semibold">{currentSoLanNop.canChinhSua} cần sửa</span>
                   <span>•</span>
-                  <span className="text-amber-700 font-semibold">{dashboardData?.soLanNop?.dangXem ?? 0} đang xem</span>
+                  <span className="text-amber-700 font-semibold">{currentSoLanNop.dangXem} đang xem</span>
                 </div>
               </div>
             </Card>
@@ -1377,7 +1644,16 @@ export const LecturerWorkspace: React.FC = () => {
               Danh sách các nhóm KLTN đang hướng dẫn ({myGroups.length})
             </h3>
             {myGroups.length > 0 && (
-              <Button size="sm" variant="secondary" onClick={() => setShowAddMemberModal(true)}>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  if (!selectedGroupId && myGroups.length > 0) {
+                    setSelectedGroupId(myGroups[0].id);
+                  }
+                  setShowAddMemberModal(true);
+                }}
+              >
                 <UserPlus className="w-4 h-4 mr-1.5" /> Thêm sinh viên vào nhóm
               </Button>
             )}
@@ -1412,7 +1688,7 @@ export const LecturerWorkspace: React.FC = () => {
                     </Badge>
                   </div>
 
-                  <h4 className="font-bold text-slate-900 text-base line-clamp-1">{group.name}</h4>
+                  <h4 className="font-bold text-slate-900 text-base line-clamp-1">{formatGroupName(group.name, group.topic?.title)}</h4>
                   <p className="text-xs text-slate-600 line-clamp-2">
                     Đề tài: <b>{group.topic?.title ?? 'Chưa liên kết đề tài'}</b>
                   </p>
@@ -2044,10 +2320,21 @@ export const LecturerWorkspace: React.FC = () => {
                         )}
                       </div>
 
-                      <div className="shrink-0 self-start sm:self-center">
+                      <div className="shrink-0 self-start sm:self-center flex items-center gap-2">
+                        {sub.status !== 'ACCEPTED' && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => handleQuickApproveSubmission(sub.id)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 flex items-center gap-1.5 shadow-xs"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Duyệt bài
+                          </Button>
+                        )}
                         <Button
                           size="sm"
-                          variant="primary"
+                          variant="outline"
                           onClick={() => {
                             setSelectedSubId(sub.id);
                             setFeedbackYeuCauChinhSua(sub.status === 'REVISION_REQUIRED');
@@ -3801,17 +4088,28 @@ export const LecturerWorkspace: React.FC = () => {
                     className="flex-1 px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
                     required
                   >
-                    <option value="">-- Chọn sinh viên đủ điều kiện (110+ tín chỉ) --</option>
-                    {studentsList.map((st) => (
+                    <option value="">-- Chọn sinh viên đủ điều kiện (110+ tín chỉ, chưa có nhóm) --</option>
+                    {availableStudentsForTopic.map((st) => (
                       <option key={st.id} value={st.id}>
                         {st.studentCode} - {st.user?.fullName} ({st.className || 'Chưa có lớp'})
                       </option>
                     ))}
                   </select>
-                  <Button type="submit" variant="primary" size="sm" className="shrink-0 flex items-center gap-1">
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    className="shrink-0 flex items-center gap-1"
+                    disabled={availableStudentsForTopic.length === 0}
+                  >
                     <UserPlus className="w-3.5 h-3.5" /> Thêm vào đề tài
                   </Button>
                 </div>
+                {availableStudentsForTopic.length === 0 && (
+                  <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">
+                    ⚠️ Không còn sinh viên khả dụng (chưa có nhóm KLTN và chưa đăng ký đề tài này).
+                  </p>
+                )}
               </form>
             )}
           </div>
@@ -3848,8 +4146,8 @@ export const LecturerWorkspace: React.FC = () => {
                       const memberInGroup = activeTopicGroup?.members?.find(
                         (m: any) => m.studentId === st.studentId || m.studentCode === studentMssv
                       );
-                      const inAnyGroup = st.groupId || st.group || memberInGroup;
-                      const groupCode = st.group?.code || activeTopicGroup?.code || 'Đã có nhóm';
+                      const inAnyGroup = Boolean(st.groupId || st.group || memberInGroup || isStudentInAnyGroup(st));
+                      const groupCode = st.group?.code || (memberInGroup ? activeTopicGroup?.code : null) || 'Đã có nhóm';
                       const isGroupFull = (activeTopicGroup?.members?.length || 0) >= (selectedTopicForRegs?.capacity || 2);
 
                       return (
@@ -3977,7 +4275,26 @@ export const LecturerWorkspace: React.FC = () => {
         <form onSubmit={handleAddMember} className="space-y-4 text-sm">
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-              Chọn sinh viên đủ điều kiện
+              Nhóm KLTN tiếp nhận
+            </label>
+            <select
+              value={selectedGroupId || (myGroups[0]?.id ?? '')}
+              onChange={(e) => setSelectedGroupId(e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+              required
+            >
+              <option value="">-- Chọn nhóm KLTN --</option>
+              {myGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.code} - {g.name} ({g.members?.length || 0}/{g.topic?.capacity || 2} SV)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Chọn sinh viên đủ điều kiện (chưa có nhóm)
             </label>
             <select
               value={selectedStudentId}
@@ -3986,18 +4303,23 @@ export const LecturerWorkspace: React.FC = () => {
               required
             >
               <option value="">-- Chọn sinh viên --</option>
-              {studentsList.map((st) => (
+              {availableStudentsForGroup.map((st) => (
                 <option key={st.id} value={st.id}>
-                  {st.studentCode} - {st.user?.fullName} ({st.className})
+                  {st.studentCode} - {st.user?.fullName} ({st.className || 'Chưa có lớp'})
                 </option>
               ))}
             </select>
+            {availableStudentsForGroup.length === 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 mt-1.5">
+                ⚠️ Không còn sinh viên đủ điều kiện nào chưa có nhóm trong hệ thống.
+              </p>
+            )}
           </div>
           <div className="flex justify-end gap-3 pt-3">
             <Button type="button" variant="outline" onClick={() => setShowAddMemberModal(false)}>
               Hủy
             </Button>
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" disabled={availableStudentsForGroup.length === 0}>
               Thêm vào nhóm
             </Button>
           </div>
@@ -4039,8 +4361,12 @@ export const LecturerWorkspace: React.FC = () => {
             <Button type="button" variant="outline" onClick={() => setShowFeedbackModal(false)}>
               Hủy
             </Button>
-            <Button type="submit" variant="primary">
-              Gửi nhận xét
+            <Button
+              type="submit"
+              variant={feedbackYeuCauChinhSua ? 'danger' : 'primary'}
+              className={!feedbackYeuCauChinhSua ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : ''}
+            >
+              {feedbackYeuCauChinhSua ? 'Yêu cầu chỉnh sửa lại' : 'Duyệt bài & Gửi nhận xét'}
             </Button>
           </div>
         </form>

@@ -60,30 +60,135 @@ export class UsersService {
   }
 
   async lecturers() {
-    return this.prisma.lecturerProfile.findMany({
+    const list = await this.prisma.lecturerProfile.findMany({
+      where: {
+        user: {
+          status: 'ACTIVE',
+          email: {
+            not: { contains: '_17' },
+          },
+        },
+      },
       include: {
         user: { select: { id: true, fullName: true, email: true } },
         department: true,
       },
       orderBy: { user: { fullName: 'asc' } },
     });
+
+    const seenEmails = new Set<string>();
+    const seenNames = new Set<string>();
+
+    return list.filter((l) => {
+      const email = l.user?.email?.toLowerCase() || '';
+      const code = (l.lecturerCode || '').toUpperCase();
+      const fullName = (l.user?.fullName || '').trim().toLowerCase();
+
+      if (
+        !email ||
+        seenEmails.has(email) ||
+        code.endsWith('_ALT') ||
+        code.includes('TBM001_ALT') ||
+        code.startsWith('HOD_') ||
+        code.startsWith('GV_UL_') ||
+        code.startsWith('GV_SC_') ||
+        code.startsWith('GVA_') ||
+        code.startsWith('GVB_') ||
+        email.includes('truongbomôn') ||
+        email.startsWith('hod_') ||
+        email.includes('_ul_') ||
+        email.includes('_sc_') ||
+        /\d{10,}@kltn\.edu\.vn/.test(email) ||
+        email.includes('_score_') ||
+        email.includes('_unlock_') ||
+        email.startsWith('gv_b_') ||
+        email.startsWith('gv_a_') ||
+        email.startsWith('test_')
+      ) {
+        return false;
+      }
+
+      if (fullName && seenNames.has(fullName)) {
+        return false;
+      }
+
+      seenEmails.add(email);
+      if (fullName) seenNames.add(fullName);
+      return true;
+    });
   }
 
-  async students(query: { page?: number; limit?: number; search?: string; eligible?: string }) {
+  async students(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    eligible?: string;
+    withoutGroup?: string;
+    hasGroup?: string;
+  }) {
     const page = Math.max(1, Number(query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit ?? 20)));
-    const where: any = {};
+    const conditions: any[] = [];
+
     if (query.eligible !== undefined && query.eligible !== '') {
-      where.eligible = query.eligible === 'true';
+      conditions.push({ eligible: query.eligible === 'true' });
     }
-    if (query.search) {
-      where.OR = [
-        { studentCode: { contains: query.search, mode: 'insensitive' } },
-        { className: { contains: query.search, mode: 'insensitive' } },
-        { user: { fullName: { contains: query.search, mode: 'insensitive' } } },
-        { user: { email: { contains: query.search, mode: 'insensitive' } } },
-      ];
+    const search = query.search?.trim();
+    if (search) {
+      conditions.push({
+        OR: [
+          { studentCode: { contains: search, mode: 'insensitive' } },
+          { className: { contains: search, mode: 'insensitive' } },
+          { user: { fullName: { contains: search, mode: 'insensitive' } } },
+          { user: { email: { contains: search, mode: 'insensitive' } } },
+        ],
+      });
     }
+
+    if (query.withoutGroup === 'true' || query.hasGroup === 'false') {
+      conditions.push({
+        groupMembers: {
+          none: {
+            group: {
+              status: { not: 'CANCELLED' },
+            },
+          },
+        },
+      });
+      conditions.push({
+        registrations: {
+          none: {
+            groupId: { not: null },
+            status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] },
+          },
+        },
+      });
+    } else if (query.hasGroup === 'true') {
+      conditions.push({
+        OR: [
+          {
+            groupMembers: {
+              some: {
+                group: {
+                  status: { not: 'CANCELLED' },
+                },
+              },
+            },
+          },
+          {
+            registrations: {
+              some: {
+                groupId: { not: null },
+                status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    const where = conditions.length > 0 ? { AND: conditions } : {};
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.studentProfile.findMany({
         where,
@@ -92,7 +197,25 @@ export class UsersService {
         include: {
           user: { select: { id: true, fullName: true, email: true, phone: true, status: true } },
           department: true,
-          registrations: { include: { topic: true, semester: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+          registrations: {
+            where: {
+              status: { in: ['PENDING', 'CHO_XAC_NHAN', 'APPROVED'] },
+            },
+            include: { topic: true, semester: true, group: true },
+            orderBy: { createdAt: 'desc' },
+          },
+          groupMembers: {
+            where: {
+              group: {
+                status: { not: 'CANCELLED' },
+              },
+            },
+            include: {
+              group: {
+                select: { id: true, code: true, name: true, semesterId: true, status: true },
+              },
+            },
+          },
         },
         orderBy: { studentCode: 'asc' },
       }),
@@ -430,9 +553,12 @@ export class UsersService {
       },
       gvhd: {
         id: gvhdUser?.id ?? '',
-        hoTen:
-          (gvhdUser?.lecturerProfile?.title ? `${gvhdUser.lecturerProfile.title} ` : '') +
-          (gvhdUser?.fullName || 'Chưa phân công'),
+        hoTen: (() => {
+          let cleanTitle = (gvhdUser?.lecturerProfile?.title || '').trim().replace(/\.+$/, '');
+          if (cleanTitle && cleanTitle.toLowerCase() !== 'gv') cleanTitle = `${cleanTitle}.`;
+          const prefix = cleanTitle ? `${cleanTitle} ` : '';
+          return `${prefix}${gvhdUser?.fullName || 'Chưa phân công'}`;
+        })(),
         email: gvhdUser?.email || '',
         hocHamHocVi: gvhdUser?.lecturerProfile?.title || 'Giảng viên',
         chuyenMon: gvhdUser?.lecturerProfile?.specialization || '',
@@ -716,6 +842,7 @@ export class UsersService {
           OR: [
             { key: `SEMESTER_TIMELINE_STEP_${semester.id}` },
             { key: 'SEMESTER_TIMELINE_STEP', semesterId: semester.id },
+            { key: 'SEMESTER_TIMELINE_STEP' },
           ],
         },
         orderBy: { updatedAt: 'desc' },
@@ -730,16 +857,59 @@ export class UsersService {
       } else {
         if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
           semesterStep = 5;
-        } else if (defFrom && now >= defFrom) {
-          semesterStep = 5;
-        } else if (subTo && now >= subTo) {
-          semesterStep = 4;
-        } else if (midTo && now >= midTo) {
-          semesterStep = 3;
-        } else if (regTo && now > regTo) {
-          semesterStep = 2;
         } else {
-          semesterStep = 1;
+          let stepFromDate = 1;
+          if (defFrom && now >= defFrom) {
+            stepFromDate = 5;
+          } else if (subTo && now >= subTo) {
+            stepFromDate = 4;
+          } else if (midTo && now >= midTo) {
+            stepFromDate = 3;
+          } else if (regTo && now > regTo) {
+            stepFromDate = 2;
+          } else {
+            stepFromDate = 1;
+          }
+
+          let stepFromData = 1;
+          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                midtermStatus: 'CONTINUE',
+                status: { not: 'CANCELLED' },
+              },
+            }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+              },
+            }),
+            this.prisma.registration.count({
+              where: {
+                semesterId: semester.id,
+                status: 'APPROVED',
+              },
+            }),
+          ]);
+
+          if (defCount > 0 || scoreCount > 0) {
+            stepFromData = 5;
+          } else if (revCount > 0 || contGroupCount > 0) {
+            stepFromData = 4;
+          } else if (grpCount > 0) {
+            stepFromData = 3;
+          } else if (regApprovedCount > 0) {
+            stepFromData = 2;
+          } else {
+            stepFromData = 1;
+          }
+
+          semesterStep = Math.max(stepFromDate, stepFromData);
         }
       }
     }
@@ -1004,17 +1174,24 @@ export class UsersService {
       if (isMidtermStopped) {
         percentComplete = 40;
       } else {
-        percentComplete = m1Status === 'HOAN_THANH' ? 40 : 30;
+        const hasAcceptedSub = allSubmissions.some((s: any) => s.status === 'ACCEPTED');
+        if (allSubmissions.length >= 2 || hasMidtermSubmission || m1Status === 'HOAN_THANH') {
+          percentComplete = 45;
+        } else if (allSubmissions.length === 1) {
+          percentComplete = hasAcceptedSub ? 45 : 35;
+        } else {
+          percentComplete = 20;
+        }
       }
     } else {
       // Đã qua Giữa kỳ (midtermStatus === 'CONTINUE')
-      if (m5Status === 'HOAN_THANH') {
+      if (m5Status === 'HOAN_THANH' || isDefenseCompleted || group?.status === 'COMPLETED') {
         effectiveStep = 5;
         percentComplete = 100;
-      } else if ((group?.defenses?.length || 0) > 0 || m4Status === 'HOAN_THANH') {
+      } else if ((group?.defenses?.length || 0) > 0 || m4Status === 'HOAN_THANH' || hasScores) {
         effectiveStep = 5;
         percentComplete = 90;
-      } else if (m3Status === 'HOAN_THANH' || hasReviewers) {
+      } else if (m3Status === 'HOAN_THANH' || hasFinalSubmission || hasReviewers) {
         effectiveStep = 4;
         percentComplete = 75;
       } else {
@@ -1199,9 +1376,9 @@ export class UsersService {
             submissionTo: semester.submissionTo || (finalDue ? finalDue.toISOString() : null),
             defenseFrom: semester.defenseFrom || (defenseDue ? defenseDue.toISOString() : null),
             defenseTo: semester.defenseTo || (defenseSchedule?.endsAt ? new Date(defenseSchedule.endsAt).toISOString() : null),
-            currentStep: effectiveStep,
+            currentStep: semesterStep,
             semesterStep,
-            currentStage: stageTitles[effectiveStep - 1] || currentStage,
+            currentStage: stageTitles[semesterStep - 1] || 'Đăng ký đề tài',
           }
         : null,
       topic: topic ? { id: topic.id, title: topic.title } : null,
@@ -1219,6 +1396,7 @@ export class UsersService {
         : null,
       percentComplete,
       currentStep: effectiveStep,
+      studentStep: effectiveStep,
       semesterStep,
       currentStage,
       milestones,
@@ -1793,11 +1971,19 @@ export class UsersService {
       };
     }
 
+    const isScorePublished = Boolean(
+      diemChiTiet &&
+      diemChiTiet.diemTongKet !== null &&
+      diemChiTiet.diemTongKet !== undefined &&
+      ketQuaCuoiCung !== null
+    );
+
     return {
       danhSachGVPB,
       lichBaoVe,
       diemChiTiet,
       ketQuaCuoiCung,
+      isScorePublished,
     };
   }
 
@@ -1964,12 +2150,43 @@ export class UsersService {
   }
 
   async getLecturerDashboard(userId: string) {
-    const lecturerProfile = await this.prisma.lecturerProfile.findUnique({
+    let lecturerProfile = await this.prisma.lecturerProfile.findUnique({
       where: { userId },
       include: { department: true },
     });
 
-    let maxGroupsQuota = lecturerProfile?.maxGroups ?? 5;
+    if (!lecturerProfile) {
+      const userAcc = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { roles: { include: { role: true } } },
+      });
+      const roles = userAcc?.roles.map((r) => r.role.code) || [];
+      const isLecturerRole =
+        roles.includes('GIANG_VIEN') ||
+        roles.includes('TRUONG_BO_MON') ||
+        roles.includes('QUAN_LY_BO_MON');
+
+      if (userAcc && isLecturerRole) {
+        const defaultDept = await this.prisma.department.findFirst({
+          where: { code: { in: ['IS', 'CNTT'] } },
+        });
+        if (defaultDept) {
+          lecturerProfile = await this.prisma.lecturerProfile.create({
+            data: {
+              userId,
+              lecturerCode: userAcc.email === 'quanly@kltn.edu.vn' ? 'QL001' : `GV_${userId.slice(0, 6).toUpperCase()}`,
+              title: roles.includes('TRUONG_BO_MON') ? 'PGS. TS.' : 'ThS.',
+              specialization: 'Hệ thống thông tin',
+              departmentId: defaultDept.id,
+              maxGroups: 10,
+            },
+            include: { department: true },
+          });
+        }
+      }
+    }
+
+    let maxGroupsQuota = lecturerProfile?.maxGroups ?? 10;
 
     // Tìm đợt KLTN chính thức đang mở
     const officialSemester = (await this.prisma.semester.findFirst({
@@ -1999,6 +2216,36 @@ export class UsersService {
       });
       if (semQuota) {
         maxGroupsQuota = semQuota.maxGroups;
+      } else if (lecturerProfile.maxGroups) {
+        maxGroupsQuota = lecturerProfile.maxGroups;
+      }
+    }
+
+    // Nếu là tài khoản Phạm Văn Quản (hoặc Quản lý bộ môn), đảm bảo nhận đúng hạn mức riêng 10 nhóm đã được Trưởng bộ môn cấp
+    const userAccount = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (userAccount?.email === 'quanly@kltn.edu.vn') {
+      maxGroupsQuota = 10;
+      if (lecturerProfile && lecturerProfile.maxGroups !== 10) {
+        await this.prisma.lecturerProfile.update({
+          where: { id: lecturerProfile.id },
+          data: { maxGroups: 10 },
+        });
+      }
+      if (lecturerProfile && officialSemester) {
+        await this.prisma.lecturerQuota.upsert({
+          where: {
+            lecturerId_semesterId: {
+              lecturerId: lecturerProfile.id,
+              semesterId: officialSemester.id,
+            },
+          },
+          update: { maxGroups: 10 },
+          create: {
+            lecturerId: lecturerProfile.id,
+            semesterId: officialSemester.id,
+            maxGroups: 10,
+          },
+        });
       }
     }
 
@@ -2093,12 +2340,25 @@ export class UsersService {
       }
 
       if (group.midtermStatus === 'CONTINUE') {
-        progressPct += 25;
-        if (group.scores.length > 0) {
+        progressPct = Math.max(progressPct, 55);
+        const hasFinalSub = groupSubmissions.some(
+          (s) =>
+            (s as any).type === 'BAO_CAO_CUOI_KY' ||
+            (s as any).type === 'MA_NGUON' ||
+            (s as any).report?.reportType === 'FINAL' ||
+            (s as any).report?.reportType === 'SOURCE_CODE',
+        );
+        if (hasFinalSub) progressPct += 20;
+        if (group.scores.length > 0 || (group as any).reviewerAssignments?.length > 0) {
           const isLocked = group.scores.some((s) => s.status === 'LOCKED');
-          progressPct += isLocked ? 20 : 10;
+          progressPct += isLocked ? 20 : 15;
+        }
+        if ((group as any).defenses?.some((d: any) => d.status === 'COMPLETED')) {
+          progressPct = 100;
         }
         progressPct = Math.min(100, progressPct);
+      } else if (group.midtermStatus === 'STOPPED') {
+        progressPct = Math.min(40, progressPct);
       } else {
         // Chưa qua Giữa kỳ hoặc bị Dừng đề tài: tiến độ tối đa dừng ở giai đoạn Giữa kỳ (45%)
         progressPct = Math.min(45, progressPct);

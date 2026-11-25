@@ -79,6 +79,7 @@ export class DashboardService {
         OR: [
           { key: 'SEMESTER_TIMELINE_STEP', semesterId: semester.id },
           { key: `SEMESTER_TIMELINE_STEP_${semester.id}` },
+          { key: 'SEMESTER_TIMELINE_STEP' },
         ],
       },
       orderBy: { updatedAt: 'desc' },
@@ -623,7 +624,22 @@ export class DashboardService {
       }
     }
 
-    const maxGroups = lecturerProfile?.maxGroups || 5;
+    let maxGroups = lecturerProfile?.maxGroups || 10;
+    if (lecturerProfile && semester) {
+      const semQuota = await this.prisma.lecturerQuota.findUnique({
+        where: {
+          lecturerId_semesterId: {
+            lecturerId: lecturerProfile.id,
+            semesterId: semester.id,
+          },
+        },
+      });
+      if (semQuota) {
+        maxGroups = semQuota.maxGroups;
+      } else if (user?.email === 'quanly@kltn.edu.vn') {
+        maxGroups = 10;
+      }
+    }
 
     // Đề tài của giảng viên trong học kỳ
     const topics = await this.prisma.topic.findMany({
@@ -734,9 +750,18 @@ export class DashboardService {
     const reviewedCount = reviewingAssignments.length;
     const remainingSlots = Math.max(0, maxGroups - guidedCount);
 
-    // Tính số nhóm chưa chấm điểm
-    const unratedGuidedCount = guidedGroups.filter((g: any) => g.scores.length < 10 || g.scores.some((s: any) => s.status === 'DRAFT')).length;
-    const unratedReviewCount = reviewingAssignments.filter((ra: any) => ra.group.scores.length < 10 || ra.group.scores.some((s: any) => s.status === 'DRAFT')).length;
+    // Tính số nhóm chưa chấm điểm: CHỈ TÍNH CÁC NHÓM ĐÃ QUA GIỮA KỲ (CHO LÀM TIẾP / CONTINUE)
+    const passedMidtermGuidedGroups = guidedGroups.filter(
+      (g: any) => g.midtermStatus === 'CONTINUE' || (g.midtermStatus as any) === 'CHO_LAM_TIEP',
+    );
+    const unratedGuidedCount = passedMidtermGuidedGroups.filter(
+      (g: any) => g.scores.length < 10 || g.scores.some((s: any) => s.status === 'DRAFT'),
+    ).length;
+    const unratedReviewCount = reviewingAssignments.filter(
+      (ra: any) =>
+        (ra.group?.midtermStatus === 'CONTINUE' || (ra.group?.midtermStatus as any) === 'CHO_LAM_TIEP') &&
+        (ra.group.scores.length < 10 || ra.group.scores.some((s: any) => s.status === 'DRAFT')),
+    ).length;
 
     // Action items
     const actionItems: string[] = [];
@@ -964,6 +989,7 @@ export class DashboardService {
       this.prisma.studentProfile.count({
         where: {
           eligible: true,
+          creditsEarned: { gte: 110 },
           ...(semester.departmentId ? { departmentId: semester.departmentId } : {}),
         },
       }),

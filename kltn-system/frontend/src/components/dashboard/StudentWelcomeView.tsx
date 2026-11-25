@@ -82,22 +82,22 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
     dashboardData?.group?.submissions?.length ?? workspaceData?.submissions?.length ?? 0;
   const appointmentsCount = workspaceData?.appointments?.length ?? 0;
 
-  // Determine current timeline step
+  // Đồng bộ nguồn bước lộ trình chuẩn của đợt KLTN hiện tại (từ dashboardData hoặc workspaceData)
+  const semesterInfo = dashboardData?.semester || workspaceData?.semester;
+
   let currentStep = 1;
   if (
-    typeof dashboardData?.semester?.currentStep === 'number' &&
-    dashboardData.semester.currentStep >= 1 &&
-    dashboardData.semester.currentStep <= 5
+    typeof semesterInfo?.currentStep === 'number' &&
+    semesterInfo.currentStep >= 1 &&
+    semesterInfo.currentStep <= 5
   ) {
-    currentStep = dashboardData.semester.currentStep;
-  } else if (defenseSchedule) {
-    currentStep = 5;
-  } else if (group?.midtermStatus === 'CONTINUE' || group?.midtermStatus === 'CHO_LAM_TIEP') {
-    currentStep = 4;
-  } else if (group) {
-    currentStep = 3;
-  } else if (registration) {
-    currentStep = 2;
+    currentStep = semesterInfo.currentStep;
+  } else if (
+    typeof semesterInfo?.semesterStep === 'number' &&
+    semesterInfo.semesterStep >= 1 &&
+    semesterInfo.semesterStep <= 5
+  ) {
+    currentStep = semesterInfo.semesterStep;
   }
 
   // Action items
@@ -143,7 +143,9 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
               <Sparkles className="w-3.5 h-3.5 text-amber-300" />
               <span>Hệ thống Quản lý Khóa luận Tốt nghiệp CNTT</span>
               <span>•</span>
-              <span>Học kỳ 1 (2026-2027)</span>
+              <span>
+                {semesterInfo?.name || 'Học kỳ 1'} {semesterInfo?.academicYear ? `(${semesterInfo.academicYear})` : '(2026-2027)'}
+              </span>
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
@@ -480,7 +482,7 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
       {/* 5. LỘ TRÌNH KLTN 5 GIAI ĐOẠN ĐỒNG BỘ TOÀN HỆ THỐNG */}
       <WelcomeTimeline
         currentStep={currentStep}
-        semesterInfo={dashboardData?.semester}
+        semesterInfo={semesterInfo}
         role="SINH_VIEN"
         onNavigate={onNavigate}
         canManageTimeline={false}

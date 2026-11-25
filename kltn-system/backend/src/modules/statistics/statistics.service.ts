@@ -296,13 +296,34 @@ export class StatisticsService {
       const hasReview = g.scores.length > 0 || g.reviewerAssignments.length > 0;
       const hasDefense = g.defenses.some((d) => d.status === 'COMPLETED');
 
-      // Tính % tiến độ (mỗi mốc 20%)
-      let progressPercent = 0;
-      if (hasMidtermSub) progressPercent += 20;
-      if (hasMidtermEval) progressPercent += 20;
-      if (hasFinalSub) progressPercent += 20;
-      if (hasReview) progressPercent += 20;
-      if (hasDefense) progressPercent += 20;
+      // Tính % tiến độ (chuẩn hóa đồng bộ 5 giai đoạn KLTN giữa Quản lý, GVHD và Sinh viên)
+      // Base: Đã thành lập nhóm và liên kết đề tài chính thức (hoàn thành Bước 1 & 2) -> 20%
+      let progressPercent = 20;
+
+      const hasAcceptedSub = allSubs.some((s) => s.status === 'ACCEPTED');
+      if (allSubs.length === 1) {
+        progressPercent += 15; // Có 1 bài nộp tiến độ/đề cương -> 35%
+      } else if (allSubs.length >= 2 || hasMidtermSub) {
+        progressPercent += 25; // Có từ 2 bài nộp tiến độ trở lên hoặc đã nộp báo cáo giữa kỳ -> 45%
+      }
+      if (hasAcceptedSub) {
+        progressPercent += 10;
+      }
+
+      if (g.midtermStatus === 'CONTINUE') {
+        // Đã qua Giữa kỳ (Bước 3 hoàn thành, mở Bước 4 & 5)
+        progressPercent = Math.max(progressPercent, 55);
+        if (hasFinalSub) progressPercent += 20; // Nộp báo cáo cuối kỳ & mã nguồn -> 75%
+        if (hasReview) progressPercent += 15; // Phản biện -> 90%
+        if (hasDefense || g.status === 'COMPLETED') progressPercent = 100; // Bảo vệ hoàn tất -> 100%
+        progressPercent = Math.min(100, progressPercent);
+      } else if (g.midtermStatus === 'STOPPED') {
+        // Bị dừng đề tài ở giữa kỳ
+        progressPercent = Math.min(40, progressPercent);
+      } else {
+        // Chưa qua Giữa kỳ: chặn trần ở giai đoạn thực hiện giữa kỳ (45%)
+        progressPercent = Math.min(45, progressPercent);
+      }
 
       // Nhận diện mốc quá hạn
       const overdueMilestones: string[] = [];

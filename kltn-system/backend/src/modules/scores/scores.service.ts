@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ScoreDto } from './dto/score.dto';
@@ -531,7 +531,7 @@ export class ScoresService {
       }
     }
 
-    if (role === 'PHAN_BIEN' || role === 'HOI_DONG') {
+    if (isMidtermPassed && (role === 'PHAN_BIEN' || role === 'HOI_DONG')) {
       if (gvhdScore === null) {
         gvhdEligibilityReason =
           'Giảng viên hướng dẫn chưa hoàn thành chấm điểm. Theo quy định, điểm GVHD phải >= 6.0 mới được phản biện hoặc ra hội đồng.';
@@ -1562,7 +1562,7 @@ export class ScoresService {
   /**
    * Xuất PDF biểu mẫu đánh giá KLTN 10 tiêu chí đúng mẫu chuẩn để in ký
    */
-  async exportPdf(topicIdOrGroupId: string, role?: string, scorerId?: string): Promise<Buffer> {
+  async exportPdf(topicIdOrGroupId: string, role?: string, scorerId?: string, requestingUserId?: string): Promise<Buffer> {
     await this.ensureTenCriteria();
 
     // Tìm nhóm và đề tài
@@ -1608,6 +1608,51 @@ export class ScoresService {
       where: scoreFilter,
       include: { criterion: true, scorer: true },
     });
+
+    // Kiểm tra quyền và bảo mật điểm khi sinh viên yêu cầu xuất phiếu điểm
+    if (requestingUserId) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: requestingUserId },
+        include: { roles: { include: { role: true } } },
+      });
+      const roleCodes = user?.roles?.map((r) => r.role.code) || [];
+      const isStudent =
+        roleCodes.includes('SINH_VIEN') &&
+        !roleCodes.some((code) =>
+          ['GIANG_VIEN', 'TRUONG_BO_MON', 'QUAN_LY_BO_MON', 'ADMIN'].includes(code),
+        );
+
+      if (isStudent) {
+        const isMember = group.members.some(
+          (m) =>
+            m.student?.user?.id === requestingUserId ||
+            m.student?.userId === requestingUserId,
+        );
+        if (!isMember) {
+          throw new ForbiddenException('Bạn không thuộc nhóm KLTN này');
+        }
+
+        if (scores.length === 0 || scores.some((s) => s.status === 'DRAFT')) {
+          throw new ForbiddenException(
+            'Điểm của nhóm đang được khóa chờ công bố chính thức. Chưa thể xuất phiếu điểm.',
+          );
+        }
+
+        const hasDefense = await this.prisma.defenseSchedule.findFirst({
+          where: { groupId: group.id, status: { not: 'CANCELLED' } },
+        });
+        if (hasDefense) {
+          const hasCouncilScore = scores.some(
+            (s) => s.note && (s.note.includes('"role":"HOI_DONG"') || s.note.includes('HOI_DONG')),
+          );
+          if (!hasCouncilScore) {
+            throw new ForbiddenException(
+              'Điểm của nhóm đang được khóa chờ Hội đồng bảo vệ đánh giá & công bố chính thức.',
+            );
+          }
+        }
+      }
+    }
 
     const scorer = scores[0]?.scorer || group.topic?.owner;
     const roleLabel =
