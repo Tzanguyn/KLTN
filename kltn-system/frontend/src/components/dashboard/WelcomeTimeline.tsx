@@ -52,6 +52,7 @@ export interface WelcomeTimelineProps {
   canManageTimeline?: boolean;
   onTimelineStepChange?: (newStep: number) => void;
   showRoleGuidance?: boolean;
+  isCompleted?: boolean;
 }
 
 const defaultSteps: TimelineStepItem[] = [
@@ -161,6 +162,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
   canManageTimeline = false,
   onTimelineStepChange,
   showRoleGuidance = true,
+  isCompleted = false,
 }) => {
   const [showStepModal, setShowStepModal] = useState(false);
   const [selectedStepOption, setSelectedStepOption] = useState<number>(0);
@@ -168,15 +170,16 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
 
   // Normalize effective step
   let effectiveStep = 1;
-  if (typeof propCurrentStep === 'number' && propCurrentStep >= 1 && propCurrentStep <= 5) {
-    effectiveStep = propCurrentStep;
+  if (typeof propCurrentStep === 'number' && propCurrentStep >= 1) {
+    effectiveStep = Math.min(5, propCurrentStep);
   } else if (
     typeof semesterInfo?.currentStep === 'number' &&
-    semesterInfo.currentStep >= 1 &&
-    semesterInfo.currentStep <= 5
+    semesterInfo.currentStep >= 1
   ) {
-    effectiveStep = semesterInfo.currentStep;
+    effectiveStep = Math.min(5, semesterInfo.currentStep);
   }
+
+  const isAllDone = Boolean(isCompleted || (propCurrentStep && propCurrentStep > 5));
 
   // Bind real dates from semesterInfo into step descriptors
   const resolvedSteps: TimelineStepItem[] = defaultSteps.map((step) => {
@@ -210,14 +213,18 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
     };
   });
 
-  const currentStepTitle =
-    resolvedSteps.find((s) => s.number === effectiveStep)?.title ?? 'Đang thực hiện';
+  const currentStepTitle = isAllDone
+    ? 'Đã hoàn thành KLTN'
+    : (resolvedSteps.find((s) => s.number === effectiveStep)?.title ?? 'Đang thực hiện');
 
   const roleKey = String(role).toUpperCase();
-  const currentGuidance =
-    roleStepGuidance[roleKey]?.[effectiveStep] ??
-    roleStepGuidance.SINH_VIEN[effectiveStep] ??
-    'Thực hiện các nhiệm vụ theo tiến độ học kỳ.';
+  const currentGuidance = isAllDone
+    ? (roleKey === 'SINH_VIEN'
+        ? 'Bạn đã hoàn thành bảo vệ Khóa luận tốt nghiệp và có kết quả đánh giá điểm số. Hãy vào tab Điểm & Lịch bảo vệ để xem chi tiết kết quả.'
+        : 'Đợt KLTN đã hoàn tất quá trình bảo vệ và tổng kết điểm số.')
+    : (roleStepGuidance[roleKey]?.[effectiveStep] ??
+      roleStepGuidance.SINH_VIEN[effectiveStep] ??
+      'Thực hiện các nhiệm vụ theo tiến độ học kỳ.');
 
   const roleLabel = roleLabels[roleKey] ?? 'Người dùng';
 
@@ -238,7 +245,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
     if (!semesterInfo?.id) return;
     try {
       setSavingStep(true);
-      await api.patch(`/semesters/${semesterInfo.id}/timeline-step`, {
+      await api.put(`/semesters/${semesterInfo.id}/timeline-step`, {
         step: selectedStepOption,
       });
       setShowStepModal(false);
@@ -277,7 +284,7 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
   };
 
   // Calculate overall progress percentage (e.g. step 3/5 = 60%)
-  const progressPercent = Math.min(100, Math.round((effectiveStep / 5) * 100));
+  const progressPercent = isAllDone ? 100 : Math.min(100, Math.round((effectiveStep / 5) * 100));
 
   return (
     <div className={`bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs ${className}`}>
@@ -308,17 +315,25 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
             className={`text-[11px] px-3 py-1 font-bold rounded-xl border flex items-center gap-2 shadow-2xs ${
               isOverdue
                 ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : isAllDone
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                 : 'bg-indigo-50 text-indigo-700 border-indigo-200/80'
             }`}
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                isOverdue ? 'bg-rose-600 animate-ping' : 'bg-indigo-600'
+                isOverdue ? 'bg-rose-600 animate-ping' : isAllDone ? 'bg-emerald-600' : 'bg-indigo-600'
               }`}
             />
             <span>
-              Giai đoạn: Bước {effectiveStep}/5 • <strong className="font-extrabold">{currentStepTitle}</strong>
-              {isOverdue && ' (Quá hạn)'}
+              {isAllDone ? (
+                <strong className="font-extrabold text-emerald-700">Đã hoàn thành toàn bộ 5/5 giai đoạn KLTN</strong>
+              ) : (
+                <>
+                  Giai đoạn: Bước {effectiveStep}/5 • <strong className="font-extrabold">{currentStepTitle}</strong>
+                  {isOverdue && ' (Quá hạn)'}
+                </>
+              )}
             </span>
           </span>
 
@@ -396,9 +411,9 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
       {/* 5 BƯỚC LỘ TRÌNH (RESPONSIVE STEP CHAIN) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {resolvedSteps.map((step) => {
-          const isDone = step.number < effectiveStep;
-          const isCurrent = step.number === effectiveStep;
-          const isUpcoming = step.number > effectiveStep;
+          const isDone = isAllDone || step.number < effectiveStep;
+          const isCurrent = !isAllDone && step.number === effectiveStep;
+          const isUpcoming = !isAllDone && step.number > effectiveStep;
           const isClickable = Boolean(onNavigate || onStepClick);
 
           return (

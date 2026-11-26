@@ -87,67 +87,67 @@ export class DashboardService {
 
     let currentStep = manualConfig?.value ? Number(manualConfig.value) : 0;
 
-    if (!manualConfig?.value || isNaN(currentStep) || currentStep < 1 || currentStep > 5) {
-      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
-        currentStep = 5;
+    // A. Tính bước theo mốc thời gian (Date-based)
+    let stepFromDate = 1;
+    if (defFrom && now >= defFrom) {
+      stepFromDate = 5;
+    } else if (subTo && now >= subTo) {
+      stepFromDate = 4;
+    } else if (midTo && now >= midTo) {
+      stepFromDate = 3;
+    } else if (regTo && now > regTo) {
+      stepFromDate = 2;
+    } else {
+      stepFromDate = 1;
+    }
+
+    // B. Tính bước theo dữ liệu thực tế (Data-driven: defenses, scores, reviewers, groups, registrations)
+    let stepFromData = 1;
+    if (semester.id) {
+      const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+        this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+        this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+        this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+        this.prisma.group.count({
+          where: {
+            semesterId: semester.id,
+            midtermStatus: 'CONTINUE',
+            status: { not: 'CANCELLED' },
+          },
+        }),
+        this.prisma.group.count({
+          where: {
+            semesterId: semester.id,
+            status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+          },
+        }),
+        this.prisma.registration.count({
+          where: {
+            semesterId: semester.id,
+            status: 'APPROVED',
+          },
+        }),
+      ]);
+
+      if (defCount > 0 || scoreCount > 0) {
+        stepFromData = 5; // Bảo vệ & Tổng kết
+      } else if (revCount > 0 || contGroupCount > 0) {
+        stepFromData = 4; // Báo cáo & Phản biện
+      } else if (grpCount > 0) {
+        stepFromData = 3; // Thực hiện & Giữa kỳ
+      } else if (regApprovedCount > 0) {
+        stepFromData = 2; // Duyệt & Ghép nhóm
       } else {
-        // A. Tính bước theo mốc thời gian (Date-based)
-        let stepFromDate = 1;
-        if (defFrom && now >= defFrom) {
-          stepFromDate = 5;
-        } else if (subTo && now >= subTo) {
-          stepFromDate = 4;
-        } else if (midTo && now >= midTo) {
-          stepFromDate = 3;
-        } else if (regTo && now > regTo) {
-          stepFromDate = 2;
-        } else {
-          stepFromDate = 1;
-        }
-
-        // B. Tính bước theo dữ liệu thực tế (Data-driven: defenses, scores, reviewers, groups, registrations)
-        let stepFromData = 1;
-        if (semester.id) {
-          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
-            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
-            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
-            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
-            this.prisma.group.count({
-              where: {
-                semesterId: semester.id,
-                midtermStatus: 'CONTINUE',
-                status: { not: 'CANCELLED' },
-              },
-            }),
-            this.prisma.group.count({
-              where: {
-                semesterId: semester.id,
-                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
-              },
-            }),
-            this.prisma.registration.count({
-              where: {
-                semesterId: semester.id,
-                status: 'APPROVED',
-              },
-            }),
-          ]);
-
-          if (defCount > 0 || scoreCount > 0) {
-            stepFromData = 5; // Bảo vệ & Tổng kết
-          } else if (revCount > 0 || contGroupCount > 0) {
-            stepFromData = 4; // Báo cáo & Phản biện
-          } else if (grpCount > 0) {
-            stepFromData = 3; // Thực hiện & Giữa kỳ
-          } else if (regApprovedCount > 0) {
-            stepFromData = 2; // Duyệt & Ghép nhóm
-          } else {
-            stepFromData = 1; // Đăng ký đề tài
-          }
-        }
-
-        currentStep = Math.max(stepFromDate, stepFromData);
+        stepFromData = 1; // Đăng ký đề tài
       }
+    }
+
+    if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+      currentStep = 5;
+    } else {
+      // Tự động nâng bước theo dữ liệu thực tế nếu dữ liệu đã tiến xa hơn cấu hình cũ
+      currentStep = Math.max(currentStep || 1, stepFromDate, stepFromData);
+      if (currentStep < 1 || currentStep > 5) currentStep = 1;
     }
 
     const stageTitles = [
@@ -499,10 +499,58 @@ export class DashboardService {
 
     const formattedSemester = await this.formatSemesterWithTimeline(semester);
 
+    // Tính toán tiến độ và bước thực tế của sinh viên (studentStep, currentStep, isCompleted, percentComplete)
+    let studentStep = 1;
+    let isCompleted = false;
+    let percentComplete = 20;
+
+    const hasScores = Boolean(
+      (scoresData?.scores && scoresData.scores.length > 0) ||
+      scoresData?.finalScore !== undefined ||
+      (group?.scores && group.scores.length > 0)
+    );
+    const hasFinalScore = Boolean(
+      scoresData?.finalScore !== null &&
+      scoresData?.finalScore !== undefined &&
+      scoresData?.ketQua
+    );
+    const isDefenseCompleted = group?.defenses?.some((d: any) => d.status === 'COMPLETED');
+    const isMidtermPassed = group?.midtermStatus === 'CONTINUE';
+
+    if (hasFinalScore || (hasScores && group?.status === 'COMPLETED') || (isDefenseCompleted && hasScores)) {
+      studentStep = 5;
+      isCompleted = true;
+      percentComplete = 100;
+    } else if (hasScores || defenseSchedule || (group?.defenses?.length || 0) > 0) {
+      studentStep = 5;
+      isCompleted = false;
+      percentComplete = 90;
+    } else if (isMidtermPassed || (group?.submissions?.length || 0) > 0) {
+      studentStep = 4;
+      isCompleted = false;
+      percentComplete = 75;
+    } else if (group) {
+      studentStep = 3;
+      isCompleted = false;
+      percentComplete = 45;
+    } else if (registration && (registration.status === 'APPROVED' || registration.status === 'CHO_XAC_NHAN')) {
+      studentStep = 2;
+      isCompleted = false;
+      percentComplete = 30;
+    } else {
+      studentStep = 1;
+      isCompleted = false;
+      percentComplete = 10;
+    }
+
     return {
       role: RoleCode.SINH_VIEN,
       user,
       semester: formattedSemester,
+      studentStep,
+      currentStep: studentStep,
+      isCompleted,
+      percentComplete,
       studentProfile: studentProfile
         ? {
             id: studentProfile.id,

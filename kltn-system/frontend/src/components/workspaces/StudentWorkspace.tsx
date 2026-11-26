@@ -1205,7 +1205,14 @@ export const StudentWorkspace: React.FC = () => {
             submissions,
             appointments,
             defenseSchedules,
+            progressData,
+            scores: defenseInfo?.diemChiTiet,
+            defenseInfo,
             semester: progressData?.semester,
+            currentStep: progressData?.currentStep || progressData?.studentStep,
+            studentStep: progressData?.studentStep || progressData?.currentStep,
+            isCompleted: progressData?.percentComplete === 100 || progressData?.isCompleted || Boolean(defenseInfo?.ketQuaCuoiCung),
+            percentComplete: progressData?.percentComplete,
           }}
         />
       )}
@@ -3109,8 +3116,9 @@ export const StudentWorkspace: React.FC = () => {
           {/* LỘ TRÌNH 5 GIAI ĐOẠN ĐỒNG BỘ TOÀN DIỆN VỚI BỘ MÔN */}
           {progressData?.semester && (
             <WelcomeTimeline
-              currentStep={progressData?.semester?.currentStep}
+              currentStep={progressData?.studentStep || progressData?.currentStep || progressData?.semester?.currentStep}
               semesterInfo={progressData?.semester}
+              isCompleted={progressData?.percentComplete === 100 || progressData?.isCompleted || Boolean(defenseInfo?.ketQuaCuoiCung)}
               role="SINH_VIEN"
               onNavigate={(tab) => {
                 setActiveTab(tab);
@@ -3173,7 +3181,7 @@ export const StudentWorkspace: React.FC = () => {
                                   : 'bg-slate-300 text-slate-700'
                               }`}
                             >
-                              {index + 1}
+                              {isDone ? <CheckCircle2 className="w-3.5 h-3.5" /> : index + 1}
                             </span>
                             <Badge
                               size="sm"
@@ -4297,17 +4305,29 @@ export const StudentWorkspace: React.FC = () => {
                         )}
                         <div>
                           <div className="font-extrabold text-sm uppercase tracking-wide">
-                            KẾT QUẢ KHÓA LUẬN: {defenseInfo.ketQuaCuoiCung === 'DAT' ? 'ĐẠT YÊU CẦU' : 'KHÔNG ĐẠT'}
+                            KẾT QUẢ KHÓA LUẬN:{' '}
+                            {defenseInfo.ketQuaCuoiCung === 'DAT'
+                              ? 'ĐẠT YÊU CẦU'
+                              : defenseInfo.diemChiTiet?.diemHuongDan?.tong !== undefined &&
+                                Number(defenseInfo.diemChiTiet.diemHuongDan.tong) < 6.0
+                              ? 'KHÔNG ĐẠT (BỊ LOẠI)'
+                              : 'KHÔNG ĐẠT'}
                           </div>
                           <div className="text-xs opacity-80">
                             {defenseInfo.ketQuaCuoiCung === 'DAT'
                               ? 'Chúc mừng bạn đã hoàn thành và bảo vệ thành công Khóa luận tốt nghiệp!'
+                              : defenseInfo.diemChiTiet?.diemHuongDan?.tong !== undefined &&
+                                Number(defenseInfo.diemChiTiet.diemHuongDan.tong) < 6.0
+                              ? `Điểm trung bình của GVHD là ${defenseInfo.diemChiTiet.diemHuongDan.tong}/10 (< 6.0). Theo quy chế KLTN: Điểm GVHD phải ≥ 6.0 mới đạt. Bạn bị loại và không được đi tiếp ra các vòng tiếp theo.`
                               : 'Rất tiếc điểm tổng kết chưa đạt mức tối thiểu (>= 5.0).'}
                           </div>
                         </div>
                       </div>
                       <Badge variant={defenseInfo.ketQuaCuoiCung === 'DAT' ? 'success' : 'danger'} size="md">
-                        {defenseInfo.ketQuaCuoiCung}
+                        {defenseInfo.diemChiTiet?.diemHuongDan?.tong !== undefined &&
+                        Number(defenseInfo.diemChiTiet.diemHuongDan.tong) < 6.0
+                          ? 'BỊ LOẠI (< 6.0)'
+                          : defenseInfo.ketQuaCuoiCung}
                       </Badge>
                     </div>
                   )}
@@ -4315,9 +4335,16 @@ export const StudentWorkspace: React.FC = () => {
                   {/* Điểm GVHD */}
                   {defenseInfo.diemChiTiet.diemHuongDan && (
                     <div className="border border-slate-200 rounded-xl overflow-hidden">
-                      <div className="bg-slate-50 px-4 py-2.5 flex justify-between items-center border-b border-slate-200">
+                      <div className="bg-slate-50 px-4 py-2.5 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200">
                         <span className="text-xs font-bold text-slate-800 uppercase">1. Điểm Giảng viên hướng dẫn (GVHD)</span>
-                        <span className="text-xs font-bold text-indigo-700">Tổng GVHD: {defenseInfo.diemChiTiet.diemHuongDan.tong}/10</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-indigo-700">Tổng GVHD: {defenseInfo.diemChiTiet.diemHuongDan.tong}/10</span>
+                          {Number(defenseInfo.diemChiTiet.diemHuongDan.tong) >= 6.0 ? (
+                            <Badge variant="success" size="sm">ĐẠT (≥ 6.0)</Badge>
+                          ) : (
+                            <Badge variant="danger" size="sm">KHÔNG ĐẠT (&lt; 6.0 - BỊ LOẠI)</Badge>
+                          )}
+                        </div>
                       </div>
                       <div className="p-3 overflow-x-auto">
                         <table className="w-full min-w-[380px] text-left text-xs">
@@ -4342,6 +4369,11 @@ export const StudentWorkspace: React.FC = () => {
                           </tbody>
                         </table>
                       </div>
+                      {Number(defenseInfo.diemChiTiet.diemHuongDan.tong) < 6.0 && (
+                        <div className="p-3 bg-rose-50 border-t border-rose-200 text-xs text-rose-800 font-medium">
+                          ⚠️ <b>Quy chế KLTN:</b> Điểm trung bình của GVHD phải ≥ 6.0 mới đạt. Do điểm GVHD của bạn dưới 6.0 ({defenseInfo.diemChiTiet.diemHuongDan.tong}/10), bạn đã bị loại và không được đi tiếp các giai đoạn phản biện hoặc hội đồng bảo vệ.
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -854,63 +854,64 @@ export class UsersService {
         Number(semConfig.value) <= 5
       ) {
         semesterStep = Number(semConfig.value);
+      }
+
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        semesterStep = 5;
       } else {
-        if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
-          semesterStep = 5;
+        let stepFromDate = 1;
+        if (defFrom && now >= defFrom) {
+          stepFromDate = 5;
+        } else if (subTo && now >= subTo) {
+          stepFromDate = 4;
+        } else if (midTo && now >= midTo) {
+          stepFromDate = 3;
+        } else if (regTo && now > regTo) {
+          stepFromDate = 2;
         } else {
-          let stepFromDate = 1;
-          if (defFrom && now >= defFrom) {
-            stepFromDate = 5;
-          } else if (subTo && now >= subTo) {
-            stepFromDate = 4;
-          } else if (midTo && now >= midTo) {
-            stepFromDate = 3;
-          } else if (regTo && now > regTo) {
-            stepFromDate = 2;
-          } else {
-            stepFromDate = 1;
-          }
-
-          let stepFromData = 1;
-          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
-            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
-            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
-            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
-            this.prisma.group.count({
-              where: {
-                semesterId: semester.id,
-                midtermStatus: 'CONTINUE',
-                status: { not: 'CANCELLED' },
-              },
-            }),
-            this.prisma.group.count({
-              where: {
-                semesterId: semester.id,
-                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
-              },
-            }),
-            this.prisma.registration.count({
-              where: {
-                semesterId: semester.id,
-                status: 'APPROVED',
-              },
-            }),
-          ]);
-
-          if (defCount > 0 || scoreCount > 0) {
-            stepFromData = 5;
-          } else if (revCount > 0 || contGroupCount > 0) {
-            stepFromData = 4;
-          } else if (grpCount > 0) {
-            stepFromData = 3;
-          } else if (regApprovedCount > 0) {
-            stepFromData = 2;
-          } else {
-            stepFromData = 1;
-          }
-
-          semesterStep = Math.max(stepFromDate, stepFromData);
+          stepFromDate = 1;
         }
+
+        let stepFromData = 1;
+        const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+          this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+          this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+          this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+          this.prisma.group.count({
+            where: {
+              semesterId: semester.id,
+              midtermStatus: 'CONTINUE',
+              status: { not: 'CANCELLED' },
+            },
+          }),
+          this.prisma.group.count({
+            where: {
+              semesterId: semester.id,
+              status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+            },
+          }),
+          this.prisma.registration.count({
+            where: {
+              semesterId: semester.id,
+              status: 'APPROVED',
+            },
+          }),
+        ]);
+
+        if (defCount > 0 || scoreCount > 0) {
+          stepFromData = 5;
+        } else if (revCount > 0 || contGroupCount > 0) {
+          stepFromData = 4;
+        } else if (grpCount > 0) {
+          stepFromData = 3;
+        } else if (regApprovedCount > 0) {
+          stepFromData = 2;
+        } else {
+          stepFromData = 1;
+        }
+
+        semesterStep = Math.max(semesterStep || 1, stepFromDate, stepFromData);
+        if (semesterStep < 1 || semesterStep > 5) semesterStep = 1;
       }
     }
 
@@ -1397,6 +1398,7 @@ export class UsersService {
       percentComplete,
       currentStep: effectiveStep,
       studentStep: effectiveStep,
+      isCompleted: percentComplete === 100 || m5Status === 'HOAN_THANH' || group?.status === 'COMPLETED',
       semesterStep,
       currentStage,
       milestones,
@@ -1788,10 +1790,14 @@ export class UsersService {
                 ).toFixed(2),
               )
             : 0;
+        const isGvhdDat = Number(tong) >= 6.0;
         diemHuongDan = {
           tieuChi,
           tong,
           nguoiCham: gvhdScores[0].scorer?.fullName || topic?.owner?.fullName,
+          isDat: isGvhdDat,
+          ketQua: isGvhdDat ? 'DAT' : 'KHONG_DAT',
+          ghiChu: isGvhdDat ? 'Đạt yêu cầu (>= 6.0)' : 'Không đạt (< 6.0) — Bị loại, không được đi tiếp',
         };
       }
 
@@ -1956,8 +1962,21 @@ export class UsersService {
         congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 2.0đ, trần 10đ)`;
       }
 
-      if (diemTongKet !== null) {
+      const isGvhdDisqualified =
+        diemHuongDan?.tong !== undefined &&
+        diemHuongDan.tong !== null &&
+        Number(diemHuongDan.tong) < 6.0;
+
+      if (isGvhdDisqualified) {
+        diemTongKet = Number(diemHuongDan.tong);
+        ketQuaCuoiCung = 'KHONG_DAT';
+        congThucTinh = `Điểm GVHD = ${diemHuongDan.tong} (< 6.0) — Không đạt yêu cầu (Sinh viên bị loại, không được đi tiếp)`;
+      } else if (diemTongKet !== null) {
         ketQuaCuoiCung = diemTongKet >= 5.0 ? 'DAT' : 'KHONG_DAT';
+      }
+
+      if (isGvhdDisqualified) {
+        lichBaoVe = null;
       }
 
       diemChiTiet = {

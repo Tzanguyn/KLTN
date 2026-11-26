@@ -123,21 +123,32 @@ function stripVietnameseDiacritics(str: string): string {
     .replace(/Đ/g, 'D');
 }
 
+export interface RoleScoreData {
+  value: number;
+  note?: string;
+  studentScores?: Record<string, number>;
+  status?: string;
+  unlockedUntil?: Date | string | null;
+}
+
 export interface ParsedScoreNote {
   note: string;
   studentScores: Record<string, number>;
   role?: string;
+  roles?: Record<string, RoleScoreData>;
   preservedGvpb?: {
     value: number;
     note: string;
     studentScores: Record<string, number>;
     status?: string;
+    unlockedUntil?: string | null;
   };
   preservedCouncil?: {
     value: number;
     note: string;
     studentScores: Record<string, number>;
     status?: string;
+    unlockedUntil?: string | null;
   };
 }
 
@@ -150,7 +161,7 @@ export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
       if (
         parsed &&
         typeof parsed === 'object' &&
-        ('studentScores' in parsed || '__perStudent' in parsed || 'role' in parsed)
+        ('studentScores' in parsed || '__perStudent' in parsed || 'role' in parsed || 'roles' in parsed)
       ) {
         return {
           note: typeof parsed.note === 'string' ? parsed.note : '',
@@ -159,6 +170,10 @@ export function parseScoreNote(rawNote?: string | null): ParsedScoreNote {
               ? parsed.studentScores
               : {},
           role: typeof parsed.role === 'string' ? parsed.role : undefined,
+          roles:
+            parsed.roles && typeof parsed.roles === 'object'
+              ? parsed.roles
+              : undefined,
           preservedGvpb:
             parsed.preservedGvpb && typeof parsed.preservedGvpb === 'object'
               ? parsed.preservedGvpb
@@ -182,21 +197,114 @@ export function serializeScoreNote(
   role?: string | null,
   preservedGvpb?: any,
   preservedCouncil?: any,
+  rolesMap?: Record<string, RoleScoreData>,
 ): string | null {
   const cleanNote = note ? String(note).trim() : '';
   const hasStudents = studentScores && Object.keys(studentScores).length > 0;
-  if (hasStudents || role || preservedGvpb || preservedCouncil) {
+  if (hasStudents || role || preservedGvpb || preservedCouncil || (rolesMap && Object.keys(rolesMap).length > 0)) {
     const payload: any = {
       __perStudent: true,
       note: cleanNote,
       studentScores: studentScores || {},
     };
     if (role) payload.role = role;
+    if (rolesMap && Object.keys(rolesMap).length > 0) payload.roles = rolesMap;
     if (preservedGvpb) payload.preservedGvpb = preservedGvpb;
     if (preservedCouncil) payload.preservedCouncil = preservedCouncil;
     return JSON.stringify(payload);
   }
   return cleanNote || null;
+}
+
+export function extractRoleScore(
+  scoreRow: { value: any; note?: string | null; status?: any; unlockedUntil?: any },
+  targetRole: string,
+  scorerContext?: { isTopicOwner?: boolean; isReviewer?: boolean; isCouncil?: boolean },
+): RoleScoreData | null {
+  if (!scoreRow) return null;
+  const parsed = parseScoreNote(scoreRow.note);
+
+  // 1. Kiểm tra roles dictionary (ưu tiên cao nhất - tách bạch tuyệt đối)
+  if (parsed.roles && parsed.roles[targetRole]) {
+    const r = parsed.roles[targetRole];
+    return {
+      value: Number(r.value) || 0,
+      note: typeof r.note === 'string' ? r.note : '',
+      studentScores: r.studentScores || {},
+      status: r.status || scoreRow.status || 'DRAFT',
+      unlockedUntil: r.unlockedUntil ?? scoreRow.unlockedUntil ?? null,
+    };
+  }
+
+  // 2. Legacy preserved fields
+  if (targetRole === 'PHAN_BIEN' && parsed.preservedGvpb) {
+    return {
+      value: Number(parsed.preservedGvpb.value) || 0,
+      note: typeof parsed.preservedGvpb.note === 'string' ? parsed.preservedGvpb.note : '',
+      studentScores: parsed.preservedGvpb.studentScores || {},
+      status: parsed.preservedGvpb.status || scoreRow.status || 'DRAFT',
+      unlockedUntil: parsed.preservedGvpb.unlockedUntil ?? scoreRow.unlockedUntil ?? null,
+    };
+  }
+
+  if (targetRole === 'HOI_DONG' && parsed.preservedCouncil) {
+    return {
+      value: Number(parsed.preservedCouncil.value) || 0,
+      note: typeof parsed.preservedCouncil.note === 'string' ? parsed.preservedCouncil.note : '',
+      studentScores: parsed.preservedCouncil.studentScores || {},
+      status: parsed.preservedCouncil.status || scoreRow.status || 'DRAFT',
+      unlockedUntil: parsed.preservedCouncil.unlockedUntil ?? scoreRow.unlockedUntil ?? null,
+    };
+  }
+
+  // 3. Row hiện tại có role trùng targetRole
+  if (parsed.role === targetRole) {
+    return {
+      value: Number(scoreRow.value) || 0,
+      note: parsed.note || '',
+      studentScores: parsed.studentScores || {},
+      status: scoreRow.status || 'DRAFT',
+      unlockedUntil: scoreRow.unlockedUntil ?? null,
+    };
+  }
+
+  // 4. Nếu row có role tường minh khác targetRole, không dùng làm điểm targetRole
+  if (parsed.role && parsed.role !== targetRole) {
+    return null;
+  }
+
+  // 5. Fallback cho dữ liệu cũ chưa có role
+  if (!parsed.role) {
+    if (targetRole === 'HUONG_DAN' && scorerContext?.isTopicOwner) {
+      return {
+        value: Number(scoreRow.value) || 0,
+        note: parsed.note || '',
+        studentScores: parsed.studentScores || {},
+        status: scoreRow.status || 'DRAFT',
+        unlockedUntil: scoreRow.unlockedUntil ?? null,
+      };
+    }
+    if (targetRole === 'PHAN_BIEN' && scorerContext?.isReviewer && !scorerContext?.isTopicOwner) {
+      return {
+        value: Number(scoreRow.value) || 0,
+        note: parsed.note || '',
+        studentScores: parsed.studentScores || {},
+        status: scoreRow.status || 'DRAFT',
+        unlockedUntil: scoreRow.unlockedUntil ?? null,
+      };
+    }
+    if (targetRole === 'HOI_DONG' && scorerContext?.isCouncil && !scorerContext?.isTopicOwner && !scorerContext?.isReviewer) {
+      return {
+        value: Number(scoreRow.value) || 0,
+        note: parsed.note || '',
+        studentScores: parsed.studentScores || {},
+        status: scoreRow.status || 'DRAFT',
+        unlockedUntil: scoreRow.unlockedUntil ?? null,
+      };
+    }
+  }
+
+  return null;
 }
 
 export function resolveStudentCriterionScore(
@@ -407,21 +515,35 @@ export class ScoresService {
     }
 
     // 2. Xác định vai trò của người chấm
-    let role = requestedRole || 'HUONG_DAN';
-    if (!requestedRole && topic) {
-      if (topic.ownerId === userId) {
+    const isTopicOwner = topic?.ownerId === userId;
+    const isReviewer = Boolean(
+      topic?.reviewerId === userId ||
+      group?.reviewerAssignments?.some((ra: any) => ra.lecturer?.user?.id === userId)
+    );
+    const isCouncil = Boolean(
+      group?.defenses?.some((d: any) =>
+        d.committee?.members?.some((m: any) => m.user?.id === userId),
+      )
+    );
+
+    const availableRoles: string[] = [];
+    if (isTopicOwner) availableRoles.push('HUONG_DAN');
+    if (isReviewer) availableRoles.push('PHAN_BIEN');
+    if (isCouncil) availableRoles.push('HOI_DONG');
+
+    let role = requestedRole || '';
+    if (!role || !['HUONG_DAN', 'PHAN_BIEN', 'HOI_DONG'].includes(role)) {
+      if (isTopicOwner) {
         role = 'HUONG_DAN';
-      } else if (
-        topic.reviewerId === userId ||
-        group?.reviewerAssignments?.some((ra: any) => ra.lecturer?.user?.id === userId)
-      ) {
+      } else if (isReviewer && isCouncil) {
+        // Mặc định chọn vai trò phản biện trước nếu có cả 2
         role = 'PHAN_BIEN';
-      } else if (
-        group?.defenses?.some((d: any) =>
-          d.committee?.members?.some((m: any) => m.user?.id === userId),
-        )
-      ) {
+      } else if (isReviewer) {
+        role = 'PHAN_BIEN';
+      } else if (isCouncil) {
         role = 'HOI_DONG';
+      } else {
+        role = 'HUONG_DAN';
       }
     }
 
@@ -431,7 +553,7 @@ export class ScoresService {
       orderBy: { code: 'asc' },
     });
 
-    // 4. Lấy điểm hiện tại của người dùng này cho nhóm (phân tách theo vai trò để tránh nhầm lẫn giữa GVPB và Hội đồng)
+    // 4. Lấy điểm hiện tại của người dùng này cho nhóm (phân tách hoàn toàn độc lập theo vai trò role)
     const allUserScores = group
       ? await this.prisma.score.findMany({
           where: { groupId: group.id, scorerId: userId },
@@ -441,49 +563,19 @@ export class ScoresService {
 
     const existingScores = allUserScores
       .map((s) => {
-        const parsed = parseScoreNote(s.note);
-        if (role === 'HOI_DONG') {
-          if (parsed.role === 'HOI_DONG') return s;
-          if (parsed.preservedCouncil) {
-            return {
-              ...s,
-              value: parsed.preservedCouncil.value,
-              status: parsed.preservedCouncil.status || s.status,
-              note: serializeScoreNote(
-                parsed.preservedCouncil.note,
-                parsed.preservedCouncil.studentScores,
-                'HOI_DONG',
-              ),
-            };
-          }
-          // Nếu điểm không có role mà user là GVHD hoặc GVPB -> không dùng làm điểm Hội đồng
-          if (topic?.ownerId === userId || group?.reviewerAssignments?.some((ra: any) => ra.lecturer?.user?.id === userId)) {
-            return null;
-          }
-          return s;
-        } else if (role === 'PHAN_BIEN') {
-          if (parsed.role === 'PHAN_BIEN') return s;
-          if (parsed.preservedGvpb) {
-            return {
-              ...s,
-              value: parsed.preservedGvpb.value,
-              status: parsed.preservedGvpb.status || s.status,
-              note: serializeScoreNote(
-                parsed.preservedGvpb.note,
-                parsed.preservedGvpb.studentScores,
-                'PHAN_BIEN',
-              ),
-            };
-          }
-          if (topic?.ownerId === userId) return null;
-          return s;
-        } else {
-          // HUONG_DAN
-          if (parsed.role === 'HUONG_DAN') return s;
-          if (parsed.role === 'PHAN_BIEN' || parsed.role === 'HOI_DONG') return null;
-          if (topic?.ownerId === userId) return s;
-          return null;
-        }
+        const roleData = extractRoleScore(s, role, { isTopicOwner, isReviewer, isCouncil });
+        if (!roleData) return null;
+        return {
+          ...s,
+          value: roleData.value,
+          status: (roleData.status || s.status) as any,
+          unlockedUntil: (roleData.unlockedUntil ?? s.unlockedUntil) as any,
+          note: serializeScoreNote(
+            roleData.note,
+            roleData.studentScores,
+            role,
+          ),
+        };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
@@ -569,6 +661,8 @@ export class ScoresService {
         isLeader: m.isLeader,
       })) ?? [];
 
+    const currentRole = role || 'HUONG_DAN';
+    const isGvhdRole = currentRole === 'HUONG_DAN';
     const studentTotals = students.map((st: any) => {
       const stTotal = hasScores
         ? calculateStudentWeightedTotal(existingScores, [
@@ -578,6 +672,7 @@ export class ScoresService {
             st.studentCode,
           ])
         : 0;
+      const isPassed = isGvhdRole ? stTotal >= 6.0 : stTotal >= 5.0;
       return {
         id: st.id,
         studentId: st.studentId,
@@ -587,7 +682,11 @@ export class ScoresService {
         isLeader: st.isLeader,
         totalScore: stTotal,
         rating: getRatingClassification(stTotal),
-        result: stTotal >= 5.0 ? 'DAT' : 'KHONG_DAT',
+        result: isPassed ? 'DAT' : 'KHONG_DAT',
+        isGvhdDisqualified: isGvhdRole && hasScores && stTotal < 6.0,
+        note: isGvhdRole && hasScores && stTotal < 6.0
+          ? 'Điểm trung bình GVHD < 6.0 — Sinh viên bị loại, không được đi tiếp'
+          : undefined,
       };
     });
 
@@ -609,6 +708,7 @@ export class ScoresService {
         students,
       },
       role,
+      availableRoles: availableRoles.length > 0 ? availableRoles : [role],
       midtermStatus,
       isMidtermPassed,
       criteria: criteriaList.map((c, index) => ({
@@ -730,6 +830,8 @@ export class ScoresService {
       where: { id: groupId },
       include: {
         topic: true,
+        reviewerAssignments: { include: { lecturer: { include: { user: true } } } },
+        defenses: { include: { committee: { include: { members: { include: { user: true } } } } } },
         members: {
           include: {
             student: {
@@ -770,20 +872,40 @@ export class ScoresService {
       }
       if (gvhdTotal < 6.0) {
         throw new BadRequestException(
-          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện phản biện hoặc ra hội đồng (yêu cầu điểm GVHD >= 6.0).`,
+          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện (sinh viên bị loại, không được đi tiếp ra phản biện hoặc ra hội đồng).`,
         );
       }
     }
 
-    // 2. Ràng buộc khóa điểm & thời hạn mở khóa: Nếu điểm đã khóa và chưa được mở khóa thì cấm sửa
+    // 2. Ràng buộc khóa điểm & thời hạn mở khóa theo vai trò (currentRole)
     const now = new Date();
+    const currentRole = dto.role || 'HUONG_DAN';
+    const isTopicOwner = targetGroup.topic?.ownerId === userId;
+    const isReviewer = Boolean(
+      targetGroup.topic?.reviewerId === userId ||
+      targetGroup.reviewerAssignments?.some((ra: any) => ra.lecturer?.user?.id === userId)
+    );
+    const isCouncil = Boolean(
+      targetGroup.defenses?.some((d: any) =>
+        d.committee?.members?.some((m: any) => m.user?.id === userId),
+      )
+    );
+
     const existingScores = await this.prisma.score.findMany({
       where: { groupId, scorerId: userId },
     });
 
-    // Nếu các điểm OPENED đã quá thời hạn cho phép, tự động khóa lại
-    const expiredOpenedScores = existingScores.filter(
-      (s) => s.status === 'OPENED' && s.unlockedUntil && s.unlockedUntil < now,
+    // Lọc danh sách điểm hiện tại của vai trò này để kiểm tra khóa/mở khóa độc lập
+    const roleScores = existingScores
+      .map((s) => {
+        const roleData = extractRoleScore(s, currentRole, { isTopicOwner, isReviewer, isCouncil });
+        return roleData ? { ...s, ...roleData } : null;
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+
+    // Nếu các điểm OPENED của vai trò này đã quá thời hạn cho phép, tự động khóa lại
+    const expiredOpenedScores = roleScores.filter(
+      (s) => s.status === 'OPENED' && s.unlockedUntil && new Date(s.unlockedUntil) < now,
     );
     if (expiredOpenedScores.length > 0) {
       await this.prisma.score.updateMany({
@@ -795,25 +917,31 @@ export class ScoresService {
         },
         data: { status: 'LOCKED' },
       });
-      for (const s of existingScores) {
-        if (s.status === 'OPENED' && s.unlockedUntil && s.unlockedUntil < now) {
+      for (const s of roleScores) {
+        if (s.status === 'OPENED' && s.unlockedUntil && new Date(s.unlockedUntil) < now) {
           s.status = 'LOCKED';
         }
       }
     }
 
-    const hasLockedScores = existingScores.some(
+    const hasLockedScores = roleScores.length > 0 && roleScores.some(
       (s) => s.status === 'LOCKED' || s.status === 'SUBMITTED',
     );
-    const isOpened = existingScores.some(
-      (s) => s.status === 'OPENED' && (!s.unlockedUntil || s.unlockedUntil >= now),
+    const isOpened = roleScores.some(
+      (s) => s.status === 'OPENED' && (!s.unlockedUntil || new Date(s.unlockedUntil) >= now),
     );
 
     if (hasLockedScores && !isOpened) {
+      const roleText =
+        currentRole === 'PHAN_BIEN'
+          ? 'Điểm Phản biện'
+          : currentRole === 'HOI_DONG'
+          ? 'Điểm Hội đồng'
+          : 'Điểm Hướng dẫn';
       throw new BadRequestException(
         expiredOpenedScores.length > 0
-          ? 'Thời hạn cho phép sửa điểm đã hết. Điểm đã được tự động khóa lại. Vui lòng gửi yêu cầu mở khóa mới tới Trưởng bộ môn.'
-          : 'Điểm đã được khóa. Không được tự ý sửa điểm đã khóa. Vui lòng gửi yêu cầu mở khóa tới Trưởng bộ môn.',
+          ? `Thời hạn cho phép sửa ${roleText} đã hết. Điểm đã được tự động khóa lại. Vui lòng gửi yêu cầu mở khóa mới tới Trưởng bộ môn.`
+          : `${roleText} đã được khóa. Không được tự ý sửa điểm đã khóa. Vui lòng gửi yêu cầu mở khóa tới Trưởng bộ môn.`,
       );
     }
 
@@ -900,34 +1028,44 @@ export class ScoresService {
       const existingOne = existingScores.find((s) => s.criterionId === criterion.id);
       const existingParsed = existingOne ? parseScoreNote(existingOne.note) : null;
 
-      const currentRole = dto.role || 'HUONG_DAN';
-      let preservedGvpb = existingParsed?.preservedGvpb;
-      let preservedCouncil = existingParsed?.preservedCouncil;
+      // Khởi tạo roles map bảo toàn tất cả các vai trò chấm
+      const rolesMap: Record<string, RoleScoreData> = existingParsed?.roles ? { ...existingParsed.roles } : {};
 
-      // Bảo toàn điểm nếu cùng một giảng viên đảm nhiệm cả vai trò GVPB và Thành viên Hội đồng
-      if (existingOne && currentRole === 'HOI_DONG' && (existingParsed?.role === 'PHAN_BIEN' || (!existingParsed?.role && existingOne.scorerId !== targetGroup.topic?.ownerId))) {
-        preservedGvpb = {
-          value: Number(existingOne.value),
-          note: existingParsed?.note || '',
-          studentScores: existingParsed?.studentScores || {},
-          status: existingOne.status,
-        };
-      } else if (existingOne && currentRole === 'PHAN_BIEN' && (existingParsed?.role === 'HOI_DONG' || (!existingParsed?.role && existingOne.scorerId !== targetGroup.topic?.ownerId))) {
-        preservedCouncil = {
-          value: Number(existingOne.value),
-          note: existingParsed?.note || '',
-          studentScores: existingParsed?.studentScores || {},
-          status: existingOne.status,
-        };
+      // Đồng bộ dữ liệu cũ của các vai trò khác vào rolesMap nếu chưa có
+      if (!rolesMap['PHAN_BIEN'] && currentRole !== 'PHAN_BIEN') {
+        const oldPb = extractRoleScore(existingOne || ({} as any), 'PHAN_BIEN', { isTopicOwner, isReviewer, isCouncil });
+        if (oldPb) rolesMap['PHAN_BIEN'] = oldPb;
+      }
+      if (!rolesMap['HOI_DONG'] && currentRole !== 'HOI_DONG') {
+        const oldHd = extractRoleScore(existingOne || ({} as any), 'HOI_DONG', { isTopicOwner, isReviewer, isCouncil });
+        if (oldHd) rolesMap['HOI_DONG'] = oldHd;
+      }
+      if (!rolesMap['HUONG_DAN'] && isTopicOwner && currentRole !== 'HUONG_DAN') {
+        const oldHd = extractRoleScore(existingOne || ({} as any), 'HUONG_DAN', { isTopicOwner, isReviewer, isCouncil });
+        if (oldHd) rolesMap['HUONG_DAN'] = oldHd;
       }
 
       const cleanNote = item.note || dto.generalComment || '';
+
+      // Lưu vai trò hiện tại vào rolesMap với trạng thái tương ứng
+      rolesMap[currentRole] = {
+        value: numVal,
+        note: cleanNote,
+        studentScores: studentScoresMap,
+        status: targetStatus,
+        unlockedUntil: null,
+      };
+
+      const preservedGvpb = rolesMap['PHAN_BIEN'] || existingParsed?.preservedGvpb;
+      const preservedCouncil = rolesMap['HOI_DONG'] || existingParsed?.preservedCouncil;
+
       const serializedNote = serializeScoreNote(
         cleanNote,
         studentScoresMap,
         currentRole,
         preservedGvpb,
         preservedCouncil,
+        rolesMap,
       );
 
       const saved = await this.prisma.score.upsert({
@@ -965,20 +1103,31 @@ export class ScoresService {
       updatedScores.push(saved);
     }
 
-    // 5. Tính điểm tổng theo từng sinh viên & điểm trung bình nhóm
+    // 5. Tính điểm tổng theo từng sinh viên & điểm trung bình nhóm cho vai trò này
     const allScorerScores = await this.prisma.score.findMany({
       where: { groupId, scorerId: userId },
       include: { criterion: true },
     });
-    const tcScores = allScorerScores.filter((s) => s.criterion.code.startsWith('TC'));
-    const scoresToCalculate = tcScores.length > 0 ? tcScores : allScorerScores;
+    const mappedScorerScores = allScorerScores.map((s) => {
+      const roleData = extractRoleScore(s, currentRole, { isTopicOwner, isReviewer, isCouncil });
+      if (!roleData) return s;
+      return {
+        ...s,
+        value: roleData.value,
+        note: serializeScoreNote(roleData.note, roleData.studentScores, currentRole),
+      };
+    });
+    const tcScores = mappedScorerScores.filter((s) => s.criterion.code.startsWith('TC'));
+    const scoresToCalculate = tcScores.length > 0 ? tcScores : mappedScorerScores;
     const totalScore = this.calculateWeightedTotal(scoresToCalculate);
 
+    const isGvhdRole = (dto.role || 'HUONG_DAN') === 'HUONG_DAN';
     const studentTotals = groupMembers.map((m, idx) => {
       const uId = m.student?.user?.id;
       const sId = m.studentId;
       const sCode = m.student?.studentCode || `SV${idx + 1}`;
       const stTotal = calculateStudentWeightedTotal(scoresToCalculate, [uId, sId, sCode]);
+      const isPassed = isGvhdRole ? stTotal >= 6.0 : stTotal >= 5.0;
       return {
         id: uId || sId,
         studentId: sId,
@@ -988,7 +1137,8 @@ export class ScoresService {
         isLeader: m.isLeader,
         totalScore: stTotal,
         rating: getRatingClassification(stTotal),
-        result: stTotal >= 5.0 ? 'DAT' : 'KHONG_DAT',
+        result: isPassed ? 'DAT' : 'KHONG_DAT',
+        isGvhdDisqualified: isGvhdRole && stTotal < 6.0,
       };
     });
 
@@ -997,10 +1147,15 @@ export class ScoresService {
       const topicTitle = targetGroup.topic?.title || targetGroup.name;
       for (const st of studentTotals) {
         if (st.userId) {
+          const passText = st.result === 'DAT'
+            ? 'Đạt'
+            : (isGvhdRole ? 'Không đạt (< 6.0, Bị loại, không được đi tiếp)' : 'Không đạt');
           await this.notifications.create({
             userId: st.userId,
-            title: 'Kết quả đánh giá KLTN đã được hoàn tất & khóa điểm',
-            content: `Đề tài "${topicTitle}" đã được cán bộ đánh giá (${dto.role || 'Giảng viên'}) nhập điểm chính thức cho sinh viên ${st.fullName} (${st.studentCode}). Điểm trung bình: ${st.totalScore}/10 (${st.rating} - ${st.result === 'DAT' ? 'Đạt' : 'Không đạt'}).`,
+            title: isGvhdRole && st.result === 'KHONG_DAT'
+              ? 'Kết quả chấm điểm GVHD: Không đạt (< 6.0, Bị loại)'
+              : 'Kết quả đánh giá KLTN đã được hoàn tất & khóa điểm',
+            content: `Đề tài "${topicTitle}" đã được cán bộ đánh giá (${dto.role || 'Giảng viên'}) nhập điểm chính thức cho sinh viên ${st.fullName} (${st.studentCode}). Điểm trung bình: ${st.totalScore}/10 (${st.rating} - ${passText}).${isGvhdRole && st.result === 'KHONG_DAT' ? ' Theo quy chế KLTN: Điểm GVHD phải >= 6.0 mới đạt. Sinh viên dưới 6.0 bị loại, không được đi tiếp ra phản biện hoặc hội đồng bảo vệ.' : ''}`,
             type: 'SCORE',
             data: {
               groupId,
@@ -1009,6 +1164,7 @@ export class ScoresService {
               rating: st.rating,
               result: st.result,
               role: dto.role,
+              isGvhdDisqualified: st.isGvhdDisqualified,
             },
             sendEmail: true,
           });
@@ -1120,10 +1276,30 @@ export class ScoresService {
 
   async groupScores(groupId: string) {
     await this.ensureTenCriteria();
-    const scores = await this.prisma.score.findMany({
+    const rawScores = await this.prisma.score.findMany({
       where: { groupId },
       include: { criterion: true, scorer: { select: { fullName: true } } },
     });
+
+    const scores: any[] = [];
+    for (const sc of rawScores) {
+      const parsed = parseScoreNote(sc.note);
+      if (parsed.roles && Object.keys(parsed.roles).length > 1) {
+        for (const [rKey, rVal] of Object.entries(parsed.roles)) {
+          scores.push({
+            ...sc,
+            id: `${sc.id}_${rKey}`,
+            value: rVal.value,
+            status: rVal.status || sc.status,
+            role: rKey,
+            note: serializeScoreNote(rVal.note, rVal.studentScores, rKey),
+          });
+        }
+      } else {
+        scores.push(sc);
+      }
+    }
+
     const weighted = scores.reduce(
       (sum, score) => sum + (Number(score.value) * Number(score.criterion.weight)) / 100,
       0,
@@ -1192,7 +1368,7 @@ export class ScoresService {
       }
       if (gvhdTotal < 6.0) {
         throw new BadRequestException(
-          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện phản biện hoặc ra hội đồng (yêu cầu điểm GVHD >= 6.0).`,
+          `Nhóm ${targetGroup.code} có điểm GVHD là ${gvhdTotal} (< 6.0), không đủ điều kiện (sinh viên bị loại, không được đi tiếp ra phản biện hoặc ra hội đồng).`,
         );
       }
     }
@@ -1357,6 +1533,36 @@ export class ScoresService {
             unlockedUntil: expiresAt,
           },
         });
+      }
+
+      // Cập nhật trạng thái OPENED cho roles trong JSON note
+      const scoresToSync = await tx.score.findMany({
+        where: {
+          groupId: request.groupId,
+          scorerId: request.requesterId,
+        },
+      });
+      for (const sc of scoresToSync) {
+        const parsed = parseScoreNote(sc.note);
+        if (parsed.roles) {
+          for (const rKey of Object.keys(parsed.roles)) {
+            parsed.roles[rKey].status = 'OPENED';
+            parsed.roles[rKey].unlockedUntil = expiresAt;
+          }
+          await tx.score.update({
+            where: { id: sc.id },
+            data: {
+              note: serializeScoreNote(
+                parsed.note,
+                parsed.studentScores,
+                parsed.role,
+                parsed.preservedGvpb,
+                parsed.preservedCouncil,
+                parsed.roles,
+              ),
+            },
+          });
+        }
       }
 
       // 3. Ghi Audit Log đầy đủ
@@ -1537,6 +1743,31 @@ export class ScoresService {
         },
       });
 
+      // Cập nhật trạng thái OPENED cho roles trong JSON note
+      const scoresToSync = await tx.score.findMany({ where: { groupId } });
+      for (const sc of scoresToSync) {
+        const parsed = parseScoreNote(sc.note);
+        if (parsed.roles) {
+          for (const rKey of Object.keys(parsed.roles)) {
+            parsed.roles[rKey].status = 'OPENED';
+            parsed.roles[rKey].unlockedUntil = expiresAt;
+          }
+          await tx.score.update({
+            where: { id: sc.id },
+            data: {
+              note: serializeScoreNote(
+                parsed.note,
+                parsed.studentScores,
+                parsed.role,
+                parsed.preservedGvpb,
+                parsed.preservedCouncil,
+                parsed.roles,
+              ),
+            },
+          });
+        }
+      }
+
       return {
         message: 'Đã mở khóa điểm thành công',
         unlockedCount: updated.count,
@@ -1553,6 +1784,33 @@ export class ScoresService {
         unlockedUntil: null,
       },
     });
+
+    const scoresToSync = await this.prisma.score.findMany({ where: { groupId } });
+    for (const sc of scoresToSync) {
+      const parsed = parseScoreNote(sc.note);
+      if (parsed.roles) {
+        for (const rKey of Object.keys(parsed.roles)) {
+          if (parsed.roles[rKey].status === 'OPENED') {
+            parsed.roles[rKey].status = 'LOCKED';
+            parsed.roles[rKey].unlockedUntil = null;
+          }
+        }
+        await this.prisma.score.update({
+          where: { id: sc.id },
+          data: {
+            note: serializeScoreNote(
+              parsed.note,
+              parsed.studentScores,
+              parsed.role,
+              parsed.preservedGvpb,
+              parsed.preservedCouncil,
+              parsed.roles,
+            ),
+          },
+        });
+      }
+    }
+
     return {
       message: 'Đã khóa điểm thành công',
       lockedCount: updated.count,
@@ -1604,10 +1862,24 @@ export class ScoresService {
       scoreFilter.scorerId = scorerId;
     }
 
-    const scores = await this.prisma.score.findMany({
+    const rawScores = await this.prisma.score.findMany({
       where: scoreFilter,
       include: { criterion: true, scorer: true },
     });
+
+    const scores = role
+      ? rawScores.map((s) => {
+          const roleData = extractRoleScore(s, role);
+          if (!roleData) return s;
+          return {
+            ...s,
+            value: roleData.value,
+            status: (roleData.status || s.status) as any,
+            unlockedUntil: (roleData.unlockedUntil ?? s.unlockedUntil) as any,
+            note: serializeScoreNote(roleData.note, roleData.studentScores, role),
+          };
+        })
+      : rawScores;
 
     // Kiểm tra quyền và bảo mật điểm khi sinh viên yêu cầu xuất phiếu điểm
     if (requestingUserId) {
@@ -1832,22 +2104,24 @@ export class ScoresService {
         doc.text(sv2 && scores.length > 0 && sv2Avg !== null ? sv2Avg.toFixed(2) : '-', colX[3], currentY + 6, { width: 70, align: 'center' });
         currentY += 22;
 
-        // Dòng KẾT QUẢ trong bảng
-        const sv1Pass = sv1Avg >= 5.0;
-        const sv2Pass = sv2Avg !== null && sv2Avg >= 5.0;
+        // Dòng KẾT QUẢ trong bảng: GVHD >= 6.0 mới đạt, dưới 6.0 bị loại
+        const isGvhdRole = role === 'HUONG_DAN';
+        const passThreshold = isGvhdRole ? 6.0 : 5.0;
+        const sv1Pass = sv1Avg >= passThreshold;
+        const sv2Pass = sv2Avg !== null && sv2Avg >= passThreshold;
         doc.rect(colX[0], currentY, 515, 26).fillAndStroke('#f8fafc', '#94a3b8');
         doc.fillColor('#0f172a').font(fontBold).fontSize(9);
-        doc.text(safeText('KẾT QUẢ'), colX[0], currentY + 8, { width: 305, align: 'center' });
+        doc.text(safeText(isGvhdRole ? 'KẾT QUẢ (≥ 6.0 ĐẠT)' : 'KẾT QUẢ (≥ 5.0 ĐẠT)'), colX[0], currentY + 8, { width: 305, align: 'center' });
         doc.fontSize(7.5);
         doc.text(
-          safeText(`[${scores.length > 0 && sv1Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv1Pass ? 'x' : ' '}] Không đạt`),
+          safeText(`[${scores.length > 0 && sv1Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv1Pass ? 'x' : ' '}] Không đạt${isGvhdRole && scores.length > 0 && !sv1Pass ? ' (Bị loại)' : ''}`),
           colX[2] + 6,
           currentY + 4,
           { width: 60, align: 'left' },
         );
         if (sv2) {
           doc.text(
-            safeText(`[${scores.length > 0 && sv2Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv2Pass ? 'x' : ' '}] Không đạt`),
+            safeText(`[${scores.length > 0 && sv2Pass ? 'x' : ' '}] Đạt\n[${scores.length > 0 && !sv2Pass ? 'x' : ' '}] Không đạt${isGvhdRole && scores.length > 0 && !sv2Pass ? ' (Bị loại)' : ''}`),
             colX[3] + 6,
             currentY + 4,
             { width: 60, align: 'left' },
@@ -2050,29 +2324,24 @@ export class ScoresService {
         if (ra.lecturer?.user?.id) reviewerUserIds.add(ra.lecturer.user.id);
       }
 
-      // Helper lấy điểm của Hội đồng cho 1 thành viên (loại trừ điểm GVHD hoặc điểm phản biện)
+      // Helper lấy điểm của Hội đồng cho 1 thành viên (hỗ trợ 1 GV vừa là GVPB vừa là Thành viên Hội đồng)
       const getMemberCouncilScores = (userId: string) => {
         return g.scores
           .map((s) => {
             if (s.scorerId !== userId) return null;
-            const parsed = parseScoreNote(s.note);
-            if (parsed.role === 'HOI_DONG') return s;
-            if (parsed.preservedCouncil) {
-              return {
-                ...s,
-                value: parsed.preservedCouncil.value,
-                status: parsed.preservedCouncil.status || s.status,
-                note: serializeScoreNote(
-                  parsed.preservedCouncil.note,
-                  parsed.preservedCouncil.studentScores,
-                  'HOI_DONG',
-                ),
-              };
-            }
-            if (parsed.role === 'HUONG_DAN' || parsed.role === 'PHAN_BIEN') return null;
-            if (s.scorerId === topicOwnerId) return null;
-            if (reviewerUserIds.has(s.scorerId)) return null;
-            return s;
+            const roleData = extractRoleScore(s, 'HOI_DONG', {
+              isTopicOwner: userId === topicOwnerId,
+              isReviewer: reviewerUserIds.has(userId),
+              isCouncil: true,
+            });
+            if (!roleData) return null;
+            return {
+              ...s,
+              value: roleData.value,
+              status: roleData.status || s.status,
+              unlockedUntil: roleData.unlockedUntil ?? s.unlockedUntil,
+              note: serializeScoreNote(roleData.note, roleData.studentScores, 'HOI_DONG'),
+            };
           })
           .filter((s): s is any => Boolean(s));
       };
@@ -2082,35 +2351,43 @@ export class ScoresService {
         return g.scores
           .map((s) => {
             if (s.scorerId !== revUserId) return null;
-            const parsed = parseScoreNote(s.note);
-            if (parsed.role === 'PHAN_BIEN') return s;
-            if (parsed.preservedGvpb) {
-              return {
-                ...s,
-                value: parsed.preservedGvpb.value,
-                status: parsed.preservedGvpb.status || s.status,
-                note: serializeScoreNote(
-                  parsed.preservedGvpb.note,
-                  parsed.preservedGvpb.studentScores,
-                  'PHAN_BIEN',
-                ),
-              };
-            }
-            if (parsed.role === 'HUONG_DAN' || parsed.role === 'HOI_DONG') return null;
-            if (s.scorerId === topicOwnerId) return null;
-            return s;
+            const roleData = extractRoleScore(s, 'PHAN_BIEN', {
+              isTopicOwner: revUserId === topicOwnerId,
+              isReviewer: true,
+              isCouncil: false,
+            });
+            if (!roleData) return null;
+            return {
+              ...s,
+              value: roleData.value,
+              status: roleData.status || s.status,
+              unlockedUntil: roleData.unlockedUntil ?? s.unlockedUntil,
+              note: serializeScoreNote(roleData.note, roleData.studentScores, 'PHAN_BIEN'),
+            };
           })
           .filter((s): s is any => Boolean(s));
       };
 
       // 1. Điểm GVHD
       const gvhdScores = topicOwnerId
-        ? g.scores.filter((s) => {
-            if (s.scorerId !== topicOwnerId) return false;
-            const parsed = parseScoreNote(s.note);
-            if (parsed.role && parsed.role !== 'HUONG_DAN') return false;
-            return true;
-          })
+        ? g.scores
+            .map((s) => {
+              if (s.scorerId !== topicOwnerId) return null;
+              const roleData = extractRoleScore(s, 'HUONG_DAN', {
+                isTopicOwner: true,
+                isReviewer: false,
+                isCouncil: false,
+              });
+              if (!roleData) return null;
+              return {
+                ...s,
+                value: roleData.value,
+                status: roleData.status || s.status,
+                unlockedUntil: roleData.unlockedUntil ?? s.unlockedUntil,
+                note: serializeScoreNote(roleData.note, roleData.studentScores, 'HUONG_DAN'),
+              };
+            })
+            .filter((s): s is any => Boolean(s))
         : [];
       const gvhdScoresToCalc = this.getScoresToCalculate(gvhdScores);
       const gvhdHasDraft = gvhdScoresToCalc.some((s) => s.status === 'DRAFT');
@@ -2337,9 +2614,13 @@ export class ScoresService {
         congThucTinh += ` + Điểm thưởng NCKH (+${bonusPoints}đ, tối đa 2.0đ, trần 10đ)`;
       }
 
-      const xepLoai = diemTongKet !== null ? getRatingClassification(diemTongKet) : 'Chưa xếp loại';
-      const ketQua =
-        diemTongKet !== null ? (diemTongKet >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA';
+      const isGvhdDisqualified = gvhdTotal !== null && gvhdTotal < 6.0;
+      const xepLoai = isGvhdDisqualified
+        ? 'Không đạt'
+        : (diemTongKet !== null ? getRatingClassification(diemTongKet) : 'Chưa xếp loại');
+      const ketQua = isGvhdDisqualified
+        ? 'KHONG_DAT'
+        : (diemTongKet !== null ? (diemTongKet >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA');
 
       // 6. Cảnh báo khi điểm chưa đầy đủ (Kiểm tra trạng thái giữa kỳ trước tiên)
       const warnings: string[] = [];
@@ -2378,7 +2659,7 @@ export class ScoresService {
           if (gvhdTotal !== null && gvhdTotal < 6.0) {
             missingComponents.push('GVHD_DIEM_DUOI_6');
             warnings.push(
-              `Điểm Cán bộ Hướng dẫn (${gvhdTotal}) < 6.0 — Không đủ điều kiện phản biện hoặc ra hội đồng`,
+              `Điểm Cán bộ Hướng dẫn (${gvhdTotal}) < 6.0 — Không đạt (Sinh viên bị loại, không được đi tiếp ra phản biện hoặc ra hội đồng)`,
             );
           }
         }
@@ -2562,6 +2843,15 @@ export class ScoresService {
           }
         }
 
+        const isStudentGvhdDisqualified = stGvhd !== null && stGvhd < 6.0;
+        const finalStScore = isStudentGvhdDisqualified ? stGvhd : stFinal;
+        const stKetQua = isStudentGvhdDisqualified
+          ? 'KHONG_DAT'
+          : (stFinal !== null ? (stFinal >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA');
+        const stXepLoai = isStudentGvhdDisqualified
+          ? 'Không đạt'
+          : (stFinal !== null ? getRatingClassification(stFinal) : 'Chưa xếp loại');
+
         return {
           studentId: m.studentId,
           userId: uId,
@@ -2572,12 +2862,16 @@ export class ScoresService {
           department: m.student?.department?.name,
           isLeader: m.isLeader,
           gvhd: stGvhd,
-          gvpb: stGvpb,
-          council: stCouncil,
-          bonusPoints: stBonus,
-          finalScore: stFinal,
-          xepLoai: stFinal !== null ? getRatingClassification(stFinal) : 'Chưa xếp loại',
-          ketQua: stFinal !== null ? (stFinal >= 5.0 ? 'DAT' : 'KHONG_DAT') : 'CHUA_CO_KET_QUA',
+          gvpb: isStudentGvhdDisqualified ? null : stGvpb,
+          council: isStudentGvhdDisqualified ? null : stCouncil,
+          bonusPoints: isStudentGvhdDisqualified ? 0 : stBonus,
+          finalScore: finalStScore,
+          xepLoai: stXepLoai,
+          ketQua: stKetQua,
+          isDisqualified: isStudentGvhdDisqualified,
+          disqualificationReason: isStudentGvhdDisqualified
+            ? `Điểm GVHD là ${stGvhd} (< 6.0) — Bị loại, không được đi tiếp`
+            : undefined,
         };
       });
 

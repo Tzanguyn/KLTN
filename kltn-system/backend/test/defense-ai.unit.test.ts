@@ -135,6 +135,12 @@ async function runUnitTest() {
           id: 'grp-01',
           code: 'N01',
           name: 'Nhóm AI Bệnh Cây Trồng',
+          midtermStatus: 'CONTINUE',
+          scores: Array.from({ length: 10 }, (_, i) => ({
+            scorerId: 'advisor-user-id',
+            value: 8.5,
+            criterion: { code: `TC${String(i + 1).padStart(2, '0')}` },
+          })),
           topic: {
             id: '11111111-1111-1111-1111-111111111111',
             title: 'Xây dựng hệ thống thị giác máy tính nhận diện bệnh trên cây trồng bằng YOLO và PyTorch',

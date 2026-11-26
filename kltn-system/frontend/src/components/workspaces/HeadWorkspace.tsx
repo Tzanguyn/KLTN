@@ -750,7 +750,7 @@ export const HeadWorkspace: React.FC = () => {
       const isMidtermOk = grp.midtermStatus === 'CONTINUE' || grp.midtermStatus === 'CHO_LAM_TIEP';
       const isGvhdOk =
         grp.isGvhdScorePassed ??
-        (grp.gvhdScore !== undefined && grp.gvhdScore !== null ? Number(grp.gvhdScore) >= 6.0 : true);
+        (grp.gvhdScore !== undefined && grp.gvhdScore !== null ? Number(grp.gvhdScore) >= 6.0 : false);
       return isMidtermOk && isGvhdOk;
     });
   }, [allGroups]);
@@ -4178,8 +4178,8 @@ export const HeadWorkspace: React.FC = () => {
                                 </span>
                               </span>
                               {grp.gvhdScore !== null && grp.gvhdScore !== undefined && (
-                                <span className="text-emerald-700 font-medium">
-                                  Điểm GVHD: {Number(grp.gvhdScore).toFixed(1)}đ
+                                <span className={Number(grp.gvhdScore) >= 6.0 ? 'text-emerald-700 font-medium' : 'text-rose-700 font-bold'}>
+                                  Điểm GVHD: {Number(grp.gvhdScore).toFixed(1)}đ {Number(grp.gvhdScore) >= 6.0 ? '(Đạt)' : '(Bị loại < 6.0)'}
                                 </span>
                               )}
                             </div>

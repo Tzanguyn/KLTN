@@ -1442,7 +1442,7 @@ export const ManagerWorkspace: React.FC = () => {
                             </td>
                             <td className="p-3">
                               {grp.gvhdScore !== null && grp.gvhdScore !== undefined ? (
-                                <span title={Number(grp.gvhdScore) >= 6.0 ? 'Điểm GVHD đạt yêu cầu (>= 6.0)' : 'Điểm GVHD chưa đạt yêu cầu (< 6.0)'}>
+                                <span title={Number(grp.gvhdScore) >= 6.0 ? 'Điểm GVHD đạt yêu cầu (>= 6.0)' : 'Điểm GVHD < 6.0 (Không đạt — Bị loại, không được đi tiếp)'}>
                                   <Badge
                                     variant={Number(grp.gvhdScore) >= 6.0 ? 'success' : 'danger'}
                                     size="sm"

@@ -85,20 +85,76 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   // Đồng bộ nguồn bước lộ trình chuẩn của đợt KLTN hiện tại (từ dashboardData hoặc workspaceData)
   const semesterInfo = dashboardData?.semester || workspaceData?.semester;
 
-  let currentStep = 1;
-  if (
-    typeof semesterInfo?.currentStep === 'number' &&
-    semesterInfo.currentStep >= 1 &&
-    semesterInfo.currentStep <= 5
-  ) {
-    currentStep = semesterInfo.currentStep;
-  } else if (
-    typeof semesterInfo?.semesterStep === 'number' &&
-    semesterInfo.semesterStep >= 1 &&
-    semesterInfo.semesterStep <= 5
-  ) {
-    currentStep = semesterInfo.semesterStep;
+  // Xác định điểm số và trạng thái hoàn thành bảo vệ của sinh viên
+  const scores = dashboardData?.scores || workspaceData?.scores || workspaceData?.defenseInfo?.diemChiTiet;
+  const hasScores = Boolean(
+    scores &&
+    (scores.finalScore !== undefined ||
+      scores.scores?.length > 0 ||
+      scores.diemHuongDan?.tong !== undefined ||
+      scores.diemPhanBien?.tong !== undefined ||
+      scores.diemHoiDong?.tong !== undefined ||
+      (group?.scores && group.scores.length > 0))
+  );
+
+  const isFinalGraded = Boolean(
+    (scores?.finalScore !== undefined && scores?.finalScore !== null) ||
+    workspaceData?.defenseInfo?.ketQuaCuoiCung !== undefined ||
+    group?.status === 'COMPLETED'
+  );
+
+  const hasDefense = Boolean(
+    defenseSchedule ||
+    (group?.defenses?.length || 0) > 0 ||
+    (workspaceData?.defenseSchedules?.length || 0) > 0
+  );
+
+  const isMidtermPassed = group?.midtermStatus === 'CONTINUE';
+  const hasGroup = Boolean(group);
+  const isTopicApproved = hasGroup || Boolean(registration && (registration.status === 'APPROVED' || registration.status === 'CHO_XAC_NHAN'));
+
+  // Ưu tiên bước thực tế của sinh viên (studentStep / effectiveStep)
+  let currentStep =
+    dashboardData?.studentStep ||
+    dashboardData?.currentStep ||
+    workspaceData?.studentStep ||
+    workspaceData?.currentStep ||
+    workspaceData?.progressData?.studentStep ||
+    workspaceData?.progressData?.currentStep;
+
+  if (!currentStep || currentStep < 1 || currentStep > 5) {
+    if (hasScores || hasDefense) {
+      currentStep = 5;
+    } else if (isMidtermPassed || submissionsCount > 0) {
+      currentStep = 4;
+    } else if (hasGroup) {
+      currentStep = 3;
+    } else if (isTopicApproved) {
+      currentStep = 2;
+    } else if (
+      typeof semesterInfo?.currentStep === 'number' &&
+      semesterInfo.currentStep >= 1 &&
+      semesterInfo.currentStep <= 5
+    ) {
+      currentStep = semesterInfo.currentStep;
+    } else if (
+      typeof semesterInfo?.semesterStep === 'number' &&
+      semesterInfo.semesterStep >= 1 &&
+      semesterInfo.semesterStep <= 5
+    ) {
+      currentStep = semesterInfo.semesterStep;
+    } else {
+      currentStep = 1;
+    }
   }
+
+  const isCompleted = Boolean(
+    dashboardData?.isCompleted ||
+    workspaceData?.isCompleted ||
+    workspaceData?.progressData?.isCompleted ||
+    workspaceData?.progressData?.percentComplete === 100 ||
+    isFinalGraded
+  );
 
   // Action items
   let actionItems: string[] = dashboardData?.actionItems?.length
@@ -483,6 +539,7 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
       <WelcomeTimeline
         currentStep={currentStep}
         semesterInfo={semesterInfo}
+        isCompleted={isCompleted}
         role="SINH_VIEN"
         onNavigate={onNavigate}
         canManageTimeline={false}

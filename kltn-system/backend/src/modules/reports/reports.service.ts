@@ -189,6 +189,14 @@ export class ReportsService {
         const students = item.members || item.students || [];
         const studentStr = students.map((s: any) => `${s.fullName || s.user?.fullName} (${s.studentCode || s.user?.studentCode || ''})`).join(', ');
 
+        const isGvhdDisqualified =
+          item.scores?.gvhd !== null &&
+          item.scores?.gvhd !== undefined &&
+          Number(item.scores?.gvhd) < 6.0;
+        const resText = isGvhdDisqualified
+          ? 'BỊ LOẠI (GVHD < 6.0)'
+          : (item.ketQua === 'DAT' ? 'ĐẠT' : item.ketQua === 'KHONG_DAT' ? 'KHÔNG ĐẠT' : (item.ketQua || '—'));
+
         sheet.addRow({
           stt: idx + 1,
           code: item.code,
@@ -200,9 +208,9 @@ export class ReportsService {
           scoreGvpb: item.scores?.gvpb !== null && item.scores?.gvpb !== undefined ? item.scores.gvpb : 'Chưa có',
           scoreCouncil: item.scores?.council !== null && item.scores?.council !== undefined ? item.scores.council : 'Chưa có',
           bonus: item.scores?.bonusPoints > 0 ? `+${item.scores.bonusPoints}đ` : '0đ',
-          finalScore: item.finalScore !== null && item.finalScore !== undefined ? item.finalScore : 'Chưa xong',
-          rating: item.xepLoai || '—',
-          result: item.ketQua || '—',
+          finalScore: isGvhdDisqualified ? (item.scores?.gvhd ?? 'Không đạt') : (item.finalScore !== null && item.finalScore !== undefined ? item.finalScore : 'Chưa xong'),
+          rating: isGvhdDisqualified ? 'Không đạt' : (item.xepLoai || '—'),
+          result: resText,
           completeness: item.scoreCompleteness?.isComplete ? 'Đầy đủ điểm' : `Cảnh báo (${item.scoreCompleteness?.warnings?.length || 0})`,
         });
       });
@@ -583,9 +591,17 @@ export class ReportsService {
           doc.rect(40, currentY, 515, 48).fillAndStroke('#EFF6FF', '#BFDBFE');
           doc.font(fontBold).fontSize(11).text(safeText('KẾT QUẢ TỔNG KẾT:'), 50, currentY + 8);
 
-          const finalScoreStr = scoreItem?.finalScore !== null && scoreItem?.finalScore !== undefined ? `${scoreItem.finalScore} / 10` : 'Chưa hoàn tất';
-          const xepLoaiStr = scoreItem?.xepLoai || '—';
-          const ketQuaStr = scoreItem?.ketQua === 'DAT' ? 'ĐẠT YÊU CẦU' : scoreItem?.ketQua === 'KHÔNG ĐẠT' ? 'KHÔNG ĐẠT' : '—';
+          const isGvhdDisqualified =
+            scoreItem?.scores?.gvhd !== null &&
+            scoreItem?.scores?.gvhd !== undefined &&
+            Number(scoreItem?.scores?.gvhd) < 6.0;
+          const finalScoreStr = isGvhdDisqualified
+            ? `${scoreItem.scores.gvhd} / 10 (Không đạt)`
+            : (scoreItem?.finalScore !== null && scoreItem?.finalScore !== undefined ? `${scoreItem.finalScore} / 10` : 'Chưa hoàn tất');
+          const xepLoaiStr = isGvhdDisqualified ? 'Không đạt' : (scoreItem?.xepLoai || '—');
+          const ketQuaStr = isGvhdDisqualified
+            ? 'KHÔNG ĐẠT (BỊ LOẠI DO ĐIỂM GVHD < 6.0)'
+            : (scoreItem?.ketQua === 'DAT' ? 'ĐẠT YÊU CẦU' : scoreItem?.ketQua === 'KHÔNG ĐẠT' || scoreItem?.ketQua === 'KHONG_DAT' ? 'KHÔNG ĐẠT' : '—');
 
           doc.font(fontRegular).fontSize(9.5).text(
             safeText(`Điểm tổng kết: `),

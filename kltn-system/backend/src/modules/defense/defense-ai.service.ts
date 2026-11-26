@@ -168,7 +168,7 @@ export class DefenseAiService {
       }
       if (gvhdScore < 6.0) {
         throw new BadRequestException(
-          `Nhóm ${group.code} có điểm GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện phân công phản biện (yêu cầu điểm GVHD >= 6.0).`,
+          `Nhóm ${group.code} có điểm GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện (sinh viên bị loại, không được đi tiếp ra phản biện; yêu cầu điểm GVHD >= 6.0).`,
         );
       }
 
@@ -432,7 +432,7 @@ export class DefenseAiService {
         }
         if (gvhdScore < 6.0) {
           throw new BadRequestException(
-            `Nhóm ${g.code} có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (yêu cầu điểm GVHD >= 6.0).`,
+            `Nhóm ${g.code} có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (sinh viên bị loại do điểm GVHD < 6.0, yêu cầu điểm GVHD >= 6.0).`,
           );
         }
 

@@ -466,7 +466,7 @@ export class DefenseService {
       } else if (item.gvhdScore === null) {
         reason = 'Chưa có điểm từ Giảng viên hướng dẫn (Yêu cầu GVHD >= 6.0)';
       } else if (item.gvhdScore < 6.0) {
-        reason = `Điểm GVHD là ${item.gvhdScore} (< 6.0), không đạt yêu cầu`;
+        reason = `Điểm GVHD là ${item.gvhdScore} (< 6.0) — Không đạt yêu cầu (Bị loại, không được đi tiếp)`;
       }
 
       resultItems.push({
@@ -790,7 +790,7 @@ export class DefenseService {
     }
     if (gvhdScore < 6.0) {
       throw new BadRequestException(
-        `Điểm đánh giá của GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện phân công phản biện (yêu cầu điểm GVHD >= 6.0).`,
+        `Điểm đánh giá của GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện (sinh viên bị loại, không được đi tiếp ra phản biện; yêu cầu điểm GVHD >= 6.0).`,
       );
     }
 
@@ -887,7 +887,7 @@ export class DefenseService {
     }
     if (gvhdScore < 6.0) {
       throw new BadRequestException(
-        `Điểm đánh giá của GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện phân công phản biện (yêu cầu điểm GVHD >= 6.0).`,
+        `Điểm đánh giá của GVHD là ${gvhdScore} (< 6.0). Nhóm không đủ điều kiện (sinh viên bị loại, không được đi tiếp ra phản biện; yêu cầu điểm GVHD >= 6.0).`,
       );
     }
 
@@ -1400,7 +1400,7 @@ export class DefenseService {
         }
         if (gvhdScore < 6.0) {
           throw new BadRequestException(
-            `Nhóm ${group.code} ("${group.topic?.title || group.name}") có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (yêu cầu điểm GVHD >= 6.0).`,
+            `Nhóm ${group.code} ("${group.topic?.title || group.name}") có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (sinh viên bị loại do điểm GVHD < 6.0, yêu cầu điểm GVHD >= 6.0).`,
           );
         }
 
@@ -1810,7 +1810,7 @@ export class DefenseService {
         }
         if (gvhdScore < 6.0) {
           throw new BadRequestException(
-            `Nhóm ${group.code} ("${group.topic?.title || group.name}") có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (yêu cầu điểm GVHD >= 6.0).`,
+            `Nhóm ${group.code} ("${group.topic?.title || group.name}") có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (sinh viên bị loại do điểm GVHD < 6.0, yêu cầu điểm GVHD >= 6.0).`,
           );
         }
 
@@ -2093,7 +2093,7 @@ export class DefenseService {
       }
       if (gvhdScore < 6.0) {
         throw new BadRequestException(
-          `Nhóm ${g.code} có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (yêu cầu điểm GVHD >= 6.0).`,
+          `Nhóm ${g.code} có điểm GVHD là ${gvhdScore} (< 6.0), không đủ điều kiện ra hội đồng bảo vệ (sinh viên bị loại do điểm GVHD < 6.0, yêu cầu điểm GVHD >= 6.0).`,
         );
       }
 

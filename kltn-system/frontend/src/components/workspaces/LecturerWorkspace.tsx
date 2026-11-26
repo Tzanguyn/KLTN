@@ -135,6 +135,7 @@ export const LecturerWorkspace: React.FC = () => {
 
   // 10-Criteria Scoring Form State (Chấm riêng cho từng sinh viên trong nhóm)
   const [scoringFormData, setScoringFormData] = useState<any>(null);
+  const [activeScoringRole, setActiveScoringRole] = useState<'HUONG_DAN' | 'PHAN_BIEN' | 'HOI_DONG'>('HUONG_DAN');
   const [tenScores, setTenScores] = useState<
     Record<string, { value: string; note: string; studentScores?: Record<string, string> }>
   >({});
@@ -404,10 +405,14 @@ export const LecturerWorkspace: React.FC = () => {
   const loadScoringForm = async (groupId: string, targetRole?: string) => {
     if (!groupId) return;
     try {
-      const roleParam = targetRole ? `?role=${targetRole}` : '';
+      const roleToUse = targetRole || activeScoringRole;
+      const roleParam = roleToUse ? `?role=${roleToUse}` : '';
       const res = await api.get(`/scores/scoring-forms/${groupId}${roleParam}`);
       const form = res.data.data;
       setScoringFormData(form);
+      if (form?.role) {
+        setActiveScoringRole(form.role);
+      }
       if (form?.criteria) {
         const formStudents = form?.topic?.students || [];
         const initScores: Record<
@@ -493,7 +498,25 @@ export const LecturerWorkspace: React.FC = () => {
       .then((r) => setGroupScores(r.data.data ?? null))
       .catch(() => setGroupScores(null));
 
-    loadScoringForm(selectedGroupId);
+    const isMyGroup = myGroups.some((g) => g.id === selectedGroupId);
+    const isReview = reviewerAssignments.some((r) => (r.groupId || r.id) === selectedGroupId);
+    const isCommittee = committees.some((c) => c.schedules?.some((s: any) => s.group?.id === selectedGroupId));
+
+    let targetRole: 'HUONG_DAN' | 'PHAN_BIEN' | 'HOI_DONG' = 'HUONG_DAN';
+    if (isMyGroup) {
+      targetRole = 'HUONG_DAN';
+    } else if (activeScoringRole === 'HOI_DONG' && isCommittee) {
+      targetRole = 'HOI_DONG';
+    } else if (activeScoringRole === 'PHAN_BIEN' && isReview) {
+      targetRole = 'PHAN_BIEN';
+    } else if (isReview) {
+      targetRole = 'PHAN_BIEN';
+    } else if (isCommittee) {
+      targetRole = 'HOI_DONG';
+    }
+
+    setActiveScoringRole(targetRole);
+    loadScoringForm(selectedGroupId, targetRole);
   }, [selectedGroupId]);
 
   // Realtime Socket.io and Polling for Lecturer chat
@@ -1203,6 +1226,19 @@ export const LecturerWorkspace: React.FC = () => {
   const handleSaveBatchScores = async (isDraft: boolean) => {
     if (!selectedGroupId || !scoringFormData) return;
     if (!isDraft) {
+      const isGvhdRole = (scoringFormData.role || 'HUONG_DAN') === 'HUONG_DAN';
+      if (isGvhdRole) {
+        const failedStudents = scoringStudents.filter((st: any) => (liveStudentTotals[st.key] ?? 0) < 6.0);
+        if (failedStudents.length > 0) {
+          const names = failedStudents
+            .map((st: any) => `${st.fullName} (${(liveStudentTotals[st.key] ?? 0).toFixed(2)}đ)`)
+            .join(', ');
+          const confirmFail = window.confirm(
+            `CẢNH BÁO QUY CHẾ KLTN:\n\nCó sinh viên có điểm GVHD dưới 6.0: ${names}.\nTheo quy định: Điểm trung bình của GVHD phải >= 6.0 mới đạt. Nếu dưới 6.0, sinh viên sẽ BỊ LOẠI và KHÔNG ĐƯỢC ĐI TIẾP ra phản biện/hội đồng!\n\nBạn có chắc chắn muốn khóa và nộp điểm chính thức không?`,
+          );
+          if (!confirmFail) return;
+        }
+      }
       const confirmLock = window.confirm(
         'Bạn có chắc chắn muốn KHÓA ĐIỂM chính thức không?\n\nSau khi khóa, giảng viên KHÔNG ĐƯỢC tự ý sửa điểm mà phải gửi yêu cầu mở khóa đến Trưởng bộ môn.',
       );
@@ -1248,17 +1284,18 @@ export const LecturerWorkspace: React.FC = () => {
         };
       });
 
+      const currentRole = scoringFormData.role || activeScoringRole || 'HUONG_DAN';
       const res = await api.post('/scores', {
         topicId: scoringFormData.topic?.id,
         groupId: selectedGroupId,
-        role: scoringFormData.role || 'HUONG_DAN',
+        role: currentRole,
         scores: scoresPayload,
         isDraft,
         generalComment: scoringComment,
       });
 
       notify(res.data.message || (isDraft ? 'Đã lưu nháp điểm thành công!' : 'Đã nộp và khóa điểm chính thức!'));
-      await loadScoringForm(selectedGroupId);
+      await loadScoringForm(selectedGroupId, currentRole);
       const scoresRes = await api.get(`/scores/groups/${selectedGroupId}`);
       setGroupScores(scoresRes.data.data);
     } catch (err: any) {
@@ -1282,14 +1319,17 @@ export const LecturerWorkspace: React.FC = () => {
         rev?.topicId ||
         selectedGroupId;
 
+      const currentRole = scoringFormData?.role || activeScoringRole || 'HUONG_DAN';
+      const roleLabel = currentRole === 'PHAN_BIEN' ? 'Điểm Phản biện' : currentRole === 'HOI_DONG' ? 'Điểm Hội đồng' : 'Điểm GVHD';
+
       await api.post(`/scores/${topicId}/unlock-request`, {
-        reason: scoreChangeReason,
+        reason: `[${roleLabel}] ${scoreChangeReason.trim()}`,
         groupId: selectedGroupId,
       });
       notify('Đã gửi đề xuất mở khóa sửa điểm đến Trưởng bộ môn!');
       setShowScoreChangeModal(false);
       setScoreChangeReason('');
-      await loadScoringForm(selectedGroupId);
+      await loadScoringForm(selectedGroupId, currentRole);
     } catch (err: any) {
       notify(err.response?.data?.message ?? 'Lỗi gửi đề xuất', 'error');
     }
@@ -1300,7 +1340,9 @@ export const LecturerWorkspace: React.FC = () => {
     if (!selectedGroupId) return;
     try {
       const topicId = scoringFormData?.topic?.id || selectedGroupId;
-      const res = await api.get(`/scores/${topicId}/export-pdf`, { responseType: 'blob' });
+      const currentRole = scoringFormData?.role || activeScoringRole;
+      const roleParam = currentRole ? `?role=${currentRole}` : '';
+      const res = await api.get(`/scores/${topicId}/export-pdf${roleParam}`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const link = document.createElement('a');
       link.href = url;
@@ -2798,8 +2840,9 @@ export const LecturerWorkspace: React.FC = () => {
                           variant="outline"
                           onClick={() => {
                             const gId = rev.groupId || rev.id;
+                            setActiveScoringRole('PHAN_BIEN');
                             setSelectedGroupId(gId);
-                            loadScoringForm(gId);
+                            loadScoringForm(gId, 'PHAN_BIEN');
                             setScoreChangeReason('');
                             setShowScoreChangeModal(true);
                           }}
@@ -2813,7 +2856,10 @@ export const LecturerWorkspace: React.FC = () => {
                           size="sm"
                           variant="primary"
                           onClick={() => {
-                            setSelectedGroupId(rev.groupId || rev.id);
+                            const gId = rev.groupId || rev.id;
+                            setActiveScoringRole('PHAN_BIEN');
+                            setSelectedGroupId(gId);
+                            loadScoringForm(gId, 'PHAN_BIEN');
                             setActiveTab('scores');
                           }}
                           className="text-xs flex items-center gap-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold"
@@ -2969,6 +3015,7 @@ export const LecturerWorkspace: React.FC = () => {
                                   variant="primary"
                                   onClick={() => {
                                     if (sched.group?.id) {
+                                      setActiveScoringRole('HOI_DONG');
                                       setSelectedGroupId(sched.group.id);
                                       loadScoringForm(sched.group.id, 'HOI_DONG');
                                       setActiveTab('scores');
@@ -3012,24 +3059,42 @@ export const LecturerWorkspace: React.FC = () => {
                 </div>
 
                 <select
-                  value={selectedGroupId}
+                  value={
+                    selectedGroupId
+                      ? `${selectedGroupId}:::${scoringFormData?.role || activeScoringRole}`
+                      : ''
+                  }
                   onChange={(e) => {
-                    const newGid = e.target.value;
+                    const rawVal = e.target.value;
+                    const [newGid, targetRole] = rawVal.includes(':::')
+                      ? rawVal.split(':::')
+                      : [rawVal, undefined];
                     setSelectedGroupId(newGid);
-                    const isCommittee = committees.some((c) => c.schedules?.some((s: any) => s.group?.id === newGid));
-                    const isReview = reviewerAssignments.some((r) => (r.groupId || r.id) === newGid);
-                    const targetRole = isCommittee && !isReview && !myGroups.some((g) => g.id === newGid)
-                      ? 'HOI_DONG'
-                      : isReview
-                      ? 'PHAN_BIEN'
-                      : 'HUONG_DAN';
-                    loadScoringForm(newGid, targetRole);
+                    if (targetRole) {
+                      setActiveScoringRole(targetRole as any);
+                      loadScoringForm(newGid, targetRole);
+                    } else {
+                      const isCommittee = committees.some((c) =>
+                        c.schedules?.some((s: any) => s.group?.id === newGid),
+                      );
+                      const isReview = reviewerAssignments.some(
+                        (r) => (r.groupId || r.id) === newGid,
+                      );
+                      const roleToUse =
+                        isCommittee && !isReview && !myGroups.some((g) => g.id === newGid)
+                          ? 'HOI_DONG'
+                          : isReview
+                          ? 'PHAN_BIEN'
+                          : 'HUONG_DAN';
+                      setActiveScoringRole(roleToUse as any);
+                      loadScoringForm(newGid, roleToUse);
+                    }
                   }}
                   className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm"
                 >
                   <optgroup label="Nhóm hướng dẫn">
                     {myGroups.map((g) => (
-                      <option key={g.id} value={g.id}>
+                      <option key={`hd-${g.id}`} value={`${g.id}:::HUONG_DAN`}>
                         {g.code} - {g.name} (
                         {g.midtermStatus === 'CONTINUE'
                           ? 'Đã qua GK - Cho làm tiếp'
@@ -3043,7 +3108,7 @@ export const LecturerWorkspace: React.FC = () => {
                   {reviewerAssignments.length > 0 && (
                     <optgroup label="Nhóm phản biện">
                       {reviewerAssignments.map((r) => (
-                        <option key={r.groupId || r.id} value={r.groupId || r.id}>
+                        <option key={`pb-${r.groupId || r.id}`} value={`${r.groupId || r.id}:::PHAN_BIEN`}>
                           {r.groupCode || r.group?.code || 'PB'} - {r.topicTitle || r.group?.name || 'Phản biện'}
                         </option>
                       ))}
@@ -3054,7 +3119,7 @@ export const LecturerWorkspace: React.FC = () => {
                       {committees.flatMap((c) => c.schedules || [])
                         .filter((s: any) => s.group?.id && !myGroups.some((g) => g.id === s.group.id))
                         .map((s: any) => (
-                          <option key={`hoidong-${s.group.id}`} value={s.group.id}>
+                          <option key={`hoidong-${s.group.id}`} value={`${s.group.id}:::HOI_DONG`}>
                             {s.group.code} - {s.group.topic?.title || s.group.name} (Hội đồng)
                           </option>
                         ))}
@@ -3064,6 +3129,44 @@ export const LecturerWorkspace: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {/* Segmented Control chuyển đổi vai trò nếu GV đồng thời là GVPB & Thành viên Hội đồng */}
+                {((scoringFormData?.availableRoles && scoringFormData.availableRoles.length > 1) ||
+                  (reviewerAssignments.some((r) => (r.groupId || r.id) === selectedGroupId) &&
+                    committees.some((c) => c.schedules?.some((s: any) => s.group?.id === selectedGroupId)))) && (
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveScoringRole('PHAN_BIEN');
+                        loadScoringForm(selectedGroupId, 'PHAN_BIEN');
+                      }}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                        (scoringFormData?.role || activeScoringRole) === 'PHAN_BIEN'
+                          ? 'bg-purple-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                      }`}
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Điểm Phản biện
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveScoringRole('HOI_DONG');
+                        loadScoringForm(selectedGroupId, 'HOI_DONG');
+                      }}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                        (scoringFormData?.role || activeScoringRole) === 'HOI_DONG'
+                          ? 'bg-indigo-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      Điểm Hội đồng
+                    </button>
+                  </div>
+                )}
+
                 <Badge variant="purple" size="sm">
                   {scoringFormData?.role === 'PHAN_BIEN'
                     ? 'Cán bộ Phản biện'
@@ -3697,7 +3800,9 @@ export const LecturerWorkspace: React.FC = () => {
                           );
                         })}
                         <td className="p-3 text-xs text-slate-500 font-normal">
-                          Đạt khi ĐTB ≥ 5.0
+                          {scoringFormData?.role === 'HUONG_DAN' || !scoringFormData?.role
+                            ? 'Quy định GVHD: ĐTB ≥ 6.0 mới Đạt (Dưới 6.0: Sinh viên bị loại, không được đi tiếp)'
+                            : 'Đạt khi ĐTB ≥ 5.0'}
                         </td>
                       </tr>
                     </tfoot>
@@ -3714,6 +3819,11 @@ export const LecturerWorkspace: React.FC = () => {
                     </span>
                     <p className="text-xs text-slate-600 mt-0.5">
                       Công thức: Điểm trung bình mỗi sinh viên = (∑ Điểm 10 tiêu chí LO của sinh viên đó) / 10
+                      {(scoringFormData?.role === 'HUONG_DAN' || !scoringFormData?.role) && (
+                        <span className="ml-1 text-rose-700 font-semibold">
+                          • Quy định GVHD: Điểm TB ≥ 6.0 mới đạt. Dưới 6.0, sinh viên bị loại, không được đi tiếp.
+                        </span>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -3721,6 +3831,8 @@ export const LecturerWorkspace: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {scoringStudents.map((st: any, idx: number) => {
                     const stTotal = liveStudentTotals[st.key] ?? 0;
+                    const isGvhdRole = scoringFormData?.role === 'HUONG_DAN' || !scoringFormData?.role;
+                    const isPassed = isGvhdRole ? stTotal >= 6.0 : stTotal >= 5.0;
                     const ratingLabel =
                       stTotal >= 9.0
                         ? 'XUẤT SẮC'
@@ -3734,7 +3846,9 @@ export const LecturerWorkspace: React.FC = () => {
                     return (
                       <div
                         key={st.key}
-                        className="p-4 bg-white/90 border border-emerald-200/80 rounded-xl flex items-center justify-between gap-3 shadow-xs"
+                        className={`p-4 bg-white/90 border rounded-xl flex items-center justify-between gap-3 shadow-xs ${
+                          isGvhdRole && !isPassed ? 'border-rose-300 bg-rose-50/50' : 'border-emerald-200/80'
+                        }`}
                       >
                         <div className="space-y-1">
                           <div className="text-xs text-slate-500 font-semibold">
@@ -3756,14 +3870,19 @@ export const LecturerWorkspace: React.FC = () => {
                             >
                               Xếp loại: {ratingLabel}
                             </Badge>
-                            <Badge variant={stTotal >= 5.0 ? 'success' : 'danger'} size="sm">
-                              {stTotal >= 5.0 ? 'Đạt' : 'Không đạt'}
+                            <Badge variant={isPassed ? 'success' : 'danger'} size="sm">
+                              {isPassed ? 'Đạt' : isGvhdRole ? 'Không đạt (< 6.0 - Bị loại)' : 'Không đạt'}
                             </Badge>
                           </div>
+                          {isGvhdRole && !isPassed && (
+                            <p className="text-[11px] text-rose-600 font-bold pt-1">
+                              ⚠️ Dưới 6.0: Sinh viên bị loại, không được đi tiếp ra phản biện/hội đồng!
+                            </p>
+                          )}
                         </div>
                         <div className="text-right shrink-0">
                           <div className="text-[10px] text-slate-400 uppercase font-bold">Điểm TB</div>
-                          <div className="text-3xl font-black text-emerald-700 tracking-tight">
+                          <div className={`text-3xl font-black tracking-tight ${isGvhdRole && !isPassed ? 'text-rose-600' : 'text-emerald-700'}`}>
                             {stTotal.toFixed(2)} <span className="text-sm font-bold text-slate-400">/ 10</span>
                           </div>
                         </div>

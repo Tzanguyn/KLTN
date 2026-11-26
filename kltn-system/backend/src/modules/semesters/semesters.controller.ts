@@ -190,6 +190,7 @@ export class SemestersController {
   @ApiResponse({ status: 403, description: 'Không có quyền truy cập' })
   @ApiResponse({ status: 404, description: 'Không tìm thấy đợt KLTN' })
   @Put(':id/timeline-step')
+  @Patch(':id/timeline-step')
   @Roles(RoleCode.TRUONG_BO_MON, RoleCode.QUAN_LY_BO_MON)
   setTimelineStep(
     @Param('id') id: string,

@@ -101,32 +101,34 @@ export class SemestersService implements OnModuleInit {
     }
 
     let currentStep = customStep && customStep >= 1 && customStep <= 5 ? customStep : 0;
-    if (!currentStep) {
-      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
-        currentStep = 5;
-      } else if (defFrom && now >= defFrom) {
-        currentStep = 5;
-      } else if (subTo && now >= subTo) {
-        currentStep = 4;
-      } else if (midTo && now >= midTo) {
-        currentStep = 3;
-      } else if (regTo && now > regTo) {
-        currentStep = 2;
-      } else {
-        // Fallback dựa trên counts nếu có
-        if (semester._count?.defenses > 0) {
-          currentStep = 5;
-        } else if (semester._count?.reports > 0 || (semester._count?.groups > 0 && regTo && now >= regTo)) {
-          currentStep = 4;
-        } else if (semester._count?.groups > 0) {
-          currentStep = 3;
-        } else if (semester._count?.registrations > 0) {
-          currentStep = 2;
-        } else {
-          currentStep = 1;
-        }
-      }
+    let stepFromDate = 1;
+    if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+      stepFromDate = 5;
+    } else if (defFrom && now >= defFrom) {
+      stepFromDate = 5;
+    } else if (subTo && now >= subTo) {
+      stepFromDate = 4;
+    } else if (midTo && now >= midTo) {
+      stepFromDate = 3;
+    } else if (regTo && now > regTo) {
+      stepFromDate = 2;
+    } else {
+      stepFromDate = 1;
     }
+
+    let stepFromCount = 1;
+    if ((semester._count?.defenses || 0) > 0 || (semester._count?.scores || 0) > 0) {
+      stepFromCount = 5;
+    } else if ((semester._count?.reports || 0) > 0 || ((semester._count?.groups || 0) > 0 && regTo && now >= regTo)) {
+      stepFromCount = 4;
+    } else if ((semester._count?.groups || 0) > 0) {
+      stepFromCount = 3;
+    } else if ((semester._count?.registrations || 0) > 0) {
+      stepFromCount = 2;
+    }
+
+    currentStep = Math.max(currentStep || 1, stepFromDate, stepFromCount);
+    if (currentStep < 1 || currentStep > 5) currentStep = 1;
 
     const stageTitles = [
       'Đăng ký đề tài',
@@ -719,13 +721,21 @@ export class SemestersService implements OnModuleInit {
 
     if (autoSync || step === 0 || step === undefined) {
       await this.prisma.systemConfig.deleteMany({
-        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+        where: {
+          OR: [
+            { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+            { key: `SEMESTER_TIMELINE_STEP_${id}` },
+          ],
+        },
       });
     } else {
       const stepVal = Number(step);
       if (stepVal < 1 || stepVal > 5) {
         throw new BadRequestException('Bước lộ trình phải nằm trong khoảng từ 1 đến 5');
       }
+      await this.prisma.systemConfig.deleteMany({
+        where: { key: `SEMESTER_TIMELINE_STEP_${id}` },
+      });
       const existingConfig = await this.prisma.systemConfig.findFirst({
         where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
       });
