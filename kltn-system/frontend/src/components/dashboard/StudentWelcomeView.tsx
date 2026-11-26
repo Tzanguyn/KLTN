@@ -85,9 +85,13 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   // Đồng bộ nguồn bước lộ trình chuẩn của đợt KLTN hiện tại (từ dashboardData hoặc workspaceData)
   const semesterInfo = dashboardData?.semester || workspaceData?.semester;
 
+  const hasGroup = Boolean(group);
+  const isTopicApproved = hasGroup || Boolean(registration && (registration.status === 'APPROVED' || registration.status === 'CHO_XAC_NHAN'));
+
   // Xác định điểm số và trạng thái hoàn thành bảo vệ của sinh viên
-  const scores = dashboardData?.scores || workspaceData?.scores || workspaceData?.defenseInfo?.diemChiTiet;
+  const scores = hasGroup ? (dashboardData?.scores || workspaceData?.scores || workspaceData?.defenseInfo?.diemChiTiet) : null;
   const hasScores = Boolean(
+    hasGroup &&
     scores &&
     (scores.finalScore !== undefined ||
       scores.scores?.length > 0 ||
@@ -98,9 +102,10 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   );
 
   const isFinalGraded = Boolean(
-    (scores?.finalScore !== undefined && scores?.finalScore !== null) ||
-    workspaceData?.defenseInfo?.ketQuaCuoiCung !== undefined ||
-    group?.status === 'COMPLETED'
+    hasGroup &&
+    ((scores?.finalScore !== undefined && scores?.finalScore !== null && scores?.ketQua) ||
+      (workspaceData?.defenseInfo?.ketQuaCuoiCung != null && group?.status === 'COMPLETED') ||
+      group?.status === 'COMPLETED')
   );
 
   const hasDefense = Boolean(
@@ -110,10 +115,16 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
   );
 
   const isMidtermPassed = group?.midtermStatus === 'CONTINUE';
-  const hasGroup = Boolean(group);
-  const isTopicApproved = hasGroup || Boolean(registration && (registration.status === 'APPROVED' || registration.status === 'CHO_XAC_NHAN'));
 
-  // Ưu tiên bước thực tế của sinh viên (studentStep / effectiveStep)
+  // Bước lộ trình học kỳ do Trưởng bộ môn cài đặt
+  const semesterStep =
+    typeof semesterInfo?.currentStep === 'number' && semesterInfo.currentStep >= 1
+      ? semesterInfo.currentStep
+      : typeof semesterInfo?.semesterStep === 'number' && semesterInfo.semesterStep >= 1
+      ? semesterInfo.semesterStep
+      : 1;
+
+  // Bước thực tế của cá nhân sinh viên (studentStep)
   let currentStep =
     dashboardData?.studentStep ||
     dashboardData?.currentStep ||
@@ -131,29 +142,23 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
       currentStep = 3;
     } else if (isTopicApproved) {
       currentStep = 2;
-    } else if (
-      typeof semesterInfo?.currentStep === 'number' &&
-      semesterInfo.currentStep >= 1 &&
-      semesterInfo.currentStep <= 5
-    ) {
-      currentStep = semesterInfo.currentStep;
-    } else if (
-      typeof semesterInfo?.semesterStep === 'number' &&
-      semesterInfo.semesterStep >= 1 &&
-      semesterInfo.semesterStep <= 5
-    ) {
-      currentStep = semesterInfo.semesterStep;
     } else {
       currentStep = 1;
     }
   }
 
   const isCompleted = Boolean(
-    dashboardData?.isCompleted ||
-    workspaceData?.isCompleted ||
-    workspaceData?.progressData?.isCompleted ||
-    workspaceData?.progressData?.percentComplete === 100 ||
-    isFinalGraded
+    hasGroup &&
+    (dashboardData?.isCompleted ||
+      workspaceData?.isCompleted ||
+      workspaceData?.progressData?.isCompleted ||
+      workspaceData?.progressData?.percentComplete === 100 ||
+      isFinalGraded)
+  );
+
+  const isSemesterCompleted = Boolean(
+    semesterInfo?.status === 'ARCHIVED' ||
+    semesterInfo?.status === 'CLOSED'
   );
 
   // Action items
@@ -535,11 +540,11 @@ export const StudentWelcomeView: React.FC<StudentWelcomeViewProps> = ({ onNaviga
         </div>
       )}
 
-      {/* 5. LỘ TRÌNH KLTN 5 GIAI ĐOẠN ĐỒNG BỘ TOÀN HỆ THỐNG */}
+      {/* 5. LỘ TRÌNH KLTN 5 GIAI ĐOẠN ĐỒNG BỘ THEO CÀI ĐẶT CỦA TRƯỞNG BỘ MÔN */}
       <WelcomeTimeline
-        currentStep={currentStep}
+        currentStep={semesterStep}
         semesterInfo={semesterInfo}
-        isCompleted={isCompleted}
+        isCompleted={isSemesterCompleted}
         role="SINH_VIEN"
         onNavigate={onNavigate}
         canManageTimeline={false}

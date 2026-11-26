@@ -1209,9 +1209,9 @@ export const StudentWorkspace: React.FC = () => {
             scores: defenseInfo?.diemChiTiet,
             defenseInfo,
             semester: progressData?.semester,
-            currentStep: progressData?.currentStep || progressData?.studentStep,
-            studentStep: progressData?.studentStep || progressData?.currentStep,
-            isCompleted: progressData?.percentComplete === 100 || progressData?.isCompleted || Boolean(defenseInfo?.ketQuaCuoiCung),
+            currentStep: progressData?.semester?.currentStep || progressData?.semester?.semesterStep || 1,
+            studentStep: progressData?.studentStep || progressData?.currentStep || 1,
+            isCompleted: progressData?.semester?.status === 'ARCHIVED' || progressData?.semester?.status === 'CLOSED',
             percentComplete: progressData?.percentComplete,
           }}
         />
@@ -3116,9 +3116,9 @@ export const StudentWorkspace: React.FC = () => {
           {/* LỘ TRÌNH 5 GIAI ĐOẠN ĐỒNG BỘ TOÀN DIỆN VỚI BỘ MÔN */}
           {progressData?.semester && (
             <WelcomeTimeline
-              currentStep={progressData?.studentStep || progressData?.currentStep || progressData?.semester?.currentStep}
+              currentStep={progressData?.semester?.currentStep ?? progressData?.semester?.semesterStep ?? 1}
               semesterInfo={progressData?.semester}
-              isCompleted={progressData?.percentComplete === 100 || progressData?.isCompleted || Boolean(defenseInfo?.ketQuaCuoiCung)}
+              isCompleted={progressData?.semester?.status === 'ARCHIVED' || progressData?.semester?.status === 'CLOSED'}
               role="SINH_VIEN"
               onNavigate={(tab) => {
                 setActiveTab(tab);

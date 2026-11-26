@@ -87,67 +87,71 @@ export class DashboardService {
 
     let currentStep = manualConfig?.value ? Number(manualConfig.value) : 0;
 
-    // A. Tính bước theo mốc thời gian (Date-based)
-    let stepFromDate = 1;
-    if (defFrom && now >= defFrom) {
-      stepFromDate = 5;
-    } else if (subTo && now >= subTo) {
-      stepFromDate = 4;
-    } else if (midTo && now >= midTo) {
-      stepFromDate = 3;
-    } else if (regTo && now > regTo) {
-      stepFromDate = 2;
+    if (currentStep >= 1 && currentStep <= 5) {
+      // Đã được Trưởng bộ môn / Quản lý cài đặt rõ ràng: tôn trọng cấu hình này
     } else {
-      stepFromDate = 1;
-    }
-
-    // B. Tính bước theo dữ liệu thực tế (Data-driven: defenses, scores, reviewers, groups, registrations)
-    let stepFromData = 1;
-    if (semester.id) {
-      const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
-        this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
-        this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
-        this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
-        this.prisma.group.count({
-          where: {
-            semesterId: semester.id,
-            midtermStatus: 'CONTINUE',
-            status: { not: 'CANCELLED' },
-          },
-        }),
-        this.prisma.group.count({
-          where: {
-            semesterId: semester.id,
-            status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
-          },
-        }),
-        this.prisma.registration.count({
-          where: {
-            semesterId: semester.id,
-            status: 'APPROVED',
-          },
-        }),
-      ]);
-
-      if (defCount > 0 || scoreCount > 0) {
-        stepFromData = 5; // Bảo vệ & Tổng kết
-      } else if (revCount > 0 || contGroupCount > 0) {
-        stepFromData = 4; // Báo cáo & Phản biện
-      } else if (grpCount > 0) {
-        stepFromData = 3; // Thực hiện & Giữa kỳ
-      } else if (regApprovedCount > 0) {
-        stepFromData = 2; // Duyệt & Ghép nhóm
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        currentStep = 5;
       } else {
-        stepFromData = 1; // Đăng ký đề tài
-      }
-    }
+        // A. Tính bước theo mốc thời gian (Date-based)
+        let stepFromDate = 1;
+        if (defFrom && now >= defFrom) {
+          stepFromDate = 5;
+        } else if (subTo && now >= subTo) {
+          stepFromDate = 4;
+        } else if (midTo && now >= midTo) {
+          stepFromDate = 3;
+        } else if (regTo && now > regTo) {
+          stepFromDate = 2;
+        } else {
+          stepFromDate = 1;
+        }
 
-    if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
-      currentStep = 5;
-    } else {
-      // Tự động nâng bước theo dữ liệu thực tế nếu dữ liệu đã tiến xa hơn cấu hình cũ
-      currentStep = Math.max(currentStep || 1, stepFromDate, stepFromData);
-      if (currentStep < 1 || currentStep > 5) currentStep = 1;
+        // B. Tính bước theo dữ liệu thực tế (Data-driven: defenses, scores, reviewers, groups, registrations)
+        let stepFromData = 1;
+        if (semester.id) {
+          const [defCount, scoreCount, revCount, contGroupCount, grpCount, regApprovedCount] = await Promise.all([
+            this.prisma.defenseSchedule.count({ where: { semesterId: semester.id } }),
+            this.prisma.score.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.reviewerAssignment.count({ where: { group: { semesterId: semester.id } } }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                midtermStatus: 'CONTINUE',
+                status: { not: 'CANCELLED' },
+              },
+            }),
+            this.prisma.group.count({
+              where: {
+                semesterId: semester.id,
+                status: { in: ['ACTIVE', 'COMPLETED', 'FORMING'] },
+              },
+            }),
+            this.prisma.registration.count({
+              where: {
+                semesterId: semester.id,
+                status: 'APPROVED',
+              },
+            }),
+          ]);
+
+          if (defCount > 0 || scoreCount > 0) {
+            stepFromData = 5; // Bảo vệ & Tổng kết
+          } else if (revCount > 0 || contGroupCount > 0) {
+            stepFromData = 4; // Báo cáo & Phản biện
+          } else if (grpCount > 0) {
+            stepFromData = 3; // Thực hiện & Giữa kỳ
+          } else if (regApprovedCount > 0) {
+            stepFromData = 2; // Duyệt & Ghép nhóm
+          } else {
+            stepFromData = 1; // Đăng ký đề tài
+          }
+        }
+
+        // Tự động tính bước theo dữ liệu thực tế nếu không cài đặt thủ công
+        currentStep = Math.max(stepFromDate, stepFromData);
+        if (currentStep < 1 || currentStep > 5) currentStep = 1;
+      }
     }
 
     const stageTitles = [

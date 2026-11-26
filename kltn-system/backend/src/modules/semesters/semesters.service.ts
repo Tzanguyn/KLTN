@@ -101,34 +101,36 @@ export class SemestersService implements OnModuleInit {
     }
 
     let currentStep = customStep && customStep >= 1 && customStep <= 5 ? customStep : 0;
-    let stepFromDate = 1;
-    if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
-      stepFromDate = 5;
-    } else if (defFrom && now >= defFrom) {
-      stepFromDate = 5;
-    } else if (subTo && now >= subTo) {
-      stepFromDate = 4;
-    } else if (midTo && now >= midTo) {
-      stepFromDate = 3;
-    } else if (regTo && now > regTo) {
-      stepFromDate = 2;
-    } else {
-      stepFromDate = 1;
-    }
+    if (!currentStep) {
+      let stepFromDate = 1;
+      if (semester.status === 'ARCHIVED' || semester.status === 'CLOSED') {
+        stepFromDate = 5;
+      } else if (defFrom && now >= defFrom) {
+        stepFromDate = 5;
+      } else if (subTo && now >= subTo) {
+        stepFromDate = 4;
+      } else if (midTo && now >= midTo) {
+        stepFromDate = 3;
+      } else if (regTo && now > regTo) {
+        stepFromDate = 2;
+      } else {
+        stepFromDate = 1;
+      }
 
-    let stepFromCount = 1;
-    if ((semester._count?.defenses || 0) > 0 || (semester._count?.scores || 0) > 0) {
-      stepFromCount = 5;
-    } else if ((semester._count?.reports || 0) > 0 || ((semester._count?.groups || 0) > 0 && regTo && now >= regTo)) {
-      stepFromCount = 4;
-    } else if ((semester._count?.groups || 0) > 0) {
-      stepFromCount = 3;
-    } else if ((semester._count?.registrations || 0) > 0) {
-      stepFromCount = 2;
-    }
+      let stepFromCount = 1;
+      if ((semester._count?.defenses || 0) > 0 || (semester._count?.scores || 0) > 0) {
+        stepFromCount = 5;
+      } else if ((semester._count?.reports || 0) > 0 || ((semester._count?.groups || 0) > 0 && regTo && now >= regTo)) {
+        stepFromCount = 4;
+      } else if ((semester._count?.groups || 0) > 0) {
+        stepFromCount = 3;
+      } else if ((semester._count?.registrations || 0) > 0) {
+        stepFromCount = 2;
+      }
 
-    currentStep = Math.max(currentStep || 1, stepFromDate, stepFromCount);
-    if (currentStep < 1 || currentStep > 5) currentStep = 1;
+      currentStep = Math.max(stepFromDate, stepFromCount);
+      if (currentStep < 1 || currentStep > 5) currentStep = 1;
+    }
 
     const stageTitles = [
       'Đăng ký đề tài',
@@ -335,7 +337,12 @@ export class SemestersService implements OnModuleInit {
 
     const [configs, semesters] = await Promise.all([
       this.prisma.systemConfig.findMany({
-        where: { key: 'SEMESTER_TIMELINE_STEP' },
+        where: {
+          OR: [
+            { key: 'SEMESTER_TIMELINE_STEP' },
+            { key: { startsWith: 'SEMESTER_TIMELINE_STEP_' } },
+          ],
+        },
       }),
       this.prisma.semester.findMany({
         where,
@@ -357,8 +364,13 @@ export class SemestersService implements OnModuleInit {
 
     const stepMap = new Map<string, number>();
     for (const c of configs) {
-      if (c.semesterId && c.value) {
+      if (c.semesterId && c.value && !stepMap.has(c.semesterId)) {
         stepMap.set(c.semesterId, Number(c.value));
+      } else if (c.key.startsWith('SEMESTER_TIMELINE_STEP_') && c.value) {
+        const semId = c.key.replace('SEMESTER_TIMELINE_STEP_', '');
+        if (!stepMap.has(semId)) {
+          stepMap.set(semId, Number(c.value));
+        }
       }
     }
 
@@ -386,7 +398,13 @@ export class SemestersService implements OnModuleInit {
         },
       }),
       this.prisma.systemConfig.findFirst({
-        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+        where: {
+          OR: [
+            { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+            { key: `SEMESTER_TIMELINE_STEP_${id}` },
+          ],
+        },
+        orderBy: { updatedAt: 'desc' },
       }),
     ]);
 
@@ -734,26 +752,29 @@ export class SemestersService implements OnModuleInit {
         throw new BadRequestException('Bước lộ trình phải nằm trong khoảng từ 1 đến 5');
       }
       await this.prisma.systemConfig.deleteMany({
-        where: { key: `SEMESTER_TIMELINE_STEP_${id}` },
+        where: {
+          OR: [
+            { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+            { key: `SEMESTER_TIMELINE_STEP_${id}` },
+          ],
+        },
       });
-      const existingConfig = await this.prisma.systemConfig.findFirst({
-        where: { key: 'SEMESTER_TIMELINE_STEP', semesterId: id },
+      await this.prisma.systemConfig.create({
+        data: {
+          key: 'SEMESTER_TIMELINE_STEP',
+          semesterId: id,
+          value: String(stepVal),
+          description: `Giai đoạn lộ trình hiện tại của đợt KLTN (Bước ${stepVal})`,
+        },
       });
-      if (existingConfig) {
-        await this.prisma.systemConfig.update({
-          where: { id: existingConfig.id },
-          data: { value: String(stepVal) },
-        });
-      } else {
-        await this.prisma.systemConfig.create({
-          data: {
-            key: 'SEMESTER_TIMELINE_STEP',
-            semesterId: id,
-            value: String(stepVal),
-            description: 'Giai đoạn lộ trình hiện tại của đợt KLTN',
-          },
-        });
-      }
+      await this.prisma.systemConfig.create({
+        data: {
+          key: `SEMESTER_TIMELINE_STEP_${id}`,
+          semesterId: id,
+          value: String(stepVal),
+          description: `Giai đoạn lộ trình hiện tại của đợt KLTN (Bước ${stepVal})`,
+        },
+      });
     }
 
     return this.findById(id);
@@ -1272,8 +1293,17 @@ export class SemestersService implements OnModuleInit {
       });
       await this.prisma.systemConfig.create({
         data: {
+          key: 'SEMESTER_TIMELINE_STEP',
+          value: '1',
+          semesterId: semester.id,
+          departmentId: semester.departmentId,
+          description: 'Bước lộ trình hiện tại của đợt KLTN (Bước 1: Đăng ký đề tài)',
+        },
+      });
+      await this.prisma.systemConfig.create({
+        data: {
           key: `SEMESTER_TIMELINE_STEP_${semester.id}`,
-          value: 1,
+          value: '1',
           semesterId: semester.id,
           departmentId: semester.departmentId,
           description: 'Bước lộ trình hiện tại của đợt KLTN (Bước 1: Đăng ký đề tài)',

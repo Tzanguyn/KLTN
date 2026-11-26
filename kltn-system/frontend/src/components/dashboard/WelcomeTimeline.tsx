@@ -37,6 +37,7 @@ export interface SemesterTimelineInfo {
   defenseFrom?: string | null;
   defenseTo?: string | null;
   currentStep?: number;
+  semesterStep?: number;
   currentStage?: string;
   timelineSteps?: TimelineStepItem[];
 }
@@ -168,18 +169,28 @@ export const WelcomeTimeline: React.FC<WelcomeTimelineProps> = ({
   const [selectedStepOption, setSelectedStepOption] = useState<number>(0);
   const [savingStep, setSavingStep] = useState(false);
 
-  // Normalize effective step
+  // Normalize effective step: ưu tiên bước do Trưởng bộ môn cài đặt trong đợt KLTN
   let effectiveStep = 1;
-  if (typeof propCurrentStep === 'number' && propCurrentStep >= 1) {
-    effectiveStep = Math.min(5, propCurrentStep);
-  } else if (
+  if (
     typeof semesterInfo?.currentStep === 'number' &&
     semesterInfo.currentStep >= 1
   ) {
     effectiveStep = Math.min(5, semesterInfo.currentStep);
+  } else if (
+    typeof semesterInfo?.semesterStep === 'number' &&
+    semesterInfo.semesterStep >= 1
+  ) {
+    effectiveStep = Math.min(5, semesterInfo.semesterStep);
+  } else if (typeof propCurrentStep === 'number' && propCurrentStep >= 1) {
+    effectiveStep = Math.min(5, propCurrentStep);
   }
 
-  const isAllDone = Boolean(isCompleted || (propCurrentStep && propCurrentStep > 5));
+  const isAllDone = Boolean(
+    isCompleted ||
+    (propCurrentStep && propCurrentStep > 5) ||
+    semesterInfo?.status === 'ARCHIVED' ||
+    semesterInfo?.status === 'CLOSED'
+  );
 
   // Bind real dates from semesterInfo into step descriptors
   const resolvedSteps: TimelineStepItem[] = defaultSteps.map((step) => {
